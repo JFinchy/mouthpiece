@@ -377,9 +377,7 @@ fn handle_segment(app: &AppHandle, audio: Vec<f32>) {
         Addressed::Dictate(rest) => {
             metrics.wake_hits.fetch_add(1, Ordering::Relaxed);
             if state.phase() != AmbientPhase::Listening {
-                crate::applog!(
-                    "ambient: asleep, ignoring dictation (say \"Mouthpiece, wake up\")"
-                );
+                crate::applog!("ambient: asleep, ignoring dictation (say \"Mouthpiece, wake up\")");
                 return;
             }
             touch(app);

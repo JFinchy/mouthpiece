@@ -107,7 +107,9 @@ pub fn move_login_item(app: &tauri::AppHandle) {
     let Some(home) = std::env::var_os("HOME") else {
         return;
     };
-    let old = Path::new(&home).join("Library/LaunchAgents").join(OLD_LOGIN_ITEM);
+    let old = Path::new(&home)
+        .join("Library/LaunchAgents")
+        .join(OLD_LOGIN_ITEM);
     if !old.exists() {
         return;
     }
@@ -138,7 +140,10 @@ mod tests {
         let new = Path::new("/nonexistent/Apps/Mouthpiece.app/Contents/MacOS/tauri-app");
         assert_eq!(bundle_destination(new), None);
         // A dev build runs from target/, not a bundle.
-        assert_eq!(bundle_destination(Path::new("/src/target/debug/tauri-app")), None);
+        assert_eq!(
+            bundle_destination(Path::new("/src/target/debug/tauri-app")),
+            None
+        );
     }
 
     #[test]
@@ -151,7 +156,10 @@ mod tests {
         std::fs::write(old.join("config.json"), "{}").unwrap();
 
         assert!(move_data_dir_from(&old, &new).unwrap());
-        assert_eq!(std::fs::read_to_string(new.join("config.json")).unwrap(), "{}");
+        assert_eq!(
+            std::fs::read_to_string(new.join("config.json")).unwrap(),
+            "{}"
+        );
         // The old path still reaches the same files.
         assert!(std::fs::symlink_metadata(&old).unwrap().is_symlink());
         assert!(old.join("bin").is_dir());
