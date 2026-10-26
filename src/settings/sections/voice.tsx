@@ -174,8 +174,8 @@ export type AmbientPhase = "off" | "listening" | "asleep" | "paused";
 
 export const AMBIENT_PHASE_LABEL: Record<AmbientPhase, string> = {
   off: "Off",
-  listening: "Listening for “Dev Whisper”",
-  asleep: "Asleep — say “Dev Whisper, wake up”",
+  listening: "Listening for “Mouthpiece”",
+  asleep: "Asleep — say “Mouthpiece, wake up”",
   paused: "Paused — another app is using the microphone",
 };
 
@@ -216,12 +216,12 @@ export function AmbientListeningControl({ enrolled }: { enrolled: boolean }) {
           disabled={!enrolled && !enabled}
           onChange={(e) => toggle(e.target.checked)}
         />
-        Always-on listening — start with “Dev Whisper, …” to dictate hands-free
+        Always-on listening — start with “Mouthpiece, …” to dictate hands-free
       </label>
       {enabled && <div className="font-medium">{AMBIENT_PHASE_LABEL[phase]}</div>}
       <p className="opacity-60">
         {enrolled
-          ? "Only your enrolled voice is acted on, and only when it starts with the wake phrase. Say “Dev Whisper, go to sleep” to pause; it also sleeps after 10 idle minutes, and pauses itself while another app (like a call) is using the microphone. Text is copied instead of pasted if you switch apps before it's ready."
+          ? "Only your enrolled voice is acted on, and only when it starts with the wake phrase. Say “Mouthpiece, go to sleep” to pause; it also sleeps after 10 idle minutes, and pauses itself while another app (like a call) is using the microphone. Text is copied instead of pasted if you switch apps before it's ready."
           : "Enroll your voice above first — always-on listening only acts on your voice."}
       </p>
       {error && <p className="text-error">{error}</p>}

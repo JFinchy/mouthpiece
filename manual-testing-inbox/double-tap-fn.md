@@ -31,7 +31,7 @@ now a listen-only CoreGraphics event tap that only sees modifier changes.
 3. macOS should prompt for **Input Monitoring** permission the first time
    (System Settings → Privacy & Security → Input Monitoring) — confirm the
    prompt appears and grant it. If it doesn't appear automatically, check
-   there manually and add/enable Dev Whisper yourself, then retry. Under
+   there manually and add/enable Mouthpiece yourself, then retry. Under
    `tauri dev` the entry is the dev binary, listed as **tauri-app**
    (`src-tauri/target/debug/tauri-app`).
 4. Double-tap the Fn/Globe key (bottom-left of most Mac keyboards) quickly,

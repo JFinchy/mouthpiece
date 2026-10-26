@@ -51,7 +51,7 @@ Still open, in order:
 
 ## Now — the voice interface for coding agents (agreed 2026-10-20)
 
-Positioning: Dev Whisper is the voice interface for coding agents. It
+Positioning: Mouthpiece is the voice interface for coding agents. It
 knows your codebase and runs on your Mac. Fast, accurate dictation is
 table stakes across the market; talking to agents with real file and
 symbol names, locally, is what nobody else does. Everything stays in-app
@@ -74,7 +74,7 @@ file awaiting a real-Mac check:
    vocabulary and replacement rules.
 4. **Agent voice commands** — "send it", "attach the error" (latest stack
    trace as a code block), "scratch that" (safely undo the last paste).
-5. **Reply to a waiting agent** — Claude Code hooks tell Dev Whisper when
+5. **Reply to a waiting agent** — Claude Code hooks tell Mouthpiece when
    an agent is waiting; a reply hotkey sends your dictation to that
    agent's window and returns focus.
 

@@ -224,7 +224,7 @@ export function installMockBackend() {
     get_agent_sound_enabled: () => state.agentSound,
     set_agent_sound_enabled: setter("agentSound", "enabled"),
     get_agent_hook_config: () => ({
-      script_path: "/Users/me/Library/Application Support/com.devwhisper.app/bin/dev-whisper-hook",
+      script_path: "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook",
       json: JSON.stringify(
         {
           hooks: Object.fromEntries(
@@ -235,7 +235,7 @@ export function installMockBackend() {
                   hooks: [
                     {
                       type: "command",
-                      command: "'/Users/me/Library/Application Support/com.devwhisper.app/bin/dev-whisper-hook'",
+                      command: "'/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'",
                     },
                   ],
                 },

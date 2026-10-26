@@ -53,5 +53,5 @@ keystrokes, or the widget notes.
 
 ## Pass criteria
 
-Every expectation above holds, no text beyond what Dev Whisper pasted is
+Every expectation above holds, no text beyond what Mouthpiece pasted is
 ever deleted, and the log never contains terminal or clipboard content.

@@ -19,7 +19,7 @@ installed app.
 1. Quit the dev build (`tauri dev`) first: the installed app shares its
    config, hotkey and mic.
 2. Download `Dev.Whisper_0.1.1_aarch64.dmg` from
-   https://github.com/JFinchy/dev-whisper/releases/tag/v0.1.1, drag it to
+   https://github.com/JFinchy/mouthpiece/releases/tag/v0.1.1, drag it to
    Applications, then right-click → Open (it's unsigned, so Gatekeeper
    asks once).
 3. Within a few seconds of launch, the widget's gear icon shows an

@@ -50,7 +50,7 @@ Once published, any running copy of the app will see it on its next
 launch (or immediately, if someone clicks "Check for updates" in
 Settings → About).
 
-The workflow also attaches `Dev-Whisper.dmg`, a copy of the installer
+The workflow also attaches `Mouthpiece.dmg`, a copy of the installer
 under a fixed name. Once the release is published,
-<https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg>
+<https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg>
 downloads it; that's the link in the README.

@@ -83,7 +83,7 @@ test.describe("coding agents: settings", () => {
     const config = JSON.parse(await page.getByTestId("agent-hook-json").innerText());
     for (const event of ["Notification", "Stop", "UserPromptSubmit"]) {
       expect(config.hooks[event][0].hooks[0].command).toContain(
-        "Application Support/com.devwhisper.app/bin/dev-whisper-hook",
+        "Application Support/dev.mouthpiece/bin/mouthpiece-hook",
       );
     }
     await expect(page.getByRole("button", { name: "Copy hook config" })).toBeVisible();

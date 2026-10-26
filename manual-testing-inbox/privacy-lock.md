@@ -17,18 +17,18 @@ tests cover the lock screen against a fake backend only.
    off; History looks as before.
 2. Turn on "Lock History with Touch ID or your password". History is
    replaced by "History is locked" right away.
-3. Click Unlock History: the macOS prompt says Dev Whisper wants to "show
-   your Dev Whisper history". Touch ID (or password) → transcripts show.
+3. Click Unlock History: the macOS prompt says Mouthpiece wants to "show
+   your Mouthpiece history". Touch ID (or password) → transcripts show.
    Cancel → stays locked, no error shown.
 4. Go to another Settings page and back: locked again. Unlock, then
    hide Settings (close the window) and reopen: locked. Unlock and wait
    5 minutes: locked.
 5. While locked, untick the lock toggle: macOS asks to "turn off the
    History lock". Cancel → stays on.
-6. Dictate something, then `grep "raw transcript" ~/Library/Application\ Support/com.devwhisper.app/app.log | tail -1`:
+6. Dictate something, then `grep "raw transcript" ~/Library/Application\ Support/dev.mouthpiece/app.log | tail -1`:
    shows `<N chars>`, not your words. Tick "Include transcript text in
    logs", dictate again: the words appear. Untick it.
-7. `ls -l ~/Library/Application\ Support/com.devwhisper.app/{history.jsonl,app.log}`:
+7. `ls -l ~/Library/Application\ Support/dev.mouthpiece/{history.jsonl,app.log}`:
    both `-rw-------`.
 8. With Ollama: `ollama pull gpt-oss:20b-cloud` (needs `ollama signin`),
    or skip if you don't have an Ollama account. Settings → LLM doesn't

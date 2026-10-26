@@ -295,7 +295,7 @@ export function InsightsSection() {
 
       <div className="rounded-lg border border-base-content/10 bg-base-100 p-3">
         <div className="mb-2 flex items-center justify-between">
-          <label className="text-xs font-medium opacity-70">Getting the most out of Dev Whisper</label>
+          <label className="text-xs font-medium opacity-70">Getting the most out of Mouthpiece</label>
           <span className="text-[10px] font-medium uppercase tracking-wide opacity-50">
             {data.adoption.score_percent}% of features used
           </span>

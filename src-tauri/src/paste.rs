@@ -31,7 +31,7 @@ pub fn copy_text(text: &str) -> Result<(), String> {
 pub fn paste_text(text: &str) -> Result<(), String> {
     if !accessibility_trusted() {
         return Err(
-            "Accessibility permission not granted. Enable Dev Whisper in System Settings > \
+            "Accessibility permission not granted. Enable Mouthpiece in System Settings > \
              Privacy & Security > Accessibility, then try again."
                 .to_string(),
         );
@@ -85,7 +85,7 @@ pub fn paste_text(text: &str) -> Result<(), String> {
 pub fn press_enter() -> Result<(), String> {
     if !accessibility_trusted() {
         return Err(
-            "Accessibility permission not granted. Enable Dev Whisper in System Settings > \
+            "Accessibility permission not granted. Enable Mouthpiece in System Settings > \
              Privacy & Security > Accessibility, then try again."
                 .to_string(),
         );
@@ -105,7 +105,7 @@ fn require_accessibility() -> Result<(), String> {
         Ok(())
     } else {
         Err(
-            "Accessibility permission not granted. Enable Dev Whisper in System Settings > \
+            "Accessibility permission not granted. Enable Mouthpiece in System Settings > \
              Privacy & Security > Accessibility, then try again."
                 .to_string(),
         )

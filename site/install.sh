@@ -1,9 +1,9 @@
 #!/bin/sh
-# Installs the latest Dev Whisper into /Applications.
+# Installs the latest Mouthpiece into /Applications.
 #
-#   curl -fsSL https://jfinchy.github.io/dev-whisper/install.sh | sh
+#   curl -fsSL https://jfinchy.github.io/mouthpiece/install.sh | sh
 #
-# It downloads the same Dev-Whisper.dmg as the website's download button,
+# It downloads the same Mouthpiece.dmg as the website's download button,
 # straight from GitHub Releases, checks the app's signature, and copies it
 # into Applications. Because curl (unlike a browser) doesn't mark the file
 # as downloaded, macOS doesn't show its "can't verify" prompt on first
@@ -15,17 +15,17 @@
 
 set -eu
 
-URL="https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg"
-APP_NAME="Dev Whisper.app"
+URL="https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg"
+APP_NAME="Mouthpiece.app"
 APP_DIR="${DW_APP_DIR:-/Applications}"
 
 fail() {
-  printf 'Dev Whisper: %s\n' "$1" >&2
+  printf 'Mouthpiece: %s\n' "$1" >&2
   exit 1
 }
 
 [ "$(uname -s)" = "Darwin" ] || fail "this installer is for macOS."
-[ "$(uname -m)" = "arm64" ] || fail "Dev Whisper needs a Mac with Apple Silicon (M1 or later)."
+[ "$(uname -m)" = "arm64" ] || fail "Mouthpiece needs a Mac with Apple Silicon (M1 or later)."
 
 tmp=$(mktemp -d)
 mounted=""
@@ -35,10 +35,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "Downloading Dev Whisper…"
-curl -fL --progress-bar -o "$tmp/Dev-Whisper.dmg" "$URL" || fail "the download failed."
+echo "Downloading Mouthpiece…"
+curl -fL --progress-bar -o "$tmp/Mouthpiece.dmg" "$URL" || fail "the download failed."
 
-hdiutil attach -nobrowse -readonly -quiet -mountpoint "$tmp/mnt" "$tmp/Dev-Whisper.dmg" \
+hdiutil attach -nobrowse -readonly -quiet -mountpoint "$tmp/mnt" "$tmp/Mouthpiece.dmg" \
   || fail "couldn't open the downloaded disk image."
 mounted=1
 
@@ -57,20 +57,24 @@ fi
 [ -w "$APP_DIR" ] || fail "can't write to $APP_DIR."
 dest="$APP_DIR/$APP_NAME"
 
-if pgrep -f "$dest/Contents/MacOS/" >/dev/null 2>&1; then
-  fail "Dev Whisper is running. Quit it from the menu bar, then run this again."
-fi
+# Mouthpiece used to be called Dev Whisper.
+old_name="$APP_DIR/Dev Whisper.app"
+for running in "$dest" "$old_name"; do
+  if pgrep -f "$running/Contents/MacOS/" >/dev/null 2>&1; then
+    fail "Mouthpiece is running. Quit it from the menu bar, then run this again."
+  fi
+done
 
 # Copy the new app in beside the old one, then swap them, so a step macOS
 # blocks never leaves a half-deleted app behind.
-staged="$APP_DIR/.Dev Whisper.installing.app"
+staged="$APP_DIR/.Mouthpiece.installing.app"
 rm -rf "$staged"
 ditto "$app" "$staged" || fail "copying into $APP_DIR failed."
 if [ -e "$dest" ] && ! mv "$dest" "$tmp/previous.app" 2>/dev/null; then
   rm -rf "$staged"
-  fail "macOS didn't let your terminal replace the Dev Whisper already in $APP_DIR.
+  fail "macOS didn't let your terminal replace the Mouthpiece already in $APP_DIR.
 Its App Management setting protects installed apps. Either drag that copy
-of Dev Whisper to the Trash and run this again, or allow your terminal in
+of Mouthpiece to the Trash and run this again, or allow your terminal in
 System Settings > Privacy & Security > App Management."
 fi
 if ! mv "$staged" "$dest"; then
@@ -79,8 +83,16 @@ if ! mv "$staged" "$dest"; then
   fail "couldn't move the new app into $APP_DIR; the old one is unchanged."
 fi
 echo "Installed $dest"
+# Your settings and history move over on first launch.
+if [ -e "$old_name" ]; then
+  if mv "$old_name" "$tmp/old-name.app" 2>/dev/null; then
+    echo "Removed the old Dev Whisper app."
+  else
+    echo "Drag the old Dev Whisper app in $APP_DIR to the Trash; Mouthpiece replaces it."
+  fi
+fi
 
 if [ -z "${DW_NO_OPEN:-}" ]; then
   open "$dest"
-  echo "Opening Dev Whisper. The setup checklist in Settings walks you through the rest."
+  echo "Opening Mouthpiece. The setup checklist in Settings walks you through the rest."
 fi

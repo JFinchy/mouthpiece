@@ -8,7 +8,7 @@
 /// not LLM edits).
 ///
 /// Also adds something Flow's version doesn't have: a feature-adoption
-/// checklist. Most of Dev Whisper's power (Vocabulary, Snippets, Backtrack,
+/// checklist. Most of Mouthpiece's power (Vocabulary, Snippets, Backtrack,
 /// casing commands, per-app Modes) is opt-in and easy to forget exists —
 /// this surfaces what's actually being used versus what's configured but
 /// idle, with a one-line suggestion for each unused one.

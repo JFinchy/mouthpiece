@@ -35,7 +35,7 @@ fn agent(session: &str, received_ms: u64) -> WaitingAgent {
 
 #[test]
 fn parses_a_waiting_link_with_percent_encoding() {
-    let link = url("devwhisper://agent-waiting?session=abc&cwd=%2FUsers%2Fme%2Fmy%20app&message=Claude%20needs%20permission&kind=needs_input&pid=4242&bundle=com.apple.Terminal&term=Apple_Terminal");
+    let link = url("mouthpiece://agent-waiting?session=abc&cwd=%2FUsers%2Fme%2Fmy%20app&message=Claude%20needs%20permission&kind=needs_input&pid=4242&bundle=com.apple.Terminal&term=Apple_Terminal");
     let LinkEvent::Waiting(r) = parse_link(&link).unwrap() else {
         panic!("expected a waiting event");
     };
@@ -51,7 +51,7 @@ fn parses_a_waiting_link_with_percent_encoding() {
 #[test]
 fn done_kind_and_missing_optionals() {
     let LinkEvent::Waiting(r) =
-        parse_link(&url("devwhisper://agent-waiting?session=a&kind=done")).unwrap()
+        parse_link(&url("mouthpiece://agent-waiting?session=a&kind=done")).unwrap()
     else {
         panic!()
     };
@@ -62,7 +62,7 @@ fn done_kind_and_missing_optionals() {
 #[test]
 fn a_link_without_session_falls_back_to_the_folder() {
     let LinkEvent::Waiting(r) =
-        parse_link(&url("devwhisper://agent-waiting?cwd=%2Fwork%2Fapp")).unwrap()
+        parse_link(&url("mouthpiece://agent-waiting?cwd=%2Fwork%2Fapp")).unwrap()
     else {
         panic!()
     };
@@ -71,16 +71,16 @@ fn a_link_without_session_falls_back_to_the_folder() {
 
 #[test]
 fn rejects_links_with_nothing_to_identify_the_agent() {
-    assert!(parse_link(&url("devwhisper://agent-waiting?message=hi")).is_err());
-    assert!(parse_link(&url("devwhisper://agent-waiting")).is_err());
-    assert!(parse_link(&url("devwhisper://agent-bogus?session=a")).is_err());
+    assert!(parse_link(&url("mouthpiece://agent-waiting?message=hi")).is_err());
+    assert!(parse_link(&url("mouthpiece://agent-waiting")).is_err());
+    assert!(parse_link(&url("mouthpiece://agent-bogus?session=a")).is_err());
 }
 
 #[test]
 fn pid_one_and_garbage_are_ignored() {
     for pid in ["1", "0", "-5", "abc"] {
         let LinkEvent::Waiting(r) = parse_link(&url(&format!(
-            "devwhisper://agent-waiting?session=a&pid={pid}"
+            "mouthpiece://agent-waiting?session=a&pid={pid}"
         )))
         .unwrap() else {
             panic!()
@@ -92,7 +92,7 @@ fn pid_one_and_garbage_are_ignored() {
 #[test]
 fn resumed_link_names_the_session() {
     assert_eq!(
-        parse_link(&url("devwhisper://agent-resumed?session=abc&cwd=%2Fx")).unwrap(),
+        parse_link(&url("mouthpiece://agent-resumed?session=abc&cwd=%2Fx")).unwrap(),
         LinkEvent::Resumed {
             session_id: "abc".into()
         }
@@ -350,7 +350,7 @@ fn a_reply_ending_in_send_it_gets_enter_through_the_existing_extraction() {
 
 #[test]
 fn hook_config_quotes_a_path_with_spaces() {
-    let path = "/Users/me/Library/Application Support/com.devwhisper.app/bin/dev-whisper-hook";
+    let path = "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook";
     let v: serde_json::Value = serde_json::from_str(&hook_config_json(path)).unwrap();
     for event in ["Notification", "Stop", "UserPromptSubmit"] {
         let hook = &v["hooks"][event][0]["hooks"][0];
@@ -382,7 +382,7 @@ fn hook_links_carry_the_install_token() {
     assert!(link_has_token(&link, TEST_TOKEN));
     assert!(!link_has_token(&link, "ffffffffffffffffffffffffffffffff"));
     assert!(!link_has_token(
-        &url("devwhisper://agent-waiting?session=s&cwd=/tmp/x"),
+        &url("mouthpiece://agent-waiting?session=s&cwd=/tmp/x"),
         TEST_TOKEN
     ));
     assert!(!hook_script_with_token(TEST_TOKEN).contains(TOKEN_PLACEHOLDER));
@@ -403,7 +403,7 @@ fn run_hook(name: &str, stdin: &str, extra_env: &[(&str, &str)]) -> Option<Strin
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let script = dir.join("dev-whisper-hook");
+    let script = dir.join("mouthpiece-hook");
     std::fs::write(&script, hook_script_with_token(TEST_TOKEN)).unwrap();
     let mut cmd = std::process::Command::new("/bin/sh");
     cmd.arg(script)
@@ -445,7 +445,7 @@ fn hook_script_turns_a_notification_into_a_waiting_link() {
     )
     .expect("the hook should have opened a link");
     assert!(
-        opened.starts_with("-g devwhisper://agent-waiting?"),
+        opened.starts_with("-g mouthpiece://agent-waiting?"),
         "{opened}"
     );
     let LinkEvent::Waiting(r) = link_of(&opened) else {

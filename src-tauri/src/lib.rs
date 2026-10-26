@@ -34,6 +34,7 @@ mod project;
 mod punctuation;
 mod readiness;
 mod recording;
+mod rename;
 mod shortcut;
 mod snippets;
 mod stt;
@@ -214,7 +215,7 @@ fn open_settings(app: tauri::AppHandle) -> tauri::Result<()> {
         "settings",
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Dev Whisper Settings")
+    .title("Mouthpiece Settings")
     // Wide enough for the signal-chain layout (5 nodes + connectors) to
     // lay out on one row without wrapping — see src/settings/layouts.tsx.
     .inner_size(880.0, 720.0)
@@ -244,7 +245,7 @@ fn open_settings(app: tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Whether Dev Whisper is currently registered as a macOS login item.
+/// Whether Mouthpiece is currently registered as a macOS login item.
 /// Off by default (see `run()` — the autostart plugin is registered but
 /// never auto-enabled) since silently adding a login item without an
 /// explicit user action would be a surprising thing for a privacy-first
@@ -278,6 +279,10 @@ fn prompt_for_accessibility_permission() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    if rename::move_bundle() {
+        return;
+    }
     tauri::Builder::default()
         // Must be the first plugin. A second launch (Spotlight, a login
         // item racing a manual open, a deep link while running) hands off
@@ -447,6 +452,7 @@ pub fn run() {
             use tauri::Manager;
             match app.path().app_data_dir() {
                 Ok(dir) => {
+                    rename::move_data_dir(&dir);
                     if let Err(err) = logging::init_file(dir.join("app.log")) {
                         crate::applog!("logging: could not open app.log: {err}");
                     }
@@ -460,6 +466,7 @@ pub fn run() {
                 std::process::id()
             );
             lifecycle::spawn_watchers();
+            rename::move_login_item(app.handle());
 
             #[cfg(target_os = "macos")]
             {
@@ -522,7 +529,7 @@ pub fn run() {
             }
 
             // Deep-link hooks for external automation (Raycast, Hammerspoon,
-            // Alfred, shell scripts): `open devwhisper://toggle-recording`
+            // Alfred, shell scripts): `open mouthpiece://toggle-recording`
             // and friends. start/stop are idempotent — start while already
             // recording is rejected (and logged) rather than toggling off,
             // so a script doesn't need to track state itself.

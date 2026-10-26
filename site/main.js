@@ -38,7 +38,7 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
 
 // Fill in the latest release version, quietly keeping the fallback text
 // if GitHub's API is unreachable or rate-limited.
-fetch("https://api.github.com/repos/JFinchy/dev-whisper/releases/latest")
+fetch("https://api.github.com/repos/JFinchy/mouthpiece/releases/latest")
   .then((r) => (r.ok ? r.json() : null))
   .then((release) => {
     if (!release || !release.tag_name) return;

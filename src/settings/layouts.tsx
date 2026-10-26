@@ -103,7 +103,7 @@ export function SidebarLayout({ appearance }: { appearance: ReactElement }) {
         <nav className="dw-sidebar">
           <div className="dw-brand">
             <IconMic />
-            Dev Whisper
+            Mouthpiece
           </div>
           {NAV.map((item) => (
             <NavItem
@@ -226,7 +226,7 @@ export function ChainLayout({ appearance }: { appearance: ReactElement }) {
   return (
     <main className="dw-shell h-screen overflow-y-auto">
       <div className="dw-titlebar">
-        <h1>Dev Whisper — signal chain</h1>
+        <h1>Mouthpiece — signal chain</h1>
       </div>
 
       <div className="dw-chain-readiness">

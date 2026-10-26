@@ -128,7 +128,7 @@ export function LayoutSection({ layout, onChange }: { layout: LayoutId; onChange
 export const ABOUT_ENTRIES: { title: string; body: string }[] = [
   {
     title: "How dictation works",
-    body: "Hold the push-to-talk shortcut (or click-and-hold the widget) and speak. When you release, Dev Whisper transcribes locally with Whisper, applies your active Mode's formatting, and pastes the result into whatever's focused — no cloud round-trip unless you've turned on LLM refinement or a webhook.",
+    body: "Hold the push-to-talk shortcut (or click-and-hold the widget) and speak. When you release, Mouthpiece transcribes locally with Whisper, applies your active Mode's formatting, and pastes the result into whatever's focused — no cloud round-trip unless you've turned on LLM refinement or a webhook.",
   },
   {
     title: "Voice Isolation",

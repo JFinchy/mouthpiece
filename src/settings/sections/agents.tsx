@@ -77,7 +77,7 @@ function ReplyShortcut() {
       </button>
       <p className="mt-1.5 text-xs opacity-60">
         Press it, speak your reply, press it again. The text goes to the agent that has been waiting the shortest time,
-        then you land back where you were. End with "press enter" to submit. If Dev Whisper can't confirm the agent's
+        then you land back where you were. End with "press enter" to submit. If Mouthpiece can't confirm the agent's
         tab is the one showing, it pastes without submitting and leaves you there to check and press Return.
       </p>
       {error && <p className="mt-1.5 text-xs text-error">{error}</p>}
@@ -145,7 +145,7 @@ function HookSnippet() {
       <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Claude Code hook</h3>
       <p className="mb-2 text-xs opacity-60">
         Add this to the <code>hooks</code> in <code>~/.claude/settings.json</code> (merge it with any hooks you already
-        have). Notification and Stop tell Dev Whisper an agent is waiting; UserPromptSubmit clears it when you answer in
+        have). Notification and Stop tell Mouthpiece an agent is waiting; UserPromptSubmit clears it when you answer in
         the terminal yourself.
       </p>
       {hook ? (
@@ -243,7 +243,7 @@ export function AgentsSection() {
   return (
     <div className="flex flex-col gap-3" data-testid="agents-section">
       <p className="text-xs opacity-70">
-        When a Claude Code agent finishes or asks for permission, Dev Whisper shows a pill in the widget. Press the reply
+        When a Claude Code agent finishes or asks for permission, Mouthpiece shows a pill in the widget. Press the reply
         shortcut, say your answer, and it is pasted into that agent's window and you are returned to what you were doing.
       </p>
       <HookSnippet />

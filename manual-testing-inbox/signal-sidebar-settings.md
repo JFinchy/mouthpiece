@@ -44,7 +44,7 @@ widget — that's what this pass is for.
 1. From repo root: `bun run tauri dev`. Look for the mic icon in the menu
    bar (not a window).
 2. Tray icon → **Open Settings…**. Confirm the window opens noticeably
-   wider than before, with a left sidebar (Dev Whisper wordmark at top,
+   wider than before, with a left sidebar (Mouthpiece wordmark at top,
    7 nav items, Appearance/Advanced below a divider at the bottom).
 3. Click through every sidebar item and confirm each shows the right
    settings and that everything that used to work still works:

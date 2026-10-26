@@ -19,7 +19,7 @@ widget against a fake backend.
 2. Discard again and wait 8 seconds: Undo disappears; ⇧Esc does nothing
    and reaches the frontmost app as normal.
 3. While not recording, press Esc in another app (e.g. close a dialog):
-   it works normally (Dev Whisper doesn't hold Esc).
+   it works normally (Mouthpiece doesn't hold Esc).
 4. Dictate a long sentence with an LLM mode and press Esc during
    "Refining": no paste, "Paste cancelled"; Undo pastes the text.
 5. The ✕ on the widget while recording does the same as Esc.

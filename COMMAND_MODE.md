@@ -8,10 +8,10 @@ it gets its own document instead of a `BACKLOG.md` bullet. See
 ## Why
 
 Talon Voice (researched 2026-08-17 — see [What Talon actually offers](#what-talon-actually-offers)
-below) does something Dev Whisper doesn't: continuous, always-listening
+below) does something Mouthpiece doesn't: continuous, always-listening
 voice **commands** mapped to actions, as opposed to push-to-talk
 **dictation** that produces formatted text. The user's read after seeing
-this: there's no reason Dev Whisper couldn't support both, as two distinct
+this: there's no reason Mouthpiece couldn't support both, as two distinct
 modes rather than picking one. That's the premise of everything below —
 not "replace push-to-talk dictation," but "add a second, opt-in mode next
 to it."
@@ -19,7 +19,7 @@ to it."
 This also isn't a request to *become* Talon. Talon is a mature, ~5-year-old
 project with dedicated hardware integrations (eye tracking) and its own
 speech engine. The scope here is deliberately narrower: take the two or
-three pieces of Talon's model that genuinely extend Dev Whisper's existing
+three pieces of Talon's model that genuinely extend Mouthpiece's existing
 architecture, and be explicit about the pieces that don't fit and shouldn't
 be built.
 
@@ -151,7 +151,7 @@ without touching the keyboard — the whole point of a hands-free mode.
 
 ### C. Extensible command actions
 
-Talon's real depth comes from arbitrary Python per command. Dev Whisper
+Talon's real depth comes from arbitrary Python per command. Mouthpiece
 doesn't need a general scripting runtime to get most of that value — it
 needs a couple of escape hatches that let a command phrase drive whatever
 automation the user already has (shell scripts, Raycast, Hammerspoon),
@@ -165,11 +165,11 @@ rather than us reinventing a plugin system.
   more dangerous than a keystroke binding, and should not be a silent,
   easy default).
 - [ ] `CommandAction::OpenUrl(String)` — reuse the deep-link scheme
-  already shipped (`devwhisper://…`) so a command phrase can trigger any
-  of Dev Whisper's own automation hooks, or hand off to any other app's
+  already shipped (`mouthpiece://…`) so a command phrase can trigger any
+  of Mouthpiece's own automation hooks, or hand off to any other app's
   URL scheme.
 - [ ] Document the recommended pattern (bind a phrase to a Raycast
-  script/Hammerspoon function/shell one-liner) so Dev Whisper becomes a
+  script/Hammerspoon function/shell one-liner) so Mouthpiece becomes a
   voice front-end to a user's *existing* automation, instead of
   competing with it.
 
@@ -186,8 +186,8 @@ effort from A-C above, in a different language/runtime, tied to one
 specific editor.
 
 **Recommendation:** don't build our own version. Document how to run
-Talon + Cursorless *alongside* Dev Whisper for users who want structural
-voice editing — Dev Whisper handles freeform dictation and Command Mode
+Talon + Cursorless *alongside* Mouthpiece for users who want structural
+voice editing — Mouthpiece handles freeform dictation and Command Mode
 for system-wide actions, Talon+Cursorless handles in-editor structural
 edits. Revisit only if there's real, specific user demand for it — this
 is not a "maybe later" backlog item, it's a "probably never, and that's
@@ -201,7 +201,7 @@ Talon supports custom-trained noises (pop/hiss/whistle) as a third input
 modality, and Tobii eye-tracking hardware as a full mouse replacement.
 Both extend well past "dictation app" into full hands-free *computer*
 control — a different product category and a different (primarily
-accessibility-driven) audience than Dev Whisper's developer-dictation
+accessibility-driven) audience than Mouthpiece's developer-dictation
 positioning.
 
 **Recommendation:** don't build. Named here only because the user asked
@@ -214,7 +214,7 @@ Talon" — not "wait for us to rebuild a worse version of it."
 ### F. Visual mode/command feed
 
 Talon HUD's persistent overlay (current mode + recently-recognized
-commands) is a small, genuinely useful piece that fits Dev Whisper's
+commands) is a small, genuinely useful piece that fits Mouthpiece's
 existing UI investment.
 
 **Tasks:**

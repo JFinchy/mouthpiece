@@ -969,7 +969,7 @@ pub struct ProjectStatus {
     pub names: usize,
 }
 
-/// The last project Dev Whisper found names for, for the Settings line.
+/// The last project Mouthpiece found names for, for the Settings line.
 #[tauri::command]
 pub fn get_project_status() -> Option<ProjectStatus> {
     state()

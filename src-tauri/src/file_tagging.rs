@@ -5,7 +5,7 @@
 ///
 /// Wispr Flow's version works because Cursor/Windsurf are apps they have
 /// a deep hook into — they can query the project's real file index and
-/// insert a UI-native reference chip. Dev Whisper has neither of those:
+/// insert a UI-native reference chip. Mouthpiece has neither of those:
 /// it only ever knows the frontmost app's bundle ID, and delivery is
 /// always a blind simulated-paste of plain text. So this can't work the
 /// same way for a windowed editor.

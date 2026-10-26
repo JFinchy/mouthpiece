@@ -33,7 +33,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Dev Whisper ${{ github.ref_name }}"
+          releaseName: "Mouthpiece ${{ github.ref_name }}"
           releaseBody: "See the commit history for what changed."
           # Draft, not published automatically: CI handles the tedious,
           # error-prone part (build + sign), but a human still confirms the
@@ -59,15 +59,19 @@ jobs:
 
       # A copy of the installer under a fixed name, so one link always
       # downloads the newest version:
-      # https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg
+      # https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg
+      # Dev-Whisper.dmg is the same file under the app's old name, for links
+      # posted before the rename (GitHub forwards the old repo's URLs here).
       # Uploaded by release id because the release is still a draft here.
-      - name: Attach Dev-Whisper.dmg
+      - name: Attach Mouthpiece.dmg
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
         run: |
           dmg=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
-          gh api --method POST \
-            -H "Content-Type: application/octet-stream" \
-            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=Dev-Whisper.dmg" \
-            --input "$dmg"
+          for name in Mouthpiece.dmg Dev-Whisper.dmg; do
+            gh api --method POST \
+              -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${name}" \
+              --input "$dmg"
+          done

@@ -1,8 +1,8 @@
 //! Replying to a waiting coding agent (Claude Code in a terminal pane)
 //! without switching windows.
 //!
-//! Claude Code's Notification and Stop hooks run `dev-whisper-hook`, which
-//! opens `devwhisper://agent-waiting?...`. Dev Whisper works out which app
+//! Claude Code's Notification and Stop hooks run `mouthpiece-hook`, which
+//! opens `mouthpiece://agent-waiting?...`. Mouthpiece works out which app
 //! owns the terminal the agent runs in (by walking the hook's parent
 //! processes), keeps a short queue of waiting agents, and shows a pill in the
 //! widget. The reply shortcut records a dictation, then hops to the agent's
@@ -28,7 +28,7 @@ const SETTLE_AFTER_RAISE: Duration = Duration::from_millis(90);
 /// Lets the target app read the pasted text before focus moves back.
 const SETTLE_AFTER_PASTE: Duration = Duration::from_millis(220);
 
-const HOOK_SCRIPT: &str = include_str!("../resources/dev-whisper-hook");
+const HOOK_SCRIPT: &str = include_str!("../resources/mouthpiece-hook");
 const TOKEN_PLACEHOLDER: &str = "__DEV_WHISPER_TOKEN__";
 const SOUND_PATH: &str = "/System/Library/Sounds/Tink.aiff";
 
@@ -380,7 +380,7 @@ pub fn normalize_reply(text: &str) -> String {
 
 pub struct AgentState {
     /// Secret written into the installed hook script. Agent links must
-    /// carry it, because any web page can open a `devwhisper://` link.
+    /// carry it, because any web page can open a `mouthpiece://` link.
     token: Option<String>,
     queue: Mutex<AgentQueue>,
     /// The agent the dictation now being recorded is for.
@@ -451,7 +451,7 @@ fn register(app: &AppHandle, cfg: &ShortcutConfig) -> Result<(), String> {
 
 fn hook_script_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(dir.join("bin").join("dev-whisper-hook"))
+    Ok(dir.join("bin").join("mouthpiece-hook"))
 }
 
 /// This install's hook token: read from the app data folder, or created
@@ -508,11 +508,17 @@ fn install_hook_script(app: &AppHandle, token: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(script.as_str()) {
-        std::fs::write(&path, &script).map_err(|e| e.to_string())?;
+    // Hook entries added before the rename run `dev-whisper-hook`; keep
+    // that copy current too (see rename.rs).
+    let legacy = dir.join("dev-whisper-hook");
+    for path in std::iter::once(&path).chain(legacy.exists().then_some(&legacy)) {
+        if std::fs::read_to_string(path).ok().as_deref() != Some(script.as_str()) {
+            std::fs::write(path, &script).map_err(|e| e.to_string())?;
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
     }
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// The block to merge into `~/.claude/settings.json`.
@@ -704,7 +710,7 @@ pub fn deliver_reply(
             format!("Couldn't tell which app {} runs in.", target.folder),
         );
     };
-    // Where to return to afterwards. Skipped when that is Dev Whisper itself
+    // Where to return to afterwards. Skipped when that is Mouthpiece itself
     // (the user had just clicked the widget).
     let previous = crate::app_detect::frontmost_pid_blocking(app)
         .filter(|prev| *prev != std::process::id() as i32)

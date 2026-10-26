@@ -135,7 +135,7 @@ test.describe("settings", () => {
       layout: "chain",
       readiness: [{ id: "hotkey", level: "error", title: "Pick a different hotkey", detail: "Taken.", fix: "change_shortcut" }],
     });
-    await expect(page.getByText("Dev Whisper — signal chain")).toBeVisible();
+    await expect(page.getByText("Mouthpiece — signal chain")).toBeVisible();
     await expect(page.getByTestId("readiness-hotkey")).toBeVisible();
   });
 

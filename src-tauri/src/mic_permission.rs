@@ -70,14 +70,14 @@ pub fn silence_explanation(access: MicAccess) -> Option<&'static str> {
     match access {
         MicAccess::Authorized => None,
         MicAccess::NotDetermined => {
-            Some("macOS hasn't given Dev Whisper the microphone yet. Allow it in Settings > Setup.")
+            Some("macOS hasn't given Mouthpiece the microphone yet. Allow it in Settings > Setup.")
         }
         MicAccess::Denied => Some(
-            "macOS is blocking the microphone. Turn on Dev Whisper in System Settings > \
+            "macOS is blocking the microphone. Turn on Mouthpiece in System Settings > \
              Privacy & Security > Microphone.",
         ),
         MicAccess::Restricted => {
-            Some("Your organization's device management blocks microphone access for Dev Whisper.")
+            Some("Your organization's device management blocks microphone access for Mouthpiece.")
         }
     }
 }

@@ -29,7 +29,7 @@ dictation end to end — that's what this pass is for.
    ```json
    {
      "timestamp_ms": <number>,
-     "text": "This is a test event from Dev Whisper.",
+     "text": "This is a test event from Mouthpiece.",
      "summary": null,
      "app_name": null,
      "mode": "test"

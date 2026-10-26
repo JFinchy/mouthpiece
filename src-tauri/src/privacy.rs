@@ -134,7 +134,7 @@ pub fn set_history_lock_enabled(app: AppHandle, enabled: bool) -> Result<History
 #[tauri::command(async)]
 pub fn unlock_history(app: AppHandle) -> Result<HistoryLock, String> {
     if history_locked(&app) {
-        authenticate("show your Dev Whisper history")?;
+        authenticate("show your Mouthpiece history")?;
         app.state::<PrivacyState>().set_unlocked(true);
         crate::applog!("privacy: history unlocked");
     }

@@ -73,7 +73,7 @@ pub fn send_test_webhook(app: AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let payload = WebhookPayload {
             timestamp_ms: now_ms(),
-            text: "This is a test event from Dev Whisper.".to_string(),
+            text: "This is a test event from Mouthpiece.".to_string(),
             summary: None,
             app_name: None,
             mode: Some("test".to_string()),

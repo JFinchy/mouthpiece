@@ -15,11 +15,11 @@ Before 0.3.4 a built app was fed silence because Info.plist had no
 
 ## Steps
 
-1. `/usr/libexec/PlistBuddy -c "Print NSMicrophoneUsageDescription" "/Applications/Dev Whisper.app/Contents/Info.plist"`
+1. `/usr/libexec/PlistBuddy -c "Print NSMicrophoneUsageDescription" "/Applications/Mouthpiece.app/Contents/Info.plist"`
    prints the description.
 2. Reset the grant to test the first-run path:
-   `tccutil reset Microphone com.devwhisper.app`, then launch the app.
-   macOS shows "Dev Whisper would like to access the microphone" with
+   `tccutil reset Microphone dev.mouthpiece`, then launch the app.
+   macOS shows "Mouthpiece would like to access the microphone" with
    the description (at launch or on the first recording).
 3. If you click Don't Allow: Settings shows "Microphone access is off"
    with Open System Settings, which opens Privacy & Security >

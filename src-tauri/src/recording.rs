@@ -196,7 +196,7 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
     });
 
     // Capture which app the user was in *before* showing our own widget —
-    // otherwise NSWorkspace reports Dev Whisper itself as frontmost. Both
+    // otherwise NSWorkspace reports Mouthpiece itself as frontmost. Both
     // steps run in one main-thread closure (NSWorkspace requires the main
     // thread) so the ordering is guaranteed.
     let main_thread_app = app.clone();

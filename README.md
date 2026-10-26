@@ -1,13 +1,13 @@
-# Dev Whisper
+# Mouthpiece
 
-Local, private dictation for developers on Apple Silicon. Hold a hotkey,
+_Formerly Dev Whisper._ Local, private dictation for developers on Apple Silicon. Hold a hotkey,
 talk, and the text lands at your cursor, formatted for the app you're in:
 prose in Slack, commands and `@file` tags in a terminal coding agent,
 `snake_case` when you ask for it. Speech recognition (whisper.cpp on
 Metal) and optional cleanup (Ollama) both run on your Mac; nothing is sent
 anywhere.
 
-Website: **[jfinchy.github.io/dev-whisper](https://jfinchy.github.io/dev-whisper/)**
+Website: **[jfinchy.github.io/mouthpiece](https://jfinchy.github.io/mouthpiece/)**
 
 ## What it does
 
@@ -45,13 +45,13 @@ Website: **[jfinchy.github.io/dev-whisper](https://jfinchy.github.io/dev-whisper
   dictations skip it.
 
 **Hands-free, if you want it**
-- Always-on listening: say "Dev Whisper, …" and only your enrolled voice
+- Always-on listening: say "Mouthpiece, …" and only your enrolled voice
   triggers it. It pauses automatically during calls.
 - Isolated Voice filters out other people talking near you.
 
 **Built for automation**
 - Start and stop recording from scripts or other tools with
-  `open devwhisper://start-recording` (and `stop-` and `toggle-`).
+  `open mouthpiece://start-recording` (and `stop-` and `toggle-`).
 - A webhook can receive each finished transcript.
 - Searchable History lets you re-run any past dictation through a
   different mode.
@@ -69,10 +69,10 @@ The full, detailed list is in [`FEATURES.md`](FEATURES.md).
 
 ## Install
 
-**[Download Dev Whisper for Mac (Apple Silicon)](https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg)**:
-open it and drag Dev Whisper into Applications. Always the newest
+**[Download Mouthpiece for Mac (Apple Silicon)](https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg)**:
+open it and drag Mouthpiece into Applications. Always the newest
 version; older ones are on the
-[Releases](https://github.com/JFinchy/dev-whisper/releases) page. The app isn't notarized yet, so macOS blocks
+[Releases](https://github.com/JFinchy/mouthpiece/releases) page. The app isn't notarized yet, so macOS blocks
 the first launch: open it once, then go to **System Settings → Privacy &
 Security**, scroll down and click **Open Anyway** (on macOS 14 and
 earlier, right-click the app → **Open** instead).
@@ -84,16 +84,16 @@ Two ways to skip that step:
   `curl` aren't flagged, so macOS doesn't prompt. The script is
   [`site/install.sh`](site/install.sh).
   ```sh
-  curl -fsSL https://jfinchy.github.io/dev-whisper/install.sh | sh
+  curl -fsSL https://jfinchy.github.io/mouthpiece/install.sh | sh
   ```
 - **Build from source.** Needs [Rust](https://rustup.rs),
   [Bun](https://bun.sh) and the Xcode command line tools
   (`xcode-select --install`):
   ```sh
-  git clone https://github.com/JFinchy/dev-whisper && cd dev-whisper
+  git clone https://github.com/JFinchy/mouthpiece && cd mouthpiece
   bun install
   bun run tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
-  ditto "src-tauri/target/release/bundle/macos/Dev Whisper.app" "/Applications/Dev Whisper.app"
+  ditto "src-tauri/target/release/bundle/macos/Mouthpiece.app" "/Applications/Mouthpiece.app"
   ```
   (The config flag skips the signed update package, which needs the
   project's private key.)
@@ -103,7 +103,7 @@ place:
 
 1. **Speech model**: download one under Voice (Base, ~57MB, is a good
    default).
-2. **Pasting**: allow Dev Whisper under System Settings → Privacy &
+2. **Pasting**: allow Mouthpiece under System Settings → Privacy &
    Security → Accessibility (the checklist's button opens that page).
    Not needed if you turn on copy-only delivery.
 3. **Microphone**: macOS asks on the first recording.
@@ -156,13 +156,13 @@ launches unsigned rather than hanging.
 | `src-tauri/src/pipeline.rs` | Text formatting, pure and testable (lists, punctuation, backtrack, commands, modes, LLM) |
 | `src-tauri/src/readiness.rs` | Setup checklist |
 | `src-tauri/src/{audio,stt,llm,paste}.rs` | Mic capture, Whisper, Ollama, paste |
-| `src-tauri/src/ambient.rs` | Hands-free "Dev Whisper, …" listening |
+| `src-tauri/src/ambient.rs` | Hands-free "Mouthpiece, …" listening |
 | `src/WidgetView.tsx` | The floating widget |
 | `src/SettingsView.tsx`, `src/settings/` | Settings window, one file per page |
 | `e2e/` | Playwright UI tests |
 | `src-tauri/tests/fixtures/` | Golden dictation cases and real-audio cases |
 
-Logs: `~/Library/Application Support/com.devwhisper.app/app.log` (also
+Logs: `~/Library/Application Support/dev.mouthpiece/app.log` (also
 Settings → Advanced → Logs).
 
 ## Known limitations
@@ -174,7 +174,7 @@ Settings → Advanced → Logs).
 - **Not notarized**, so Gatekeeper needs the **Open Anyway** step (System
   Settings → Privacy & Security) on first install. Releases before 0.3.1
   weren't signed as a whole bundle, which macOS reports as "damaged"; for
-  those, run `xattr -dr com.apple.quarantine "/Applications/Dev Whisper.app"`
+  those, run `xattr -dr com.apple.quarantine "/Applications/Mouthpiece.app"`
   or install 0.3.1 or later.
 
 ## License

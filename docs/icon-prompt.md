@@ -6,7 +6,7 @@ picked, the 1024x1024 image becomes `src-tauri/icons/` (via
 `bunx tauri icon <file>`) and `site/icon.png`.
 
 ```
-Design a macOS app icon for "Dev Whisper", a free Mac app for software
+Design a macOS app icon for "Mouthpiece", a free Mac app for software
 developers. You press a hotkey, speak, and your words are typed at the
 cursor as developer-ready text: file names become @file tags, "snake case
 user id" becomes user_id, and replies go straight to AI coding agents like

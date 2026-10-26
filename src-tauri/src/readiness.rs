@@ -1,4 +1,4 @@
-//! "Is Dev Whisper actually able to work right now?" One list of checks,
+//! "Is Mouthpiece actually able to work right now?" One list of checks,
 //! shown as a setup checklist in Settings and as a "Finish setup" prompt
 //! on the widget, so a fresh install (no model yet), a hotkey another app
 //! owns, or a revoked Accessibility grant is visible before a dictation
@@ -98,7 +98,7 @@ pub fn assess(facts: &Facts) -> Vec<Check> {
             id: "paste",
             level: Level::Error,
             title: "Allow pasting".into(),
-            detail: "Dev Whisper needs Accessibility permission to paste where your cursor is. \
+            detail: "Mouthpiece needs Accessibility permission to paste where your cursor is. \
                      Turn it on in System Settings > Privacy & Security > Accessibility."
                 .into(),
             fix: Some(Fix::GrantAccessibility),
@@ -209,7 +209,7 @@ fn mic_access_check(facts: &Facts) -> Check {
         MicAccess::Authorized => ok(
             "mic_access",
             "Microphone allowed",
-            "macOS lets Dev Whisper hear the microphone.",
+            "macOS lets Mouthpiece hear the microphone.",
         ),
         MicAccess::NotDetermined => problem(
             Level::Warn,
@@ -220,7 +220,7 @@ fn mic_access_check(facts: &Facts) -> Check {
         MicAccess::Denied => problem(
             Level::Error,
             "Microphone access is off",
-            "macOS gives Dev Whisper silence. Turn it on in System Settings > Privacy & \
+            "macOS gives Mouthpiece silence. Turn it on in System Settings > Privacy & \
              Security > Microphone.",
             Some(Fix::OpenMicrophoneSettings),
         ),
@@ -286,7 +286,7 @@ pub fn get_readiness(app: AppHandle) -> Vec<Check> {
 }
 
 /// Opens System Settings at the Accessibility list, where the user flips
-/// Dev Whisper on. macOS gives apps no way to grant it themselves.
+/// Mouthpiece on. macOS gives apps no way to grant it themselves.
 #[tauri::command]
 pub fn open_accessibility_settings() -> Result<(), String> {
     std::process::Command::new("open")

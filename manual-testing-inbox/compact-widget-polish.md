@@ -12,8 +12,8 @@ transparent window, not in the browser tests.
 ## Steps
 
 1. Compact widget is 280px wide; "Transcribing 100%" and mic names fit.
-2. Trigger the Accessibility error (turn off Accessibility for Dev
-   Whisper, dictate): the widget grows to show the whole message, no "…".
+2. Trigger the Accessibility error (turn off Accessibility for
+   Mouthpiece, dictate): the widget grows to show the whole message, no "…".
 3. Hover the widget with several mics connected: the flyout grows to at
    most 340px; longer lists scroll inside it with a thin scroll bar, and
    no big macOS scroll bar appears beside the widget.

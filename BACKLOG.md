@@ -81,7 +81,7 @@ build phases.
     deterministic pass actually fired, not implying an LLM judged
     anything.
   - New, not in Flow's version: a **feature-adoption checklist**
-    ("Getting the most out of Dev Whisper") scoring how many of six
+    ("Getting the most out of Mouthpiece") scoring how many of six
     trackable features (Vocabulary customization, Snippets, punctuation
     commands, Backtrack, casing commands, per-app Modes) have actually
     been *used*, not just configured — each unused one gets a one-line
@@ -516,13 +516,13 @@ build phases.
   - **Worth adopting, ranked:**
     1. Direct coding-agent integration (Claude Code/Cursor/etc. plugins,
        a coding-agent panel, hook support) — SuperWhisper is leaning into
-       exactly Dev Whisper's developer-specific angle; we're better
+       exactly Mouthpiece's developer-specific angle; we're better
        positioned to do it locally.
     2. Realtime streaming transcript display (partial results while still
        speaking, not just after release) — real UX upgrade to the
        shipped push-to-talk loop.
     3. ~~Deep-link/CLI hooks to start/stop recording~~ (shipped
-       2026-08-16) — `open devwhisper://start-recording` /
+       2026-08-16) — `open mouthpiece://start-recording` /
        `stop-recording` / `toggle-recording`, idempotent start/stop, see
        ROADMAP.md.
     4. Selected-text/on-screen context feeding LLM refinement — extends
@@ -622,10 +622,10 @@ build phases.
     doesn't meaningfully separate on hard audio too, the size+speed
     cost isn't worth carrying as a second inference backend.
 
-- **Per-repo settings file (`.devwhisper.json`)** (idea captured
+- **Per-repo settings file (`.mouthpiece.json`)** (idea captured
   2026-10-20, from the product-strategy pass; user: backlog it, don't
   build yet). A file committed to a repo holding team vocabulary, spoken
-  aliases and snippets, picked up automatically whenever Dev Whisper
+  aliases and snippets, picked up automatically whenever Mouthpiece
   detects you're working in that repo (rides on codebase-aware
   vocabulary's project detection). Layering: automatic codebase names,
   then the repo file, then your personal settings win.
@@ -674,22 +674,27 @@ build phases.
   blocks everything except localhost Ollama. Turns the privacy claim into
   something users can check.
 
-- **Rename the app** (idea captured 2026-10-22, deferred: not changing
-  yet). A Mac App Store app called "DevWhisper" (devwhisper.app) does
-  AI-refined dictation with a dark, terminal-style site close to ours, and
-  "whisper" is crowded (Wispr Flow, Superwhisper, MacWhisper). Options,
-  with domains that had no DNS records on 2026-10-22 (confirm with a
-  registrar before deciding):
-  - **Mouthpiece** (mouthpiece.dev) — the current favourite.
-  - **Sotto**, from "sotto voce" (sottocode.dev, sottocode.app).
-  - **Hushprompt** (hushprompt.dev, hushprompt.app).
-  - **Prompt Aloud** (promptaloud.dev, promptaloud.app).
-  Every short dictionary name tried (sotto, hark, utter, murmur, earshot,
-  parley, diction) is taken on .dev and .app. A rename touches the
-  product name, bundle identifier (which resets users' macOS permission
-  grants and the app data folder, so it needs a migration), the
-  `devwhisper://` link scheme (scripts and the Claude Code hook use it),
-  the updater endpoint, the repo name, and the website.
+- **Rename the app: done 2026-10-26, now Mouthpiece** (was Dev Whisper).
+  Why: a Mac App Store app called "DevWhisper" (devwhisper.app) does
+  AI-refined dictation with a site close to ours, and "whisper" is crowded
+  (Wispr Flow, Superwhisper, MacWhisper). Runner-up names were Sotto,
+  Hushprompt and Prompt Aloud. On 2026-10-26 mouthpiece.dev and
+  mouthpiece.app had no DNS records and no App Store app used the name;
+  the domains aren't registered yet.
+  - Bundle identifier `dev.mouthpiece` (was `com.devwhisper.app`).
+    `rename.rs` moves the old data folder over (leaving a link at the old
+    path), renames an updated `Dev Whisper.app` to `Mouthpiece.app`, and
+    replaces the old login item. macOS permission grants can't move, so
+    the setup checklist asks again.
+  - `mouthpiece://` links, with `devwhisper://` still accepted; the
+    "Dev Whisper, …" wake phrase still works.
+  - Repo `JFinchy/mouthpiece` (GitHub forwards the old repo's URLs, so the
+    updater and old download links keep working; releases also carry
+    `Dev-Whisper.dmg`). The old site URL, jfinchy.github.io/dev-whisper,
+    doesn't forward.
+  - Left as is: the dev signing identity and identifier (renaming them
+    resets the dev build's permission grants), the updater key file
+    names in `~/.tauri/`, and the `tauri-app` binary name.
 
 - **New app icon** (idea captured 2026-10-22). The current icon (code
   brackets over dense sound-wave bars) is busy at small sizes. A prompt

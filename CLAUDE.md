@@ -1,4 +1,4 @@
-# Dev Whisper
+# Mouthpiece
 
 See `PRODUCT_SPEC.md` for the product vision, `FEATURES.md` for what's
 built, `ROADMAP.md` for what's left, and `BACKLOG.md` for full detail

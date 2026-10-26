@@ -46,7 +46,7 @@ fn unregister_skip(app: &AppHandle, cfg: &ShortcutConfig) {
 }
 
 /// Registers the saved shortcut at launch. Failure is recorded rather than
-/// returned: a hotkey taken by another app must not stop Dev Whisper from
+/// returned: a hotkey taken by another app must not stop Mouthpiece from
 /// starting, since the widget button, tray and deep links still work and
 /// Settings is where the user picks a different combination.
 pub fn register_initial(app: &AppHandle, cfg: ShortcutConfig) -> PushToTalkState {

@@ -39,7 +39,7 @@ built yet.
   (`kubectl`, `camelCase`, framework names, etc.) fed into Whisper's
   `initial_prompt` to bias recognition toward developer speech.
 - **Names from your project** — when the frontmost app is a terminal or an
-  editor (VS Code, Cursor, Zed, JetBrains, Sublime), Dev Whisper finds the
+  editor (VS Code, Cursor, Zed, JetBrains, Sublime), Mouthpiece finds the
   repo you're in (a terminal's shell working directory, or the editor's
   window title / open folder) and reads its names from `git ls-files`,
   recent changes and commits, the branch, `package.json` / `Cargo.toml`
@@ -120,8 +120,8 @@ built yet.
   picked, capped at 60 lines. Nothing found: pastes your words and shows
   "No error found to attach". Captured text is never logged, only line
   counts.
-- **Scratch that / undo that** (whole dictation) — undoes the last Dev
-  Whisper paste: Cmd+Z in editors/browsers/chat (within 30s), exactly N
+- **Scratch that / undo that** (whole dictation) — undoes the last
+  Mouthpiece paste: Cmd+Z in editors/browsers/chat (within 30s), exactly N
   backspaces in terminals (single-line ASCII paste, within 15s, not
   submitted), never Ctrl+U. If the app changed or it can't be done
   safely, nothing is sent and the widget says "Couldn't undo safely
@@ -243,7 +243,7 @@ built yet.
 - **Custom app icon** — a terminal prompt flowing into a waveform and a
   text cursor, amber to violet (source in `src-tauri/icons/source/`), for
   Dock/Finder/the About window and the website.
-- **Deep-link/CLI automation hooks** — `open devwhisper://start-recording`
+- **Deep-link/CLI automation hooks** — `open mouthpiece://start-recording`
   / `stop-recording` / `toggle-recording` for Raycast, Hammerspoon,
   Alfred, or plain shell scripts. Start/stop are idempotent, so a script
   doesn't need to track recording state itself.
@@ -258,16 +258,16 @@ built yet.
   side.
 - **Reply to a waiting coding agent by voice** — Claude Code's
   Notification, Stop and UserPromptSubmit hooks run a bundled script
-  (`dev-whisper-hook`, kept at `~/Library/Application Support/
-  com.devwhisper.app/bin/`) that opens `devwhisper://agent-waiting?...`
-  in the background. Dev Whisper finds the app that owns the agent's
+  (`mouthpiece-hook`, kept at `~/Library/Application Support/
+  dev.mouthpiece/bin/`) that opens `mouthpiece://agent-waiting?...`
+  in the background. Mouthpiece finds the app that owns the agent's
   terminal by walking the hook's parent processes (falling back to the
   exported bundle id, then `TERM_PROGRAM`), and keeps up to 8 waiting
   agents (newest first, one per session, expiring after 30 minutes). The
   widget shows a "Claude is waiting · folder" pill (click to go to that
   window) and plays a soft system sound (toggle in Settings). A separate
   reply shortcut (default ⌃⌥R) records a dictation for the newest waiting
-  agent: when ready, Dev Whisper raises the agent's window through the
+  agent: when ready, Mouthpiece raises the agent's window through the
   Accessibility API, confirms that app is frontmost, pastes, and returns
   focus to the app and window you were in. Ending with "press enter" (or
   "send it" after a pause) asks for Enter, which is pressed only when the

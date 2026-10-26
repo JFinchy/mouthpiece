@@ -724,7 +724,7 @@ function WidgetView() {
     phase !== "idle"
       ? STATUS_LABEL[phase]
       : ambientPhase === "listening"
-        ? "Listening for “Dev Whisper”"
+        ? "Listening for “Mouthpiece”"
         : ambientPhase === "asleep"
           ? "Asleep"
           : ambientPhase === "paused"

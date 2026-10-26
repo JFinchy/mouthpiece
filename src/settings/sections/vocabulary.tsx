@@ -76,7 +76,7 @@ function ProjectNamesToggle() {
         Use names from your project
       </label>
       <p className="mt-1 text-xs opacity-60">
-        In a terminal or editor, Dev Whisper reads the file, function and package names of the project you're in, so
+        In a terminal or editor, Mouthpiece reads the file, function and package names of the project you're in, so
         "the paste text function in the paste file" comes out as <code>paste_text</code> and{" "}
         <code>@src-tauri/src/paste.rs</code>. It all stays on this Mac, in memory only.
       </p>

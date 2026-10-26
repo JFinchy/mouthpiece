@@ -266,10 +266,10 @@ struct TagEntry {
 
 /// Why a cloud model is refused, shown where the request would have gone.
 pub const CLOUD_REFUSED: &str =
-    "Ollama cloud models are turned off in Dev Whisper so your text stays on your Mac.";
+    "Ollama cloud models are turned off in Mouthpiece so your text stays on your Mac.";
 
 /// Ollama's cloud models ("gpt-oss:120b-cloud", "kimi-k2:cloud") send the
-/// prompt to Ollama's servers. Dev Whisper promises nothing you say leaves
+/// prompt to Ollama's servers. Mouthpiece promises nothing you say leaves
 /// your Mac, so they're never listed or used.
 pub fn is_cloud_model(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();

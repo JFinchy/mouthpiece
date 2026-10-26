@@ -17,24 +17,24 @@ permissions, which no automated test exercises.
 ## Steps
 
 1. `bun run tauri build --debug`, open
-   `src-tauri/target/debug/bundle/macos/Dev Whisper.app`. The widget
+   `src-tauri/target/debug/bundle/macos/Mouthpiece.app`. The widget
    renders; open Settings and click through every sidebar page. Nothing is
    blank, and app icons show in Modes.
 2. In that build, dictate once. It pastes, so the CSP isn't blocking IPC.
 3. **Single instance**: with the dev app running, run
-   `open "src-tauri/target/debug/bundle/macos/Dev Whisper.app"` again. No
+   `open "src-tauri/target/debug/bundle/macos/Mouthpiece.app"` again. No
    second widget or tray icon; `app.log` shows `second launch handed off`.
 4. **Taken hotkey**: quit, set your hotkey to one another app owns (or
    edit `config.json` to `{"meta":true,"code":"Space"}`, which Spotlight
    owns), relaunch. The app starts; Settings shows "Pick a different
    hotkey" at the top; the widget says "Finish setup". Pick a new hotkey,
    and the checklist clears without reopening Settings.
-5. **Fresh install**: move `~/Library/Application Support/com.devwhisper.app/models`
+5. **Fresh install**: move `~/Library/Application Support/dev.mouthpiece/models`
    and `src-tauri/models` aside, relaunch. Widget: "Finish setup".
    Settings: "Download a speech model" → **Choose a model** jumps to Voice.
    Download Base; `app.log` shows `models: base.en downloaded and verified`,
    and the checklist clears. Put the folders back.
-6. **Accessibility**: turn Dev Whisper off in System Settings →
+6. **Accessibility**: turn Mouthpiece off in System Settings →
    Accessibility. Within 30s the widget shows "Finish setup"; the
    checklist's **Open System Settings** opens that exact page. Turn it back
    on; it clears when you return to Settings.

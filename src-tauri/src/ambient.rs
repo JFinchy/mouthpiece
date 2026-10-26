@@ -1,5 +1,5 @@
 //! Always-on (ambient) listening: dictate without touching the keyboard by
-//! starting an utterance with the wake phrase ("Dev Whisper, ...").
+//! starting an utterance with the wake phrase ("Mouthpiece, ...").
 //!
 //! Pipeline per utterance: Silero VAD segments continuous audio → a
 //! pre-roll is prepended so a soft first word isn't clipped → the segment
@@ -45,7 +45,7 @@ pub enum AmbientPhase {
     Off,
     /// Wake phrase + command is dictated.
     Listening,
-    /// Only "Dev Whisper, wake up" is acted on.
+    /// Only "Mouthpiece, wake up" is acted on.
     Asleep,
     /// Another app (a call) is using the microphone; resumes on its own.
     Paused,
@@ -378,7 +378,7 @@ fn handle_segment(app: &AppHandle, audio: Vec<f32>) {
             metrics.wake_hits.fetch_add(1, Ordering::Relaxed);
             if state.phase() != AmbientPhase::Listening {
                 crate::applog!(
-                    "ambient: asleep, ignoring dictation (say \"Dev Whisper, wake up\")"
+                    "ambient: asleep, ignoring dictation (say \"Mouthpiece, wake up\")"
                 );
                 return;
             }
@@ -417,10 +417,16 @@ enum Addressed<'a> {
     Unaddressed,
 }
 
-/// Wake phrase spellings Whisper produces for "Dev Whisper" (tokens are
-/// compared lowercased with punctuation stripped, so "Dev, Whisper." and
-/// "dev-whisper" both match).
-const WAKE_PHRASES: &[&[&str]] = &[&["dev", "whisper"], &["devwhisper"], &["dev", "whisperer"]];
+/// Wake phrase spellings Whisper produces for "Mouthpiece" (tokens are
+/// compared lowercased with punctuation stripped, so "Mouth piece." and
+/// "mouth-piece" both match). The old name, "Dev Whisper", still works.
+const WAKE_PHRASES: &[&[&str]] = &[
+    &["mouthpiece"],
+    &["mouth", "piece"],
+    &["dev", "whisper"],
+    &["devwhisper"],
+    &["dev", "whisperer"],
+];
 const WAKE_PREFIXES: &[&str] = &["hey", "ok", "okay"];
 
 fn normalize(token: &str) -> String {
@@ -432,7 +438,7 @@ fn normalize(token: &str) -> String {
 }
 
 /// Only acts when the utterance *starts* with the wake phrase, so talking
-/// about Dev Whisper mid-sentence doesn't trigger it.
+/// about Mouthpiece mid-sentence doesn't trigger it.
 fn parse_wake(text: &str) -> Addressed<'_> {
     let tokens: Vec<(usize, &str)> = text
         .split_whitespace()
@@ -501,7 +507,7 @@ mod tests {
     #[test]
     fn dictation_after_the_wake_phrase_keeps_original_text() {
         assert_eq!(
-            parse_wake("Dev Whisper, send the report to Sam."),
+            parse_wake("Mouthpiece, send the report to Sam."),
             Addressed::Dictate("send the report to Sam.")
         );
     }
@@ -509,6 +515,9 @@ mod tests {
     #[test]
     fn wake_phrase_variants_match() {
         for text in [
+            "Mouthpiece, ship it",
+            "Hey mouth piece ship it",
+            "mouth-piece: ship it",
             "dev-whisper ship it",
             "Hey Dev Whisper ship it",
             "Dev Whisperer, ship it",
@@ -525,18 +534,19 @@ mod tests {
     }
 
     #[test]
-    fn mentioning_dev_whisper_mid_sentence_is_not_addressing_it() {
+    fn mentioning_the_name_mid_sentence_is_not_addressing_it() {
         assert_eq!(
-            parse_wake("I think Dev Whisper is great"),
+            parse_wake("I think Mouthpiece is great"),
             Addressed::Unaddressed
         );
     }
 
     #[test]
     fn sleep_and_wake_commands() {
+        assert_eq!(parse_wake("Mouthpiece, go to sleep."), Addressed::Sleep);
+        assert_eq!(parse_wake("Mouthpiece, wake up!"), Addressed::Wake);
+        assert_eq!(parse_wake("Mouthpiece."), Addressed::Wake);
         assert_eq!(parse_wake("Dev Whisper, go to sleep."), Addressed::Sleep);
-        assert_eq!(parse_wake("Dev Whisper, wake up!"), Addressed::Wake);
-        assert_eq!(parse_wake("Dev Whisper."), Addressed::Wake);
     }
 
     #[test]

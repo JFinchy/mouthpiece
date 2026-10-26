@@ -166,8 +166,8 @@ pub fn frontmost_bundle_id_blocking(app: &tauri::AppHandle) -> Option<String> {
 
 /// Lists currently-running regular (foreground, Dock-visible) apps via
 /// NSWorkspace, for the Settings "assign a mode" picker. Excludes
-/// background/agent processes (menu-bar-only helpers etc.) and Dev
-/// Whisper itself. Same main-thread requirement as `frontmost_app_info`.
+/// background/agent processes (menu-bar-only helpers etc.) and
+/// Mouthpiece itself. Same main-thread requirement as `frontmost_app_info`.
 pub fn list_running_apps(own_bundle_id: &str) -> Vec<AppInfo> {
     let workspace = NSWorkspace::sharedWorkspace();
     let running = workspace.runningApplications();

@@ -1,5 +1,5 @@
 //! "Scratch that" / "undo that" as a whole dictation: take back the last
-//! Dev Whisper paste.
+//! Mouthpiece paste.
 //!
 //! Mid-sentence, "scratch that" stays a backtrack correction
 //! (`backtrack.rs`: "meet at two scratch that three"). This is the other

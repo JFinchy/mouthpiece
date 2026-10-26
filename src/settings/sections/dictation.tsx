@@ -324,7 +324,7 @@ export function GeneralSection() {
               checked={autostart}
               onChange={(e) => toggleAutostart(e.target.checked)}
             />
-            Launch Dev Whisper at login
+            Launch Mouthpiece at login
           </label>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs">Widget style</span>

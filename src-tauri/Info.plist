@@ -9,6 +9,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Dev Whisper uses the microphone when you dictate, and for hands-free listening if you turn it on, to turn your speech into text on this Mac. Audio never leaves your computer.</string>
+  <string>Mouthpiece uses the microphone when you dictate, and for hands-free listening if you turn it on, to turn your speech into text on this Mac. Audio never leaves your computer.</string>
 </dict>
 </plist>

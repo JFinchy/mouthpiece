@@ -125,12 +125,12 @@ test.describe("widget", () => {
           id: "paste",
           level: "error",
           title: "Allow pasting",
-          detail: "Dev Whisper needs Accessibility permission.",
+          detail: "Mouthpiece needs Accessibility permission.",
           fix: "grant_accessibility",
         },
       ],
     });
-    await expect(page.getByText("Allow pasting. Dev Whisper needs Accessibility permission.")).toBeVisible();
+    await expect(page.getByText("Allow pasting. Mouthpiece needs Accessibility permission.")).toBeVisible();
   });
 
   test("transcription shows a percentage and a filling bar", async ({ page, consoleErrors: _ }) => {

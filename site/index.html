@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dev Whisper</title>
+  <title>Mouthpiece</title>
   <meta name="description" content="Free, local dictation for developers on Apple Silicon. Talk to Claude Code, Cursor and your terminal, and the text lands with file tags, casing and line breaks where they belong. Nothing leaves your Mac.">
-  <meta property="og:title" content="Dev Whisper: dictation that speaks developer">
+  <meta property="og:title" content="Mouthpiece: dictation that speaks developer">
   <meta property="og:description" content="Free, local dictation for developers on Apple Silicon. Built for talking to coding agents. Nothing leaves your Mac.">
   <meta property="og:image" content="icon.png">
   <meta name="theme-color" content="#0f1113">
@@ -19,9 +19,9 @@
 
   <header class="nav">
     <div class="nav-pill">
-      <a class="brand" href="#top" aria-label="Dev Whisper home">
+      <a class="brand" href="#top" aria-label="Mouthpiece home">
         <img src="icon.png" alt="" width="26" height="26">
-        <span>Dev Whisper</span>
+        <span>Mouthpiece</span>
       </a>
       <nav aria-label="Sections">
         <a href="#agents">Agents</a>
@@ -43,11 +43,11 @@
           with <code>@file</code> tags, <code>snake_case</code> and line breaks where they belong,
           and nothing leaves your Mac.</p>
         <div class="cta-row">
-          <a class="btn btn-large" href="https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg">
+          <a class="btn btn-large" href="https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg">
             <svg aria-hidden="true" viewBox="0 0 16 16" width="17" height="17"><path d="M8 1v9m0 0 3.5-3.5M8 10 4.5 6.5M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Download for Mac
           </a>
-          <a class="btn-ghost" href="https://github.com/JFinchy/dev-whisper">Source on GitHub</a>
+          <a class="btn-ghost" href="https://github.com/JFinchy/mouthpiece">Source on GitHub</a>
         </div>
         <p class="cta-note"><span data-version>Latest version</span> · Free and open source · Apple Silicon · macOS 12+</p>
       </div>
@@ -76,7 +76,7 @@
     </section>
 
     <!-- Proof in three numbers -->
-    <section class="numbers" aria-label="Dev Whisper in numbers">
+    <section class="numbers" aria-label="Mouthpiece in numbers">
       <div class="wrap numbers-row">
         <div class="stat reveal">
           <span class="stat-value">¼<small> s</small></span>
@@ -106,7 +106,7 @@
           <article class="card card-wide reveal">
             <div class="card-copy">
               <h3>Reply to a waiting agent</h3>
-              <p>A Claude Code hook tells Dev Whisper when an agent is waiting for you. Press
+              <p>A Claude Code hook tells Mouthpiece when an agent is waiting for you. Press
                 <kbd>⌃⌥R</kbd>, answer out loud, and the reply lands in that agent's window while
                 you stay where you were.</p>
             </div>
@@ -235,10 +235,10 @@
               <dd>Clean sentences skip the LLM entirely. Fillers, stutters and casual chat get
                 a quick pass.</dd>
               <dt>Hands-free if you want it</dt>
-              <dd>Say "Dev Whisper, …" and only your enrolled voice triggers it. It pauses
+              <dd>Say "Mouthpiece, …" and only your enrolled voice triggers it. It pauses
                 itself during calls.</dd>
               <dt>Scriptable</dt>
-              <dd><code>open devwhisper://start-recording</code> from any tool, plus a webhook
+              <dd><code>open mouthpiece://start-recording</code> from any tool, plus a webhook
                 for each finished transcript.</dd>
               <dt>History and insights</dt>
               <dd>Search every past dictation, re-run one through a different mode, and see
@@ -255,7 +255,7 @@
         <div class="section-head reveal">
           <h2>How it compares.</h2>
           <p>Wispr Flow and Superwhisper are great general-purpose dictation apps that run on
-            more devices and in more languages. Dev Whisper is narrower: English, Apple Silicon,
+            more devices and in more languages. Mouthpiece is narrower: English, Apple Silicon,
             and tuned for code.</p>
         </div>
         <div class="table-scroll reveal">
@@ -263,7 +263,7 @@
             <thead>
               <tr>
                 <th scope="col"><span class="sr-only">Feature</span></th>
-                <th scope="col" class="us">Dev Whisper</th>
+                <th scope="col" class="us">Mouthpiece</th>
                 <th scope="col">Wispr Flow</th>
                 <th scope="col">Superwhisper</th>
               </tr>
@@ -321,7 +321,7 @@
             cleanup runs in Ollama, also on your Mac, and Ollama's cloud models are blocked. There's no
             account, no telemetry and no cloud fallback. This is everything the app ever connects to:</p>
         </div>
-        <div class="netlog reveal" role="table" aria-label="Every network connection Dev Whisper makes">
+        <div class="netlog reveal" role="table" aria-label="Every network connection Mouthpiece makes">
           <div class="netlog-head" role="row">
             <span role="columnheader">What</span><span role="columnheader">Where</span><span role="columnheader">When</span>
           </div>
@@ -339,30 +339,30 @@
       <div class="wrap faq-grid">
         <div class="section-head reveal">
           <h2>Good questions.</h2>
-          <p>Something else? <a href="https://github.com/JFinchy/dev-whisper/issues">Open an issue</a>.</p>
+          <p>Something else? <a href="https://github.com/JFinchy/mouthpiece/issues">Open an issue</a>.</p>
         </div>
         <div class="faq reveal">
           <details>
-            <summary>macOS says Dev Whisper can't be opened, or is damaged.</summary>
-            <p>Dev Whisper isn't notarized by Apple yet, so macOS blocks the first launch. Open
+            <summary>macOS says Mouthpiece can't be opened, or is damaged.</summary>
+            <p>Mouthpiece isn't notarized by Apple yet, so macOS blocks the first launch. Open
               it once, then go to <strong>System Settings → Privacy &amp; Security</strong>,
               scroll down and click <strong>Open Anyway</strong>. On macOS 14 or earlier,
               right-click the app and choose Open instead.</p>
             <p>To skip that step entirely, install with the <a href="#download">one-line command</a>
               or build it from source.</p>
             <p>Versions before 0.3.1 show "damaged" instead. Download the latest version, or
-              run <code>xattr -dr com.apple.quarantine "/Applications/Dev Whisper.app"</code>
+              run <code>xattr -dr com.apple.quarantine "/Applications/Mouthpiece.app"</code>
               in Terminal.</p>
           </details>
           <details>
             <summary>Is it safe? Could it contain malware or leak what I say?</summary>
-            <p>Dev Whisper is open source, so anyone can read exactly what it does. What we check:</p>
+            <p>Mouthpiece is open source, so anyone can read exactly what it does. What we check:</p>
             <ul>
               <li><strong>Your voice stays on your Mac.</strong> Speech recognition and the optional
                 cleanup both run locally. The <a href="#privacy">list above</a> is every connection the
                 app makes, and none of them carry what you say.</li>
-              <li><strong>No cloud models.</strong> Ollama can run some models on its own servers. Dev
-                Whisper hides those and refuses to use them, so cleanup never leaves your Mac.</li>
+              <li><strong>No cloud models.</strong> Ollama can run some models on its own servers. Mouthpiece
+                hides those and refuses to use them, so cleanup never leaves your Mac.</li>
               <li><strong>Your transcripts are yours.</strong> History stays on your Mac in a file only
                 your account can read. You can lock it behind Touch ID or your password, and logs leave
                 out what you said unless you turn that on.</li>
@@ -372,9 +372,9 @@
               <li><strong>Downloads are verified.</strong> Speech models are checked against known
                 checksums, and updates must carry our signature before they install.</li>
             </ul>
-            <p>The realistic risk is the one every app has: bugs. Dev Whisper types into other apps and
+            <p>The realistic risk is the one every app has: bugs. Mouthpiece types into other apps and
               listens while you hold the key, so a bug could put text in the wrong place. If you hit one,
-              please <a href="https://github.com/JFinchy/dev-whisper/issues">open an issue</a>.</p>
+              please <a href="https://github.com/JFinchy/mouthpiece/issues">open an issue</a>.</p>
           </details>
           <details>
             <summary>Do I need Ollama?</summary>
@@ -415,15 +415,15 @@
         <div class="closer reveal">
           <h2>Say it. Ship it.</h2>
           <p>Free for Macs with Apple Silicon, macOS 12 or later. Updates install themselves.</p>
-          <a class="btn btn-large" href="https://github.com/JFinchy/dev-whisper/releases/latest/download/Dev-Whisper.dmg">
+          <a class="btn btn-large" href="https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg">
             <svg aria-hidden="true" viewBox="0 0 16 16" width="18" height="18"><path d="M8 1v9m0 0 3.5-3.5M8 10 4.5 6.5M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Download Dev-Whisper.dmg
+            Download Mouthpiece.dmg
           </a>
           <p class="small"><span data-version>Latest version</span> ·
-            <a href="https://github.com/JFinchy/dev-whisper/releases">All releases</a></p>
+            <a href="https://github.com/JFinchy/mouthpiece/releases">All releases</a></p>
         </div>
         <ol class="steps reveal">
-          <li><strong>Install</strong> <span>Open the DMG and drag Dev Whisper into Applications.</span></li>
+          <li><strong>Install</strong> <span>Open the DMG and drag Mouthpiece into Applications.</span></li>
           <li><strong>Allow it once</strong> <span>Open it, then click Open Anyway in System Settings →
             Privacy &amp; Security. It isn't notarized by Apple yet.</span></li>
           <li><strong>Set up</strong> <span>Follow the checklist in Settings: download a speech model
@@ -434,7 +434,7 @@
 
         <div class="alt-installs reveal">
           <h3>Other ways to install</h3>
-          <p class="alt-intro">Dev Whisper isn't notarized by Apple yet (that costs $99 a year), so a
+          <p class="alt-intro">Mouthpiece isn't notarized by Apple yet (that costs $99 a year), so a
             download from the button above needs the one-time "Open Anyway" step. These two skip it.</p>
           <div class="alt-grid">
             <div class="alt">
@@ -443,16 +443,16 @@
                 signature and copies it into Applications. Files downloaded this way aren't flagged,
                 so macOS doesn't prompt. <a href="install.sh">Read the script</a> first if you like.</p>
               <div class="cmd">
-                <code data-cmd>curl -fsSL https://jfinchy.github.io/dev-whisper/install.sh | sh</code>
+                <code data-cmd>curl -fsSL https://jfinchy.github.io/mouthpiece/install.sh | sh</code>
                 <button type="button" class="copy" data-copy aria-label="Copy the install command">Copy</button>
               </div>
             </div>
             <div class="alt">
               <h4>Build from source</h4>
               <p>Anything you build on your own Mac runs without the prompt. You'll need Rust and Bun;
-                the steps are in the <a href="https://github.com/JFinchy/dev-whisper#install">README</a>.</p>
+                the steps are in the <a href="https://github.com/JFinchy/mouthpiece#install">README</a>.</p>
               <div class="cmd">
-                <code>git clone https://github.com/JFinchy/dev-whisper</code>
+                <code>git clone https://github.com/JFinchy/mouthpiece</code>
               </div>
             </div>
           </div>
@@ -463,8 +463,8 @@
 
   <footer class="footer">
     <div class="wrap footer-row">
-      <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Dev Whisper</span>
-      <span>Open source under the <a href="https://github.com/JFinchy/dev-whisper/blob/main/LICENSE">MIT license</a> · <a href="https://github.com/JFinchy/dev-whisper">GitHub</a></span>
+      <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Mouthpiece</span>
+      <span>Open source under the <a href="https://github.com/JFinchy/mouthpiece/blob/main/LICENSE">MIT license</a> · <a href="https://github.com/JFinchy/mouthpiece">GitHub</a></span>
     </div>
   </footer>
 
