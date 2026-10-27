@@ -20,9 +20,10 @@ test.describe("meetings page", () => {
     await emit(page, "meeting-changed", {
       recording: null,
       processing: { id: "2026-10-26-174005", step: "Transcribing", percent: 40 },
+      queued: ["2026-10-26-174005"],
     });
     await expect(page.getByTestId("meeting-processing")).toContainText("Transcribing · 40%");
-    await emit(page, "meeting-changed", { recording: null, processing: null });
+    await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
     await expect(page.getByTestId("meeting-toggle")).toHaveText("Start meeting");
   });
 
@@ -42,6 +43,8 @@ test.describe("meetings page", () => {
 
     await rows.first().hover();
     await rows.first().getByRole("button", { name: /^Delete/ }).click();
+    await expect(rows).toHaveCount(2);
+    await rows.first().getByRole("button", { name: /^Confirm deleting/ }).click();
     await expect(rows).toHaveCount(1);
   });
 
@@ -69,12 +72,27 @@ test.describe("meetings page", () => {
 test.describe("meeting in the widget", () => {
   test.use({ viewport: { width: 280, height: 360 } });
 
+  test("goes back to idle when the meeting ends, even without the stop event", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "meeting-changed", {
+      recording: { id: "2026-10-26-174005", started_ms: Date.now() },
+      processing: null,
+      queued: [],
+    });
+    await expect(page.getByTestId("recording-elapsed")).toContainText("Meeting 0:0");
+    await emit(page, "meeting-blocked", "Dictation is paused while a meeting records");
+    await expect(page.getByTestId("recording-elapsed")).toContainText("Dictation is paused");
+    await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
+    await expect(page.getByText("Ready")).toBeVisible();
+  });
+
   test("shows the meeting, stops it, then reports the transcript", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget");
     await page.evaluate(() => {
       const status = {
         recording: { id: "2026-10-26-174005", started_ms: Date.now() - 65_000 },
         processing: null,
+        queued: [],
       };
       window.__dw!.state.meetingStatus = status;
       return window.__dw!.emit("meeting-changed", status);
@@ -93,12 +111,13 @@ test.describe("meeting in the widget", () => {
     await emit(page, "meeting-changed", {
       recording: null,
       processing: { id: "2026-10-26-174005", step: "Transcribing", percent: 20 },
+      queued: ["2026-10-26-174005"],
     });
     await expect(page.getByText("Meeting: Transcribing 20%")).toBeVisible();
     // Dictation stays available while it's transcribed.
     await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
 
-    await emit(page, "meeting-changed", { recording: null, processing: null });
+    await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
     await emit(page, "meeting-saved", "Meeting, Mon 26 Oct 2026, 17:40");
     await expect(page.getByText("Meeting transcript saved")).toBeVisible();
   });

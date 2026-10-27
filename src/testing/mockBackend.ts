@@ -72,6 +72,7 @@ function initialState(scenario: Scenario) {
     meetingStatus: {
       recording: null as { id: string; started_ms: number } | null,
       processing: null as { id: string; step: string; percent: number | null } | null,
+      queued: [] as string[],
     },
     meetings: scenario.meetings ?? [
       {
@@ -318,7 +319,11 @@ export function installMockBackend() {
     stop_meeting: () => {
       const id = state.meetingStatus.recording?.id;
       if (!id) return Promise.reject("Not recording a meeting");
-      state.meetingStatus = { recording: null, processing: { id, step: "Finding who spoke", percent: null } };
+      state.meetingStatus = {
+        recording: null,
+        processing: { id, step: "Finding who spoke", percent: null },
+        queued: [...state.meetingStatus.queued, id],
+      };
       void emit("meeting-stopped");
       void emit("meeting-changed", state.meetingStatus);
       return null;
@@ -337,7 +342,7 @@ export function installMockBackend() {
       return null;
     },
     transcribe_meeting: (args) => {
-      state.meetingStatus = { ...state.meetingStatus, processing: { id: String(args.id), step: "Starting", percent: null } };
+      state.meetingStatus = { ...state.meetingStatus, queued: [...state.meetingStatus.queued, String(args.id)] };
       void emit("meeting-changed", state.meetingStatus);
       return null;
     },

@@ -63,8 +63,19 @@ pub fn request_dictation(app: &AppHandle, request: Request) {
         Transition::StartedEnrollment { .. }
         | Transition::StoppedEnrollment { .. }
         | Transition::StartedMeeting { .. }
-        | Transition::StoppedMeeting { .. }
-        | Transition::Rejected(_) => {}
+        | Transition::StoppedMeeting { .. } => {}
+        Transition::Rejected(_) => {
+            // The hotkey seemingly doing nothing would look broken.
+            if matches!(
+                state.capture.state(),
+                crate::capture::CaptureState::Meeting { .. }
+            ) {
+                let _ = app.emit(
+                    "meeting-blocked",
+                    "Dictation is paused while a meeting records".to_string(),
+                );
+            }
+        }
     }
 }
 

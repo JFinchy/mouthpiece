@@ -26,7 +26,7 @@ use sherpa_onnx::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -45,11 +45,24 @@ const MIN_TURN_SECONDS: f32 = 0.5;
 const MIN_CLIP_SECONDS: f32 = 1.2;
 /// Enough audio per speaker to compare against the enrolled voice.
 const YOU_SAMPLE_SECONDS: f32 = 30.0;
+/// Turns are transcribed in pieces at most this long, so dictation never
+/// waits behind one person's five-minute monologue for the Whisper lock.
+const MAX_PIECE_SECONDS: f32 = 30.0;
+
+/// A panic while transcribing mustn't wedge every later meeting.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Default)]
 pub struct MeetingState {
     recording: Mutex<Option<Recording>>,
     progress: Mutex<Option<Progress>>,
+    /// Meetings waiting to be transcribed or being transcribed, oldest
+    /// first; they can't be deleted or queued twice.
+    queue: Mutex<Vec<String>>,
     /// One transcript at a time: Whisper and the diarization models are
     /// heavy, and a second meeting can wait its turn.
     processing: Mutex<()>,
@@ -74,6 +87,8 @@ pub struct MeetingStatus {
     /// Set while a meeting is being recorded: its id and start time.
     pub recording: Option<RecordingStatus>,
     pub processing: Option<Progress>,
+    /// Every meeting waiting for or being transcribed.
+    pub queued: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq)]
@@ -133,6 +148,46 @@ fn new_id(now: chrono::DateTime<chrono::Local>) -> String {
     now.format("%Y-%m-%d-%H%M%S").to_string()
 }
 
+/// When a meeting started, from its id (which may carry a "-2" suffix).
+fn started_at(id: &str) -> Option<chrono::DateTime<chrono::Local>> {
+    chrono::NaiveDateTime::parse_from_str(id.get(..17)?, "%Y-%m-%d-%H%M%S")
+        .ok()?
+        .and_local_timezone(chrono::Local)
+        .earliest()
+}
+
+/// Creates the recording file for a meeting starting `now`, picking an id
+/// no other meeting has (two in one second, or the repeated hour when the
+/// clocks go back, get a "-2" suffix).
+fn create_recording(
+    dir: &Path,
+    now: chrono::DateTime<chrono::Local>,
+) -> Result<(String, std::fs::File), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let base = new_id(now);
+    for n in 1..100 {
+        let id = if n == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        };
+        if dir.join(format!("{id}.md")).exists() {
+            continue;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(dir.join(format!("{id}.wav")))
+        {
+            Ok(file) => return Ok((id, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    Err("couldn't name the meeting recording".into())
+}
+
 /// Ids come back from the UI; only ever a plain file stem.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_digit() || c == '-')
@@ -189,21 +244,14 @@ impl To16k {
     }
 }
 
-/// Writes chunks to `path` until the audio thread drops the tap's sender.
-fn write_meeting(path: &Path, chunks: Receiver<AudioChunk>) -> Result<(), String> {
-    use std::os::unix::fs::OpenOptionsExt;
+/// Writes chunks to `file` until the audio thread drops the tap's sender.
+fn write_meeting(file: std::fs::File, chunks: Receiver<AudioChunk>) -> Result<(), String> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: WHISPER_SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| e.to_string())?;
     let mut writer =
         hound::WavWriter::new(std::io::BufWriter::new(file), spec).map_err(|e| e.to_string())?;
     let mut to16k = To16k::default();
@@ -233,19 +281,16 @@ fn write_meeting(path: &Path, chunks: Receiver<AudioChunk>) -> Result<(), String
 
 pub fn status(app: &AppHandle) -> MeetingStatus {
     let state = app.state::<MeetingState>();
-    let recording = state
-        .recording
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|r| RecordingStatus {
-            id: r.id.clone(),
-            started_ms: r.started_ms,
-        });
-    let processing = state.progress.lock().unwrap().clone();
+    let recording = lock(&state.recording).as_ref().map(|r| RecordingStatus {
+        id: r.id.clone(),
+        started_ms: r.started_ms,
+    });
+    let processing = lock(&state.progress).clone();
+    let queued = lock(&state.queue).clone();
     MeetingStatus {
         recording,
         processing,
+        queued,
     }
 }
 
@@ -255,32 +300,62 @@ fn announce(app: &AppHandle) {
 }
 
 fn set_progress(app: &AppHandle, progress: Option<Progress>) {
-    *app.state::<MeetingState>().progress.lock().unwrap() = progress;
+    *lock(&app.state::<MeetingState>().progress) = progress;
     announce(app);
 }
 
 pub fn is_recording(app: &AppHandle) -> bool {
     app.try_state::<MeetingState>()
-        .is_some_and(|s| s.recording.lock().unwrap().is_some())
+        .is_some_and(|s| lock(&s.recording).is_some())
+}
+
+/// Adds a meeting to the transcription queue; false if it's already there.
+fn enqueue(app: &AppHandle, id: &str) -> bool {
+    let state = app.state::<MeetingState>();
+    let mut queue = lock(&state.queue);
+    if queue.iter().any(|q| q == id) {
+        return false;
+    }
+    queue.push(id.to_string());
+    true
+}
+
+fn is_queued(app: &AppHandle, id: &str) -> bool {
+    lock(&app.state::<MeetingState>().queue)
+        .iter()
+        .any(|q| q == id)
 }
 
 pub fn start(app: &AppHandle) -> Result<(), String> {
+    use crate::mic_permission::MicAccess;
+    // Otherwise it would record hours of silence.
+    let access = crate::mic_permission::status();
+    if matches!(access, MicAccess::Denied | MicAccess::Restricted) {
+        return Err(crate::mic_permission::silence_explanation(access)
+            .unwrap_or("Mouthpiece isn't allowed to use the microphone.")
+            .to_string());
+    }
     let recording_state = app.state::<RecordingState>();
-    let _op = recording_state.capture_op.lock().unwrap();
+    let _op = lock(&recording_state.capture_op);
     let dir = meetings_dir(app)?;
+    // The file exists before the meeting does, so a failure here leaves
+    // nothing half-started.
+    let (id, file) = create_recording(&dir, chrono::Local::now())?;
     let session = match recording_state.capture.request(Request::StartMeeting) {
         Transition::StartedMeeting { session } => session,
-        Transition::Rejected(reason) => return Err(capitalized(reason)),
-        other => return Err(format!("unexpected {other:?}")),
+        other => {
+            let _ = std::fs::remove_file(dir.join(format!("{id}.wav")));
+            return Err(match other {
+                Transition::Rejected(reason) => capitalized(reason),
+                other => format!("unexpected {other:?}"),
+            });
+        }
     };
 
-    let id = new_id(chrono::Local::now());
-    let path = dir.join(format!("{id}.wav"));
     let (tx, rx) = mpsc::channel();
-    let writer_path = path.clone();
-    let writer = std::thread::spawn(move || write_meeting(&writer_path, rx));
+    let writer = std::thread::spawn(move || write_meeting(file, rx));
     recording_state.audio.set_meeting_tap(Some(tx));
-    *app.state::<MeetingState>().recording.lock().unwrap() = Some(Recording {
+    *lock(&app.state::<MeetingState>().recording) = Some(Recording {
         id: id.clone(),
         started_ms: now_ms(),
         writer,
@@ -322,7 +397,7 @@ fn capitalized(text: &str) -> String {
 pub fn stop(app: &AppHandle) -> Result<(), String> {
     let recording_state = app.state::<RecordingState>();
     let recording = {
-        let _op = recording_state.capture_op.lock().unwrap();
+        let _op = lock(&recording_state.capture_op);
         match recording_state.capture.request(Request::StopMeeting) {
             Transition::StoppedMeeting { .. } => {}
             Transition::Rejected(reason) => return Err(capitalized(reason)),
@@ -330,7 +405,7 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
         }
         // Dropping the tap's sender ends the writer thread.
         recording_state.audio.set_meeting_tap(None);
-        app.state::<MeetingState>().recording.lock().unwrap().take()
+        lock(&app.state::<MeetingState>().recording).take()
     };
     crate::refresh_tray_indicator(app);
     let _ = app.emit("meeting-stopped", ());
@@ -340,14 +415,19 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
     };
     let id = recording.id.clone();
     crate::applog!("meeting: stopped {id}");
-    set_progress(
-        app,
-        Some(Progress {
-            id: id.clone(),
-            step: "Saving the recording".into(),
-            percent: None,
-        }),
-    );
+    enqueue(app, &id);
+    if lock(&app.state::<MeetingState>().progress).is_none() {
+        set_progress(
+            app,
+            Some(Progress {
+                id: id.clone(),
+                step: "Saving the recording".into(),
+                percent: None,
+            }),
+        );
+    } else {
+        announce(app);
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         match recording.writer.join() {
@@ -362,14 +442,42 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
 
 // ------------------------------------------------------------ processing
 
-/// Turns a saved recording into its transcript, reporting progress, and
+/// Takes a meeting off the queue (and its progress off the screen) when
+/// transcribing it ends, however it ends, a panic included.
+struct Dequeue<'a> {
+    app: &'a AppHandle,
+    id: &'a str,
+}
+
+impl Drop for Dequeue<'_> {
+    fn drop(&mut self) {
+        let state = self.app.state::<MeetingState>();
+        lock(&state.queue).retain(|q| q != self.id);
+        let mut progress = lock(&state.progress);
+        if progress.as_ref().is_some_and(|p| p.id == self.id) {
+            *progress = None;
+        }
+        drop(progress);
+        announce(self.app);
+    }
+}
+
+/// Turns a queued recording into its transcript, reporting progress, and
 /// tells the widget how it went.
 fn transcribe_saved(app: &AppHandle, id: &str) {
+    let _dequeue = Dequeue { app, id };
     let state = app.state::<MeetingState>();
-    let _one_at_a_time = state.processing.lock().unwrap();
+    let _one_at_a_time = lock(&state.processing);
     let started = Instant::now();
-    let result = transcribe_file(app, id);
-    set_progress(app, None);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        transcribe_file(app, id)
+    }))
+    .unwrap_or_else(|_| {
+        Err(
+            "Something went wrong while transcribing. The recording is kept; try Transcribe again."
+                .into(),
+        )
+    });
     match result {
         Ok(summary) => {
             crate::applog!(
@@ -384,7 +492,6 @@ fn transcribe_saved(app: &AppHandle, id: &str) {
             let _ = app.emit("meeting-failed", err);
         }
     }
-    announce(app);
 }
 
 fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> {
@@ -401,7 +508,7 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         )
     };
     progress("Finding who spoke", None);
-    let samples = crate::stt::load_samples_16k_mono(&wav)?;
+    let samples = load_recording(&wav)?;
     let duration = samples.len() as f32 / WHISPER_SAMPLE_RATE as f32;
     if duration < MIN_SECONDS {
         let _ = std::fs::remove_file(&wav);
@@ -415,6 +522,10 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
     };
     let turns = diarize(&samples, &models, speakers)?;
     if turns.is_empty() {
+        if crate::audio::is_dead_air(&samples) {
+            let _ = std::fs::remove_file(&wav);
+            return Err("The meeting recording was silent. Check the microphone.".into());
+        }
         return Err("No speech was found in the meeting recording.".into());
     }
 
@@ -425,10 +536,20 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
     let total = turns.len();
     for (index, turn) in turns.iter().enumerate() {
         progress("Transcribing", Some((index * 100 / total).min(99) as u8));
-        let context = recent_context(&lines);
         let clip = clip(&samples, turn);
-        let text = whisper.transcribe_samples_in_context(&clip, None, &context, &|_| {})?;
-        let text = crate::stt::strip_non_speech(&text).trim().to_string();
+        let mut text = String::new();
+        for piece in pieces(&clip) {
+            let context = format!("{} {text}", recent_context(&lines));
+            let heard =
+                whisper.transcribe_samples_in_context(piece, None, context.trim(), &|_| {})?;
+            let heard = crate::stt::strip_non_speech(&heard);
+            if !heard.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(heard.trim());
+            }
+        }
         if !text.is_empty() {
             lines.push(Line {
                 start: turn.start,
@@ -442,11 +563,7 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
     }
 
     progress("Saving", Some(100));
-    let started = chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%d-%H%M%S")
-        .ok()
-        .and_then(|t| t.and_local_timezone(chrono::Local).single())
-        .unwrap_or_else(chrono::Local::now);
-    let title = meeting_title(started);
+    let title = meeting_title(started_at(id).unwrap_or_else(chrono::Local::now));
     let detail = meeting_detail(duration, &lines);
     let markdown = render_markdown(&title, &detail, &lines);
     write_private(&dir.join(format!("{id}.md")), &markdown)?;
@@ -457,6 +574,37 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         detail: Some(detail),
         state: MeetingFileState::Ready,
     })
+}
+
+/// The recording as samples. It's always 16 kHz mono 16-bit, read straight
+/// into one buffer (a 4-hour meeting is ~900 MB as f32; the general loader
+/// would hold three copies). A crash can leave a partial last sample,
+/// which is skipped.
+fn load_recording(path: &Path) -> Result<Vec<f32>, String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let spec = reader.spec();
+    if spec.channels != 1
+        || spec.sample_rate != WHISPER_SAMPLE_RATE
+        || spec.bits_per_sample != 16
+        || spec.sample_format != hound::SampleFormat::Int
+    {
+        return crate::stt::load_samples_16k_mono(path);
+    }
+    let mut samples = Vec::with_capacity(reader.len() as usize);
+    samples.extend(
+        reader
+            .samples::<i16>()
+            .map_while(Result::ok)
+            .map(|s| s as f32 / i16::MAX as f32),
+    );
+    Ok(samples)
+}
+
+/// A clip cut into roughly equal pieces of at most `MAX_PIECE_SECONDS`.
+fn pieces(clip: &[f32]) -> std::slice::Chunks<'_, f32> {
+    let max = (MAX_PIECE_SECONDS * WHISPER_SAMPLE_RATE as f32) as usize;
+    let count = clip.len().div_ceil(max).max(1);
+    clip.chunks(clip.len().div_ceil(count).max(1))
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), String> {
@@ -583,6 +731,8 @@ const ANCHOR_SECONDS: f32 = 1.0;
 /// utterances scores about 0.85-0.9 with this model; different people
 /// mostly score well under 0.6.
 const SAME_SPEAKER_SIMILARITY: f32 = 0.6;
+/// At most this many segments set the speakers (see `group_voices`).
+const MAX_ANCHORS: usize = 400;
 
 pub struct Voice {
     pub embedding: Option<Vec<f32>>,
@@ -624,42 +774,74 @@ pub fn group_voices(voices: &[Voice], speakers: u32, same_speaker: f32) -> Vec<u
     if anchors.is_empty() {
         return vec![0; voices.len()];
     }
+    // Merging is quadratic in the anchor count per step; the longest
+    // segments carry the clearest voices, and the rest join afterwards.
+    if anchors.len() > MAX_ANCHORS {
+        anchors.sort_by(|&a, &b| voices[b].seconds.total_cmp(&voices[a].seconds));
+        anchors.truncate(MAX_ANCHORS);
+        anchors.sort_unstable();
+    }
 
-    // (sum of weighted unit vectors, members)
-    let mut groups: Vec<(Vec<f32>, Vec<usize>)> = anchors
+    // (sum of weighted unit vectors, members); `None` once merged away.
+    let mut groups: Vec<Option<(Vec<f32>, Vec<usize>)>> = anchors
         .iter()
         .map(|&i| {
             let v = &voices[i];
             let unit = normalized(v.embedding.as_ref().unwrap());
-            (unit.iter().map(|x| x * v.seconds).collect(), vec![i])
+            Some((unit.iter().map(|x| x * v.seconds).collect(), vec![i]))
         })
         .collect();
-    loop {
-        let target = speakers.max(1) as usize;
-        if speakers > 0 && groups.len() <= target {
-            break;
+    // Pairwise similarity, updated only for the merged group each step.
+    let n = groups.len();
+    let mut similarity = vec![vec![f32::NEG_INFINITY; n]; n];
+    for a in 0..n {
+        for b in a + 1..n {
+            let s = cosine(
+                &groups[a].as_ref().unwrap().0,
+                &groups[b].as_ref().unwrap().0,
+            );
+            similarity[a][b] = s;
+            similarity[b][a] = s;
         }
+    }
+    let mut live = n;
+    let target = speakers.max(1) as usize;
+    while live > 1 && !(speakers > 0 && live <= target) {
         let mut best: Option<(usize, usize, f32)> = None;
-        for a in 0..groups.len() {
-            for b in a + 1..groups.len() {
-                let similarity = cosine(&groups[a].0, &groups[b].0);
-                if best.is_none_or(|(_, _, s)| similarity > s) {
-                    best = Some((a, b, similarity));
+        for a in 0..n {
+            if groups[a].is_none() {
+                continue;
+            }
+            for b in a + 1..n {
+                if groups[b].is_some() && best.is_none_or(|(_, _, s)| similarity[a][b] > s) {
+                    best = Some((a, b, similarity[a][b]));
                 }
             }
         }
-        let Some((a, b, similarity)) = best else {
+        let Some((a, b, best_similarity)) = best else {
             break;
         };
-        if speakers == 0 && similarity < same_speaker {
+        if speakers == 0 && best_similarity < same_speaker {
             break;
         }
-        let (sum, members) = groups.swap_remove(b);
-        for (x, y) in groups[a].0.iter_mut().zip(sum) {
+        let (sum, members) = groups[b].take().unwrap();
+        let merged = groups[a].as_mut().unwrap();
+        for (x, y) in merged.0.iter_mut().zip(sum) {
             *x += y;
         }
-        groups[a].1.extend(members);
+        merged.1.extend(members);
+        live -= 1;
+        for other in 0..n {
+            if other != a {
+                if let Some((sum, _)) = &groups[other] {
+                    let s = cosine(&groups[a].as_ref().unwrap().0, sum);
+                    similarity[a][other] = s;
+                    similarity[other][a] = s;
+                }
+            }
+        }
     }
+    let mut groups: Vec<(Vec<f32>, Vec<usize>)> = groups.into_iter().flatten().collect();
 
     // Number groups by first appearance.
     groups.sort_by_key(|(_, members)| members.iter().copied().min());
@@ -859,30 +1041,38 @@ pub fn render_markdown(title: &str, detail: &str, lines: &[Line]) -> String {
 
 // --------------------------------------------------------------- listing
 
+/// Title and detail are the transcript's first lines, so only those are read.
+fn header_lines(path: &Path) -> Option<Vec<String>> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    Some(
+        std::io::BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| !l.trim().is_empty())
+            .take(2)
+            .collect(),
+    )
+}
+
 fn summarize(dir: &Path, id: &str, status: &MeetingStatus) -> MeetingSummary {
-    let markdown = std::fs::read_to_string(dir.join(format!("{id}.md"))).ok();
+    let header = header_lines(&dir.join(format!("{id}.md")));
     let state = if status.recording.as_ref().is_some_and(|r| r.id == id) {
         MeetingFileState::Recording
-    } else if status.processing.as_ref().is_some_and(|p| p.id == id) {
+    } else if status.queued.iter().any(|q| q == id) {
         MeetingFileState::Processing
-    } else if markdown.is_some() {
+    } else if header.is_some() {
         MeetingFileState::Ready
     } else {
         MeetingFileState::NotTranscribed
     };
-    let mut lines = markdown.as_deref().unwrap_or("").lines();
+    let mut lines = header.unwrap_or_default().into_iter();
     let title = lines
         .next()
-        .and_then(|l| l.strip_prefix("# "))
-        .map(str::to_string)
-        .or_else(|| {
-            chrono::NaiveDateTime::parse_from_str(id, "%Y-%m-%d-%H%M%S")
-                .ok()
-                .and_then(|t| t.and_local_timezone(chrono::Local).single())
-                .map(meeting_title)
-        })
+        .and_then(|l| l.strip_prefix("# ").map(str::to_string))
+        .or_else(|| started_at(id).map(meeting_title))
         .unwrap_or_else(|| id.to_string());
-    let detail = lines.find(|l| !l.trim().is_empty()).map(str::to_string);
+    let detail = lines.next();
     MeetingSummary {
         id: id.to_string(),
         title,
@@ -928,21 +1118,22 @@ pub fn get_meeting_status(app: AppHandle) -> MeetingStatus {
 }
 
 #[tauri::command]
-pub fn list_meetings(app: AppHandle) -> Result<Vec<MeetingSummary>, String> {
+pub async fn list_meetings(app: AppHandle) -> Result<Vec<MeetingSummary>, String> {
     crate::privacy::require_history_unlocked(&app)?;
     list(&app)
 }
 
 #[tauri::command]
-pub fn read_meeting(app: AppHandle, id: String) -> Result<String, String> {
+pub async fn read_meeting(app: AppHandle, id: String) -> Result<String, String> {
     crate::privacy::require_history_unlocked(&app)?;
     let path = meetings_dir(&app)?.join(format!("{}.md", checked_id(&id)?));
     std::fs::read_to_string(path).map_err(|_| "That meeting has no transcript yet.".to_string())
 }
 
-/// Opens the transcript in the app that opens Markdown files.
+/// Opens the transcript in the default text editor (TextEdit unless
+/// changed); plain `open` might pick Xcode or nothing for `.md`.
 #[tauri::command]
-pub fn open_meeting(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn open_meeting(app: AppHandle, id: String) -> Result<(), String> {
     crate::privacy::require_history_unlocked(&app)?;
     let path = meetings_dir(&app)?.join(format!("{}.md", checked_id(&id)?));
     if !path.exists() {
@@ -961,13 +1152,11 @@ pub fn open_meeting(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
     crate::privacy::require_history_unlocked(&app)?;
     let id = checked_id(&id)?;
-    let status = status(&app);
-    if status.recording.as_ref().is_some_and(|r| r.id == id)
-        || status.processing.as_ref().is_some_and(|p| p.id == id)
-    {
+    let recording = status(&app).recording.is_some_and(|r| r.id == id);
+    if recording || is_queued(&app, id) {
         return Err("That meeting is still being recorded or transcribed.".into());
     }
     let dir = meetings_dir(&app)?;
@@ -983,23 +1172,16 @@ pub fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
 
 /// Transcribes a recording that doesn't have a transcript yet.
 #[tauri::command]
-pub fn transcribe_meeting(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn transcribe_meeting(app: AppHandle, id: String) -> Result<(), String> {
     crate::privacy::require_history_unlocked(&app)?;
     let id = checked_id(&id)?.to_string();
     if !meetings_dir(&app)?.join(format!("{id}.wav")).exists() {
         return Err("That meeting's recording is gone.".into());
     }
-    if status(&app).processing.is_some() {
-        return Err("Another meeting is being transcribed. Try again when it's done.".into());
+    if !enqueue(&app, &id) {
+        return Err("That meeting is already being transcribed.".into());
     }
-    set_progress(
-        &app,
-        Some(Progress {
-            id: id.clone(),
-            step: "Starting".into(),
-            percent: None,
-        }),
-    );
+    announce(&app);
     std::thread::spawn(move || transcribe_saved(&app, &id));
     Ok(())
 }
@@ -1235,6 +1417,99 @@ mod tests {
         for bad in ["", "../x", "a.md", "2026/10", &"1".repeat(40)] {
             assert!(!valid_id(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn grouping_thousands_of_segments_stays_quick() {
+        // Six speakers, 3,000 segments: a long meeting's worth.
+        let voices: Vec<Voice> = (0..3000)
+            .map(|i| {
+                let mut v = vec![0.0f32; 256];
+                v[i % 6] = 1.0;
+                v[(i * 7) % 256] += 0.2;
+                voice(&v, 1.0 + (i % 5) as f32)
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let labels = group_voices(&voices, 6, 0.6);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        for i in 0..voices.len() {
+            assert_eq!(labels[i], labels[i % 6], "segment {i}");
+        }
+    }
+
+    #[test]
+    fn long_turns_are_cut_into_even_pieces() {
+        let rate = WHISPER_SAMPLE_RATE as usize;
+        let lens = |secs: usize| {
+            pieces(&vec![0.0; secs * rate])
+                .map(|p| p.len() / rate)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lens(20), vec![20]);
+        assert_eq!(lens(70), vec![23, 23, 23]);
+        assert_eq!(pieces(&[]).count(), 0);
+    }
+
+    #[test]
+    fn a_second_meeting_in_the_same_second_gets_its_own_id() {
+        let dir = std::env::temp_dir().join(format!("mp-meeting-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
+            .unwrap()
+            .and_hms_opt(17, 40, 5)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap();
+        let (first, _) = create_recording(&dir, now).unwrap();
+        let (second, _) = create_recording(&dir, now).unwrap();
+        // A transcript whose recording is gone still holds its id.
+        std::fs::write(dir.join("2026-10-26-174005-3.md"), "# x").unwrap();
+        let (third, _) = create_recording(&dir, now).unwrap();
+        assert_eq!(
+            [first.as_str(), second.as_str(), third.as_str()],
+            [
+                "2026-10-26-174005",
+                "2026-10-26-174005-2",
+                "2026-10-26-174005-4"
+            ]
+        );
+        assert!(started_at(&third).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_recording_survives_a_mic_switch_and_reads_back() {
+        let dir = std::env::temp_dir().join(format!("mp-meeting-wav-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.wav");
+        let file = std::fs::File::create(&path).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || write_meeting(file, rx));
+        tx.send(AudioChunk {
+            samples: vec![0.5; 96_000],
+            channels: 2,
+            sample_rate: 48_000,
+        })
+        .unwrap();
+        tx.send(AudioChunk {
+            samples: vec![-0.5; 44_100],
+            channels: 1,
+            sample_rate: 44_100,
+        })
+        .unwrap();
+        drop(tx);
+        writer.join().unwrap().unwrap();
+        let samples = load_recording(&path).unwrap();
+        assert_eq!(samples.len(), 32_000);
+        assert!((samples[0] - 0.5).abs() < 1e-3 && (samples[31_999] + 0.5).abs() < 1e-3);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

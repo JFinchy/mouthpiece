@@ -322,9 +322,27 @@ function WidgetView() {
   const meeting = useMeetingStatus();
   const meetingRecording = meeting?.recording ?? null;
   const meetingProcessing = meeting?.processing ?? null;
+  // Follows the status too, so a missed "meeting-stopped" can't leave the
+  // widget showing a recording.
+  const wasMeeting = useRef(false);
   useEffect(() => {
     if (meetingRecording) setPhase("recording");
+    else if (wasMeeting.current) setPhase("idle");
+    wasMeeting.current = meetingRecording !== null;
   }, [meetingRecording]);
+  // "Dictation is paused…", shown in place of the meeting's timer for a moment.
+  const [meetingNote, setMeetingNote] = useState<string | null>(null);
+  useEffect(() => {
+    const unlisten = listen<string>("meeting-blocked", (e) => setMeetingNote(e.payload));
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+  useEffect(() => {
+    if (!meetingNote) return;
+    const timer = setTimeout(() => setMeetingNote(null), 2500);
+    return () => clearTimeout(timer);
+  }, [meetingNote]);
   // `message` is sticky — it holds whatever the last status/error text
   // was until something new replaces it. `flashVisible` controls whether
   // compact/minimal show it as a temporary overlay vs. falling back to
@@ -746,7 +764,9 @@ function WidgetView() {
       ? `${refineModel ? `Cleaning up with ${refineModel}. ` : ""}Click to paste as-is${skipKey ? ` (${skipKey})` : ""}.`
       : undefined;
   const phaseLabel = meetingRecording && phase === "recording" ? "Recording a meeting" : STATUS_LABEL[phase];
-  const elapsedText = meetingRecording ? `Meeting ${formatElapsed(elapsedMs)}` : formatElapsed(elapsedMs);
+  const elapsedText = meetingRecording
+    ? (meetingNote ?? `Meeting ${formatElapsed(elapsedMs)}`)
+    : formatElapsed(elapsedMs);
   const idleLabel =
     phase !== "idle"
       ? phaseLabel

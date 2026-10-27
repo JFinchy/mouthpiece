@@ -8,6 +8,7 @@ export type MeetingProgress = { id: string; step: string; percent: number | null
 export type MeetingStatus = {
   recording: { id: string; started_ms: number } | null;
   processing: MeetingProgress | null;
+  queued: string[];
 };
 export type MeetingSummary = {
   id: string;
@@ -152,14 +153,23 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
   const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null);
   const [open, setOpen] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  // Delete asks once more (the transcript is gone for good).
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const timer = setTimeout(() => setConfirmDelete(null), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmDelete]);
 
   function refresh() {
     invoke<MeetingSummary[]>("list_meetings")
       .then(setMeetings)
       .catch((err) => notifyError("Couldn't load meetings", err));
   }
-  // The list changes whenever recording or processing does.
-  useEffect(refresh, [status]);
+  // The list changes when a meeting starts, stops, joins or leaves the
+  // queue; not on every progress tick.
+  const listKey = `${status?.recording?.id ?? ""}|${status?.queued.join(",") ?? ""}`;
+  useEffect(refresh, [listKey]);
 
   function toggleView(id: string) {
     if (open[id] !== undefined) {
@@ -200,7 +210,9 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
                 {m.state === "recording"
                   ? "Recording…"
                   : m.state === "processing"
-                    ? "Transcribing…"
+                    ? status?.processing?.id === m.id
+                      ? "Transcribing…"
+                      : "Waiting to be transcribed"
                     : m.state === "not_transcribed"
                       ? "Not transcribed yet"
                       : m.detail}
@@ -224,18 +236,26 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
                 <button
                   className="btn btn-ghost btn-xs"
                   onClick={() => run("transcribe_meeting", m.id, "transcribe the meeting")}
-                  disabled={status?.processing != null}
                 >
                   Transcribe
                 </button>
               )}
               {(m.state === "ready" || m.state === "not_transcribed") && (
                 <button
-                  className="btn btn-ghost btn-xs opacity-0 hover:text-error group-hover:opacity-100 focus:opacity-100"
-                  onClick={() => run("delete_meeting", m.id, "delete the meeting")}
-                  aria-label={`Delete ${m.title}`}
+                  className={`btn btn-ghost btn-xs hover:text-error focus:opacity-100 ${
+                    confirmDelete === m.id ? "text-error opacity-100" : "opacity-0 group-hover:opacity-100"
+                  }`}
+                  onClick={() => {
+                    if (confirmDelete === m.id) {
+                      setConfirmDelete(null);
+                      run("delete_meeting", m.id, "delete the meeting");
+                    } else {
+                      setConfirmDelete(m.id);
+                    }
+                  }}
+                  aria-label={confirmDelete === m.id ? `Confirm deleting ${m.title}` : `Delete ${m.title}`}
                 >
-                  Delete
+                  {confirmDelete === m.id ? "Delete for good?" : "Delete"}
                 </button>
               )}
             </span>
