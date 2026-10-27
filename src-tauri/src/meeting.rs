@@ -469,15 +469,14 @@ fn transcribe_saved(app: &AppHandle, id: &str) {
     let state = app.state::<MeetingState>();
     let _one_at_a_time = lock(&state.processing);
     let started = Instant::now();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        transcribe_file(app, id)
-    }))
-    .unwrap_or_else(|_| {
-        Err(
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| transcribe_file(app, id)))
+            .unwrap_or_else(|_| {
+                Err(
             "Something went wrong while transcribing. The recording is kept; try Transcribe again."
                 .into(),
         )
-    });
+            });
     match result {
         Ok(summary) => {
             crate::applog!(
