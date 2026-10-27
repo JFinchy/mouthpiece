@@ -62,6 +62,8 @@ pub fn request_dictation(app: &AppHandle, request: Request) {
         Transition::DiscardedDictation { .. } => discard_dictation(app, &state),
         Transition::StartedEnrollment { .. }
         | Transition::StoppedEnrollment { .. }
+        | Transition::StartedMeeting { .. }
+        | Transition::StoppedMeeting { .. }
         | Transition::Rejected(_) => {}
     }
 }

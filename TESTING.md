@@ -57,6 +57,11 @@ casing command as `snake_case_…`, turning "One, … Two, …" into digits, or
 hearing "comma" as "Kama" all broke real dictation while every unit test
 passed.
 
+Two more tests run meeting mode on a scripted conversation between macOS
+voices: speaker separation has to give each voice one speaker of its own
+(on "work it out" with two voices, and with the count given for three,
+two of them close), and the transcript stays under 15% WER.
+
 `max_wer` sets a tolerance for a case, and `note` says why. To compare
 models, point it at another file:
 `DW_E2E_MODEL=/path/to/ggml-small.en-q5_1.bin bun run test:audio`.

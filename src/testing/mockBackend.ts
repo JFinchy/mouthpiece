@@ -30,6 +30,8 @@ export type Scenario = {
   agents?: Json[];
   /// History lock already turned on (and closed) when the page loads.
   historyLock?: boolean;
+  /// Saved meetings; defaults to one transcribed and one not.
+  meetings?: { id: string; title: string; detail: string | null; state: string; text?: string }[];
 };
 
 declare global {
@@ -66,6 +68,26 @@ function initialState(scenario: Scenario) {
     agentShortcut: { meta: false, ctrl: true, alt: true, shift: false, code: "KeyR" },
     agentSound: true,
     historyLockEnabled: scenario.historyLock ?? false,
+    meetingSpeakers: 0,
+    meetingStatus: {
+      recording: null as { id: string; started_ms: number } | null,
+      processing: null as { id: string; step: string; percent: number | null } | null,
+    },
+    meetings: scenario.meetings ?? [
+      {
+        id: "2026-10-26-093000",
+        title: "Meeting, Mon 26 Oct 2026, 09:30",
+        detail: "24 min · 3 speakers",
+        state: "ready",
+        text: "# Meeting, Mon 26 Oct 2026, 09:30\n\n24 min · 3 speakers\n\n**You** · 00:00\nLet's get started.\n",
+      },
+      {
+        id: "2026-10-25-161500",
+        title: "Meeting, Sun 25 Oct 2026, 16:15",
+        detail: null,
+        state: "not_transcribed",
+      },
+    ],
     historyUnlocked: false,
     logTranscripts: false,
     copyOnly: false,
@@ -286,6 +308,44 @@ export function installMockBackend() {
     undo_discard: () => true,
     request_microphone_access: () => "authorized",
     open_microphone_settings: () => null,
+    get_meeting_status: () => state.meetingStatus,
+    start_meeting: () => {
+      state.meetingStatus = { ...state.meetingStatus, recording: { id: "2026-10-26-174005", started_ms: Date.now() } };
+      void emit("recording-started");
+      void emit("meeting-changed", state.meetingStatus);
+      return null;
+    },
+    stop_meeting: () => {
+      const id = state.meetingStatus.recording?.id;
+      if (!id) return Promise.reject("Not recording a meeting");
+      state.meetingStatus = { recording: null, processing: { id, step: "Finding who spoke", percent: null } };
+      void emit("meeting-stopped");
+      void emit("meeting-changed", state.meetingStatus);
+      return null;
+    },
+    list_meetings: () =>
+      historyLocked()
+        ? Promise.reject("History is locked.")
+        : state.meetings.map(({ text: _, ...m }) => m),
+    read_meeting: (args) => {
+      const m = state.meetings.find((x) => x.id === args.id);
+      return m?.text ?? Promise.reject("That meeting has no transcript yet.");
+    },
+    open_meeting: () => null,
+    delete_meeting: (args) => {
+      state.meetings = state.meetings.filter((x) => x.id !== args.id);
+      return null;
+    },
+    transcribe_meeting: (args) => {
+      state.meetingStatus = { ...state.meetingStatus, processing: { id: String(args.id), step: "Starting", percent: null } };
+      void emit("meeting-changed", state.meetingStatus);
+      return null;
+    },
+    get_meeting_speakers: () => state.meetingSpeakers,
+    set_meeting_speakers: (args) => {
+      state.meetingSpeakers = Number(args.speakers);
+      return null;
+    },
     get_history_lock: () => lockStatus(),
     set_history_lock_enabled: (args) => {
       state.historyLockEnabled = Boolean(args.enabled);

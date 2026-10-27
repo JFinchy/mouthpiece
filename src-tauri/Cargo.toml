@@ -41,6 +41,7 @@ sherpa-onnx = "1.13.5"
 signal-hook = "0.3"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"

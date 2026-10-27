@@ -1,7 +1,7 @@
 import { useState, type ReactElement } from "react";
 import { ReadinessPanel } from "./ReadinessPanel";
 import { type ReadinessFix } from "./readiness";
-import { IconAgent, IconBook, IconChart, IconClock, IconCpu, IconGear, IconInfo, IconMic, IconPalette, IconPlug, IconWave, IconWindow } from "./icons";
+import { IconAgent, IconBook, IconChart, IconClock, IconCpu, IconGear, IconInfo, IconMic, IconPalette, IconPeople, IconPlug, IconWave, IconWindow } from "./icons";
 import { AgentsSection } from "./sections/agents";
 import { AboutSection, LogsSection, UpdatesSection } from "./sections/app";
 import { DeviceSection, GeneralSection, ShortcutSection, VoiceCommandsSection } from "./sections/dictation";
@@ -9,6 +9,7 @@ import { HistorySection } from "./sections/history";
 import { InsightsSection } from "./sections/insights";
 import { DeliverySection, WebhookSection } from "./sections/integrations";
 import { LlmSection } from "./sections/llm";
+import { MeetingsSection } from "./sections/meetings";
 import { AppModesSection } from "./sections/modes";
 import { SnippetsSection, VocabularySection } from "./sections/vocabulary";
 import { ModelsSection, VoiceIsolationSection } from "./sections/voice";
@@ -21,6 +22,7 @@ export type PageId =
   | "llm"
   | "insights"
   | "history"
+  | "meetings"
   | "integrations"
   | "agents"
   | "appearance"
@@ -35,6 +37,7 @@ export const NAV: { id: PageId; label: string; icon: () => ReactElement }[] = [
   { id: "llm", label: "LLM", icon: IconCpu },
   { id: "insights", label: "Insights", icon: IconChart },
   { id: "history", label: "History", icon: IconClock },
+  { id: "meetings", label: "Meetings", icon: IconPeople },
   { id: "integrations", label: "Integrations", icon: IconPlug },
   { id: "agents", label: "Coding agents", icon: IconAgent },
 ];
@@ -53,6 +56,7 @@ export const PAGE_TITLE: Record<PageId, string> = {
   llm: "LLM — local refinement (Ollama)",
   insights: "Insights — usage & feature adoption",
   history: "History",
+  meetings: "Meetings — transcripts split by speaker",
   integrations: "Integrations — delivery & webhook",
   agents: "Coding agents",
   appearance: "Appearance",
@@ -155,6 +159,7 @@ export function SidebarLayout({ appearance }: { appearance: ReactElement }) {
             {page === "llm" && <LlmSection />}
             {page === "insights" && <InsightsSection />}
             {page === "history" && <HistorySection />}
+            {page === "meetings" && <MeetingsSection />}
             {page === "integrations" && (
               <>
                 <DeliverySection />
@@ -194,7 +199,7 @@ export const NODE_DRAWER_TITLE: Record<NodeId, string> = {
   recognition: "Recognition — Whisper model, voice isolation, vocabulary",
   mode: "Mode — app-aware formatting rules",
   refinement: "Refinement — local LLM (Ollama)",
-  output: "Output — delivery, webhook, history & insights",
+  output: "Output — delivery, webhook, history, meetings & insights",
 };
 
 export function ChainNode({
@@ -279,6 +284,10 @@ export function ChainLayout({ appearance }: { appearance: ReactElement }) {
                 <AgentsSection />
               </div>
               <HistorySection />
+              <div className="mb-4 border-t border-base-content/10 pt-3">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Meetings</h3>
+                <MeetingsSection />
+              </div>
               <div className="mb-4 border-t border-base-content/10 pt-3">
                 <InsightsSection />
               </div>

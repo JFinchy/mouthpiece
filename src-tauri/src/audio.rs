@@ -12,6 +12,9 @@ enum AudioCommand {
     /// Attach (`Some`) or detach (`None`) the ambient listener. While
     /// attached the stream keeps running between recordings.
     SetTap(Option<Sender<AudioChunk>>),
+    /// Attach or detach the meeting recorder, which (like the ambient tap)
+    /// keeps the stream running while attached.
+    SetMeetingTap(Option<Sender<AudioChunk>>),
     /// The selected device changed: open it now (paused, unless something
     /// is listening) so its status is known immediately, not at the next
     /// recording.
@@ -82,6 +85,7 @@ impl AudioHandle {
                 format: format_thread,
                 buffering: Arc::new(AtomicBool::new(false)),
                 tap: Arc::new(Mutex::new(None)),
+                meeting: Arc::new(Mutex::new(None)),
                 level: level_thread.clone(),
             };
             let publish = |stream: &Option<WarmStream>, wanted: &Option<String>| {
@@ -138,8 +142,7 @@ impl AudioHandle {
             };
 
             let pause_if_unused = |current: &Option<WarmStream>| {
-                let tap_attached = sinks.tap.lock().unwrap().is_some();
-                if sinks.buffering.load(Ordering::SeqCst) || tap_attached {
+                if sinks.buffering.load(Ordering::SeqCst) || sinks.tapped() {
                     return;
                 }
                 if let Some(cs) = current {
@@ -188,7 +191,7 @@ impl AudioHandle {
                         if sinks.buffering.load(Ordering::SeqCst) {
                             continue;
                         }
-                        if sinks.tap.lock().unwrap().is_some() {
+                        if sinks.tapped() {
                             ensure_playing(&mut current);
                         } else {
                             let device_name = selected_device_thread.lock().unwrap().clone();
@@ -215,6 +218,17 @@ impl AudioHandle {
                         } else {
                             pause_if_unused(&current);
                             crate::applog!("audio: ambient tap detached");
+                        }
+                    }
+                    AudioCommand::SetMeetingTap(tap) => {
+                        let attach = tap.is_some();
+                        *sinks.meeting.lock().unwrap() = tap;
+                        if attach {
+                            ensure_playing(&mut current);
+                            crate::applog!("audio: meeting recorder attached");
+                        } else {
+                            pause_if_unused(&current);
+                            crate::applog!("audio: meeting recorder detached");
                         }
                     }
                 }
@@ -253,6 +267,12 @@ impl AudioHandle {
     /// again with `None`.
     pub fn set_tap(&self, tap: Option<Sender<AudioChunk>>) {
         let _ = self.tx.send(AudioCommand::SetTap(tap));
+    }
+
+    /// Route every captured chunk to the meeting recorder until called
+    /// again with `None`.
+    pub fn set_meeting_tap(&self, tap: Option<Sender<AudioChunk>>) {
+        let _ = self.tx.send(AudioCommand::SetMeetingTap(tap));
     }
 
     pub fn stop(&self) -> Result<PathBuf, String> {
@@ -316,7 +336,8 @@ fn unpack_format(packed: u64) -> (u32, u16) {
     ((packed >> 16) as u32, (packed & 0xffff) as u16)
 }
 
-/// One callback's worth of captured audio, for the ambient listener.
+/// One callback's worth of captured audio, for the ambient listener and
+/// the meeting recorder.
 pub struct AudioChunk {
     /// Interleaved, `channels` per frame, at `sample_rate`.
     pub samples: Vec<f32>,
@@ -338,6 +359,8 @@ struct Sinks {
     format: Arc<AtomicU64>,
     /// The ambient listener, if it's running.
     tap: Arc<Mutex<Option<Sender<AudioChunk>>>>,
+    /// The meeting recorder, while a meeting is being recorded.
+    meeting: Arc<Mutex<Option<Sender<AudioChunk>>>>,
     level: Arc<AtomicU32>,
 }
 
@@ -350,13 +373,20 @@ impl Sinks {
                 .store(pack_format(sample_rate, channels), Ordering::Relaxed);
             self.samples.lock().unwrap().extend_from_slice(data);
         }
-        if let Some(tap) = self.tap.lock().unwrap().as_ref() {
-            let _ = tap.send(AudioChunk {
-                samples: data.to_vec(),
-                channels,
-                sample_rate,
-            });
+        for tap in [&self.tap, &self.meeting] {
+            if let Some(tap) = tap.lock().unwrap().as_ref() {
+                let _ = tap.send(AudioChunk {
+                    samples: data.to_vec(),
+                    channels,
+                    sample_rate,
+                });
+            }
         }
+    }
+
+    /// Whether something besides push-to-talk needs the stream running.
+    fn tapped(&self) -> bool {
+        self.tap.lock().unwrap().is_some() || self.meeting.lock().unwrap().is_some()
     }
 }
 
@@ -715,7 +745,7 @@ fn write_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Result<PathBuf
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis();
-    let path = std::env::temp_dir().join(format!("dev-whisper-{timestamp}.wav"));
+    let path = std::env::temp_dir().join(format!("mouthpiece-{timestamp}.wav"));
 
     let spec = hound::WavSpec {
         channels,

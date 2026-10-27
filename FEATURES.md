@@ -177,6 +177,35 @@ built yet.
   changes, pure insertions and large rewrites are ignored, as are common
   words. Toggle: "Learn from my corrections" (on by default).
 
+## Meetings (2026-10-26)
+
+- **Meeting mode** — "Start meeting" in Settings → Meetings or the menu
+  bar icon records everything the mic hears until you stop it; the widget
+  shows the meeting's red dot, level meter and running time, and its
+  button stops the meeting. Dictation, voice enrollment and hands-free
+  listening wait until it ends.
+- **Transcript split by speaker** — after stopping, sherpa-onnx finds the
+  speech segments (bundled pyannote segmentation model, 6 MB), each
+  segment gets a voice embedding (the bundled Isolated Voice model), and
+  segments are grouped by voice: into the number of people set under
+  "People in the meeting", or by similarity when it's left on "Work it
+  out". One speaker's back-to-back segments become a turn, each turn is
+  transcribed with Whisper, and the speaker matching an enrolled voice is
+  labelled "You"; the rest are "Speaker 1", "Speaker 2", … in the order
+  they first speak. Progress shows in Settings and in the widget, which
+  stays usable for dictation meanwhile.
+- **Saved as Markdown** in the app data folder's `meetings/` (owner-only
+  files): title, length and speaker count, then one paragraph per turn
+  with a timestamp. Settings → Meetings lists them with View, Copy, Open
+  (in the default text editor) and Delete, behind the History lock.
+- **Crash-safe recording** — audio streams to a 16 kHz WAV, flushed every
+  5 seconds, so a quit or crash leaves a recording the list offers to
+  Transcribe. The WAV is deleted once the transcript is saved. A
+  forgotten meeting stops itself after 4 hours.
+- Mic only: meetings in the room and calls on speakers. Calls on
+  headphones only include your side (system audio is phase 2, see
+  `ROADMAP.md`).
+
 ## Widget & Settings UI
 
 - **Discard and undo** — Esc while recording (or the widget's ✕) throws

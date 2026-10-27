@@ -631,7 +631,7 @@ pub fn reply_hotkey(app: &AppHandle) {
         CaptureState::Dictating { .. } => {
             crate::recording::request_dictation(app, Request::StopDictation(Trigger::Hotkey));
         }
-        CaptureState::Enrolling { .. } => {}
+        CaptureState::Enrolling { .. } | CaptureState::Meeting { .. } => {}
         CaptureState::Idle => {
             let state = app.state::<AgentState>();
             let Some(target) = state.queue.lock().unwrap().latest(now_ms()) else {

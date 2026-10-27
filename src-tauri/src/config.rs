@@ -82,6 +82,10 @@ pub struct AppConfig {
     /// `copy_only`, autostart).
     #[serde(default)]
     pub journal_enabled: bool,
+    /// How many people a meeting recording has, if known; 0 = work it out
+    /// (see `meeting.rs`).
+    #[serde(default)]
+    pub meeting_speakers: u32,
     /// When true, recordings are filtered to the primary user's voice before
     /// transcription — see `isolate.rs`. Auto-selects between an enrolled
     /// speaker-embedding check and a weaker energy-based fallback depending
@@ -200,6 +204,7 @@ impl Default for AppConfig {
             copy_only: false,
             widget_mode: crate::widget::WidgetMode::default(),
             journal_enabled: false,
+            meeting_speakers: 0,
             isolated_voice_enabled: false,
             live_transcribe_enabled: true,
             voice_enrolled: false,

@@ -91,6 +91,17 @@ export function IconClock() {
   );
 }
 
+export function IconPeople() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3 19a6 6 0 0 1 12 0" />
+      <circle cx="17" cy="9" r="2.4" />
+      <path d="M16 14.2a5 5 0 0 1 5 4.8" />
+    </svg>
+  );
+}
+
 export function IconPalette() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">

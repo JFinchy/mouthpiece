@@ -1,7 +1,8 @@
 //! Single owner of "what is the microphone being used for right now".
 //!
 //! Every way of starting or stopping a recording — the hotkey, double-tap
-//! Fn, the tray/widget button, deep links, and voice enrollment — goes
+//! Fn, the tray/widget button, deep links, voice enrollment, and meeting
+//! recording — goes
 //! through `CaptureController::request`. That replaces a bare
 //! `is_recording` flag that each entry point flipped (and checked) on its
 //! own, which let enrollment and dictation race each other and made
@@ -24,8 +25,17 @@ pub enum Trigger {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureState {
     Idle,
-    Dictating { trigger: Trigger, session: u64 },
-    Enrolling { session: u64 },
+    Dictating {
+        trigger: Trigger,
+        session: u64,
+    },
+    Enrolling {
+        session: u64,
+    },
+    /// Recording a meeting (see `meeting.rs`); dictation waits until it ends.
+    Meeting {
+        session: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +47,8 @@ pub enum Request {
     DiscardDictation,
     StartEnrollment,
     StopEnrollment,
+    StartMeeting,
+    StopMeeting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +58,8 @@ pub enum Transition {
     DiscardedDictation { session: u64 },
     StartedEnrollment { session: u64 },
     StoppedEnrollment { session: u64 },
+    StartedMeeting { session: u64 },
+    StoppedMeeting { session: u64 },
     Rejected(&'static str),
 }
 
@@ -102,6 +116,37 @@ fn transition(
             Transition::Rejected("microphone is in use for voice enrollment"),
         ),
         (Enrolling { .. }, StartEnrollment) => (state, Transition::Rejected("already enrolling")),
+
+        (Idle, StartMeeting) => (
+            Meeting {
+                session: next_session,
+            },
+            Transition::StartedMeeting {
+                session: next_session,
+            },
+        ),
+        (Meeting { session }, StopMeeting) => (Idle, Transition::StoppedMeeting { session }),
+        (Meeting { .. }, StartMeeting) => {
+            (state, Transition::Rejected("already recording a meeting"))
+        }
+        (Idle | Dictating { .. } | Enrolling { .. }, StopMeeting) => {
+            (state, Transition::Rejected("not recording a meeting"))
+        }
+        (Dictating { .. }, StartMeeting) => (
+            state,
+            Transition::Rejected("microphone is in use for dictation"),
+        ),
+        (Enrolling { .. }, StartMeeting) => (
+            state,
+            Transition::Rejected("microphone is in use for voice enrollment"),
+        ),
+        (
+            Meeting { .. },
+            StartDictation(_) | StopDictation(_) | ToggleDictation(_) | DiscardDictation,
+        ) => (state, Transition::Rejected("a meeting is being recorded")),
+        (Meeting { .. }, StartEnrollment | StopEnrollment) => {
+            (state, Transition::Rejected("a meeting is being recorded"))
+        }
     }
 }
 
@@ -131,7 +176,9 @@ impl CaptureController {
         inner.state = after;
         if matches!(
             result,
-            Transition::StartedDictation { .. } | Transition::StartedEnrollment { .. }
+            Transition::StartedDictation { .. }
+                | Transition::StartedEnrollment { .. }
+                | Transition::StartedMeeting { .. }
         ) {
             inner.next_session += 1;
         }
@@ -156,9 +203,9 @@ impl CaptureController {
     /// loop running alongside the new one.
     pub fn is_session_active(&self, session: u64) -> bool {
         match self.state() {
-            CaptureState::Dictating { session: s, .. } | CaptureState::Enrolling { session: s } => {
-                s == session
-            }
+            CaptureState::Dictating { session: s, .. }
+            | CaptureState::Enrolling { session: s }
+            | CaptureState::Meeting { session: s } => s == session,
             CaptureState::Idle => false,
         }
     }
@@ -273,6 +320,43 @@ mod tests {
         let (state, t) = transition(state, StopEnrollment, 10);
         assert_eq!(state, Idle);
         assert_eq!(t, Transition::StoppedEnrollment { session: 9 });
+    }
+
+    #[test]
+    fn meeting_round_trip() {
+        let (state, t) = transition(Idle, StartMeeting, 4);
+        assert_eq!(t, Transition::StartedMeeting { session: 4 });
+        let (state, t) = transition(state, StopMeeting, 5);
+        assert_eq!(state, Idle);
+        assert_eq!(t, Transition::StoppedMeeting { session: 4 });
+    }
+
+    #[test]
+    fn a_meeting_holds_the_mic_until_it_ends() {
+        let meeting = Meeting { session: 2 };
+        for request in [
+            StartDictation(Trigger::Hotkey),
+            ToggleDictation(Trigger::Button),
+            StopDictation(Trigger::Tray),
+            DiscardDictation,
+            StartEnrollment,
+            StartMeeting,
+        ] {
+            let (state, t) = transition(meeting, request, 3);
+            assert_eq!(state, meeting, "{request:?}");
+            assert!(matches!(t, Transition::Rejected(_)), "{request:?}");
+        }
+        let dictating = Dictating {
+            trigger: Trigger::Hotkey,
+            session: 1,
+        };
+        let (state, t) = transition(dictating, StartMeeting, 2);
+        assert_eq!(state, dictating);
+        assert!(matches!(t, Transition::Rejected(_)));
+        assert!(matches!(
+            transition(Idle, StopMeeting, 1).1,
+            Transition::Rejected(_)
+        ));
     }
 
     #[test]

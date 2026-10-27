@@ -22,6 +22,7 @@ mod lifecycle;
 mod live;
 mod llm;
 mod logging;
+mod meeting;
 mod mic_permission;
 mod mic_usage;
 mod models;
@@ -99,6 +100,20 @@ pub const TRAY_ICON_ID: &str = "main";
 /// The menu bar's "Widget style" items, kept so the check mark can follow
 /// a style change made anywhere else.
 struct WidgetStyleMenu(Vec<CheckMenuItem<tauri::Wry>>);
+
+/// The tray's meeting item, relabelled while a meeting is recorded.
+struct MeetingMenuItem(MenuItem<tauri::Wry>);
+
+pub fn refresh_meeting_menu(app: &tauri::AppHandle) {
+    if let Some(item) = app.try_state::<MeetingMenuItem>() {
+        let label = if meeting::is_recording(app) {
+            "Stop Meeting"
+        } else {
+            "Start Meeting"
+        };
+        let _ = item.0.set_text(label);
+    }
+}
 
 pub fn sync_widget_style_menu(app: &tauri::AppHandle, mode: widget::WidgetMode) {
     if let Some(menu) = app.try_state::<WidgetStyleMenu>() {
@@ -444,6 +459,16 @@ pub fn run() {
             privacy::lock_history,
             privacy::get_log_transcripts,
             privacy::set_log_transcripts,
+            meeting::start_meeting,
+            meeting::stop_meeting,
+            meeting::get_meeting_status,
+            meeting::list_meetings,
+            meeting::read_meeting,
+            meeting::open_meeting,
+            meeting::delete_meeting,
+            meeting::transcribe_meeting,
+            meeting::get_meeting_speakers,
+            meeting::set_meeting_speakers,
             agents::get_agent_sound_enabled,
             agents::set_agent_sound_enabled,
             agents::get_agent_hook_config,
@@ -478,6 +503,7 @@ pub fn run() {
             logging::set_log_transcripts(saved_config.log_transcripts);
             app.manage(privacy::PrivacyState::default());
             app.manage(discard::DiscardState::default());
+            app.manage(meeting::MeetingState::default());
             history::make_private(app.handle());
 
             let shortcut_cfg = saved_config.shortcut.clone().unwrap_or_default();
@@ -694,6 +720,9 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let meeting_item =
+                MenuItem::with_id(app, "toggle_meeting", "Start Meeting", true, None::<&str>)?;
+            app.manage(MeetingMenuItem(meeting_item.clone()));
             let toggle_widget =
                 MenuItem::with_id(app, "toggle_widget", "Show/Hide Widget", true, None::<&str>)?;
             let open_settings_item =
@@ -724,6 +753,7 @@ pub fn run() {
                 app,
                 &[
                     &toggle_recording_item,
+                    &meeting_item,
                     &toggle_widget,
                     &style_menu,
                     &open_settings_item,
@@ -737,6 +767,17 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "toggle_recording" => toggle_recording(app, capture::Trigger::Tray),
+                    "toggle_meeting" => {
+                        let result = if meeting::is_recording(app) {
+                            meeting::stop(app)
+                        } else {
+                            meeting::start(app)
+                        };
+                        if let Err(err) = result {
+                            crate::applog!("meeting: from the menu bar: {err}");
+                            let _ = app.emit("meeting-failed", err);
+                        }
+                    }
                     "toggle_widget" => {
                         if let Some(window) = app.get_webview_window("widget") {
                             let visible = window.is_visible().unwrap_or(false);

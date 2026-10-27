@@ -84,8 +84,12 @@ fn wer(reference: &str, hypothesis: &str) -> f64 {
 }
 
 fn speak(text: &str, out: &Path) -> Result<(), String> {
+    speak_as("Samantha", text, out)
+}
+
+fn speak_as(voice: &str, text: &str, out: &Path) -> Result<(), String> {
     let status = Command::new("say")
-        .args(["-v", "Samantha", "--data-format=LEI16@16000", "-o"])
+        .args(["-v", voice, "--data-format=LEI16@16000", "-o"])
         .arg(out)
         .arg(text)
         .status()
@@ -487,4 +491,135 @@ fn quick_pass_is_faster_on_short_clips() {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runs a scripted meeting (macOS voices taking turns) through meeting
+/// mode's speaker separation and transcription. Each voice has to come out
+/// as one speaker, different from the others, and the words have to match.
+fn check_meeting(name: &str, script: &[(&str, &str)], speakers: u32) {
+    let dir = std::env::temp_dir().join(format!("dw-meeting-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut samples = Vec::new();
+    let mut truth = Vec::new(); // (start, end, voice)
+    for (i, (voice, text)) in script.iter().enumerate() {
+        let wav = dir.join(format!("{i}.wav"));
+        speak_as(voice, text, &wav).unwrap();
+        let start = samples.len() as f32 / 16_000.0;
+        samples.extend(crate::stt::load_samples_16k_mono(&wav).unwrap());
+        truth.push((start, samples.len() as f32 / 16_000.0, *voice));
+        samples.extend(std::iter::repeat_n(0.0, 16_000 * 7 / 10));
+    }
+
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+    let models = crate::meeting::DiarizationModels {
+        segmentation: resources.join("pyannote_segmentation_3_0.onnx"),
+        embedding: resources.join("wespeaker_en_voxceleb_resnet34_LM.onnx"),
+    };
+    let started = Instant::now();
+    let turns = crate::meeting::diarize(&samples, &models, speakers).unwrap();
+    println!(
+        "\n{name}: separated {:.0}s of audio in {}ms ({} turns)",
+        samples.len() as f32 / 16_000.0,
+        started.elapsed().as_millis(),
+        turns.len()
+    );
+
+    // Which separated speaker covers most of each scripted line.
+    let mut voice_to_speaker: std::collections::HashMap<&str, Vec<i32>> = Default::default();
+    for &(start, end, voice) in &truth {
+        let mut overlap: std::collections::HashMap<i32, f32> = Default::default();
+        for t in &turns {
+            let o = end.min(t.end) - start.max(t.start);
+            if o > 0.0 {
+                *overlap.entry(t.speaker).or_default() += o;
+            }
+        }
+        let best = overlap
+            .into_iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(s, _)| s)
+            .unwrap_or(-1);
+        println!("  {voice:<9} {start:>5.1}-{end:>5.1}s -> speaker {best}");
+        voice_to_speaker.entry(voice).or_default().push(best);
+    }
+    let mut assigned = Vec::new();
+    for (voice, speakers) in &voice_to_speaker {
+        assert!(
+            speakers.iter().all(|s| *s == speakers[0] && *s >= 0),
+            "{name}: {voice}'s lines went to different speakers: {speakers:?}"
+        );
+        assigned.push(speakers[0]);
+    }
+    assigned.sort();
+    assigned.dedup();
+    assert_eq!(
+        assigned.len(),
+        voice_to_speaker.len(),
+        "{name}: voices weren't kept apart"
+    );
+
+    let engine = WhisperEngine::new("e2e".into(), model_path());
+    engine.ensure_loaded().unwrap();
+    let names = crate::meeting::speaker_names(&turns, None);
+    let mut lines = Vec::new();
+    for t in &turns {
+        let a = (t.start * 16_000.0) as usize;
+        let b = ((t.end * 16_000.0) as usize).min(samples.len());
+        let text = engine.transcribe_samples(&samples[a..b], None).unwrap();
+        lines.push(crate::meeting::Line {
+            start: t.start,
+            speaker: names[&t.speaker].clone(),
+            text: crate::stt::strip_non_speech(&text).trim().to_string(),
+        });
+    }
+    let detail = crate::meeting::meeting_detail(samples.len() as f32 / 16_000.0, &lines);
+    println!("{}", crate::meeting::render_markdown(name, &detail, &lines));
+    let heard: String = lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let said: String = script.iter().map(|(_, t)| *t).collect::<Vec<_>>().join(" ");
+    let error = wer(&said, &heard);
+    println!("transcript WER {error:.3}");
+    assert!(error < 0.15, "{name}: transcript WER {error:.3}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Auto speaker count, two clearly different voices.
+#[test]
+#[ignore = "needs macOS `say` and a Whisper model; run with `bun run test:audio`"]
+fn meeting_finds_two_speakers_on_its_own() {
+    check_meeting(
+        "two speakers, auto",
+        &[
+            ("Samantha", "Okay, let's get started. The main thing today is the release on Friday."),
+            ("Daniel", "Right. The build is green, but the installer still needs a final check on a clean machine."),
+            ("Samantha", "Can you do that check this afternoon?"),
+            ("Daniel", "Yes, I have a spare laptop with nothing installed on it. I will post the results in the channel."),
+            ("Samantha", "Perfect. Let's meet again on Thursday to make the final call."),
+        ],
+        0,
+    );
+}
+
+/// Three voices, two of them close (macOS's US and Australian female
+/// voices score 0.78 alike, more than different people usually do): with
+/// the speaker count given, all three are kept apart.
+#[test]
+#[ignore = "needs macOS `say` and a Whisper model; run with `bun run test:audio`"]
+fn meeting_separates_three_speakers_when_told_how_many() {
+    check_meeting(
+        "three speakers, count given",
+        &[
+            ("Samantha", "Okay, let's get started. The main thing today is the release on Friday."),
+            ("Daniel", "Right. The build is green, but the installer still needs a final check on a clean machine."),
+            ("Karen", "I can do that this afternoon. I have a spare laptop with nothing installed on it."),
+            ("Samantha", "Great, thanks. Daniel, is the migration ready as well?"),
+            ("Daniel", "Yes, it moves the old settings over and leaves a link behind, and the tests pass."),
+            ("Karen", "Then I think we are in good shape. I will post the results in the channel."),
+            ("Samantha", "Perfect. Let's meet again on Thursday to make the final call."),
+        ],
+        3,
+    );
 }

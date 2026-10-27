@@ -49,6 +49,11 @@ Website: **[jfinchy.github.io/mouthpiece](https://jfinchy.github.io/mouthpiece/)
   triggers it. It pauses automatically during calls.
 - Isolated Voice filters out other people talking near you.
 
+**Meetings**
+- Record a meeting and get a transcript split by speaker ("You",
+  "Speaker 1", …), made on your Mac. Start it from the menu bar or
+  Settings → Meetings.
+
 **Built for automation**
 - Start and stop recording from scripts or other tools with
   `open mouthpiece://start-recording` (and `stop-` and `toggle-`).

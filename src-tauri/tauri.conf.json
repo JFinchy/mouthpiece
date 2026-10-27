@@ -64,7 +64,8 @@
     ],
     "resources": {
       "resources/wespeaker_en_voxceleb_resnet34_LM.onnx": "models/wespeaker_en_voxceleb_resnet34_LM.onnx",
-      "resources/silero_vad.onnx": "models/silero_vad.onnx"
+      "resources/silero_vad.onnx": "models/silero_vad.onnx",
+      "resources/pyannote_segmentation_3_0.onnx": "models/pyannote_segmentation_3_0.onnx"
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

@@ -127,7 +127,7 @@ fn dev_fallback_model_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn resolve_model_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn resolve_model_path(app: &AppHandle) -> Result<PathBuf, String> {
     resource_dir_model_path(app)
         .or_else(dev_fallback_model_path)
         .ok_or_else(|| "speaker embedding model not found".to_string())

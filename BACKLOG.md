@@ -701,7 +701,17 @@ build phases.
   for exploring directions with an image model is in
   `docs/icon-prompt.md`; best done together with, or after, a rename.
 
-- **Meeting mode: separate speakers** (planned 2026-10-23, not started).
+- **Meeting mode: separate speakers** (planned 2026-10-23; phase 1 built
+  2026-10-26 in `meeting.rs`, see `FEATURES.md`). What phase 1 learned:
+  sherpa-onnx's own clustering blurs similar voices together even when
+  given the speaker count, so it's run to over-split and `group_voices`
+  regroups whole segments by their embeddings. With the count given,
+  three macOS voices (two of them 0.78 alike) separate cleanly; on "Work
+  it out" (similarity 0.6) voices that alike merge, so the UI suggests
+  setting the count. Separation runs at about 0.2x real time (an hour
+  takes ~12 minutes before transcription); a lighter embedding model or
+  reusing sherpa's embeddings would cut that. Still unmeasured: real
+  rooms, overlapping speech, laptop-mic distance.
   Record a whole meeting and get a transcript split by speaker ("You:",
   "Speaker 2:", …), entirely on the Mac.
   - **Feasibility: good.** sherpa-onnx 1.13.5 (already a dependency) has
