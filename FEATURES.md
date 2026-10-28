@@ -58,6 +58,14 @@ built yet.
   clipboard and a simulated Cmd+V pastes it at the active cursor by
   default; a "copy only" toggle skips the simulated keystroke entirely
   (and doesn't need Accessibility permission on that path).
+- **No lost words without Accessibility** (2026-10-27) — if pasting isn't
+  allowed, the transcript is copied (and saved to History) instead of
+  failing, and the widget shows "Copied · Allow pasting" ("Allow
+  pasting" in Pill and Notch). Clicking it shows macOS's prompt, opens
+  the Accessibility list, and watches for the grant ("Pasting is on").
+  The setup checklist's fix does the same. The tooltip covers the case
+  where Mouthpiece already looks on: ad-hoc signed updates need it
+  switched off and on again.
 
 ## App-aware modes & LLM refinement
 

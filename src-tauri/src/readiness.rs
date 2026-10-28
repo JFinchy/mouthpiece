@@ -99,7 +99,8 @@ pub fn assess(facts: &Facts) -> Vec<Check> {
             level: Level::Error,
             title: "Allow pasting".into(),
             detail: "Mouthpiece needs Accessibility permission to paste where your cursor is. \
-                     Turn it on in System Settings > Privacy & Security > Accessibility."
+                     Turn it on in System Settings > Privacy & Security > Accessibility. If it's \
+                     already on, switch it off and on again: macOS asks again after an update."
                 .into(),
             fix: Some(Fix::GrantAccessibility),
         }
@@ -294,6 +295,39 @@ pub fn open_accessibility_settings() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+/// Asks macOS for Accessibility (its dialog also adds Mouthpiece to the
+/// list), opens the list, and tells the UI (`accessibility-granted`) once
+/// the user has turned it on, so nobody has to come back and retry blind.
+#[tauri::command]
+pub fn request_accessibility(app: tauri::AppHandle) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tauri::Emitter;
+    static WATCHING: AtomicBool = AtomicBool::new(false);
+    if crate::paste::accessibility_trusted() {
+        let _ = app.emit("accessibility-granted", ());
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(|| {
+        macos_accessibility_client::accessibility::application_is_trusted_with_prompt();
+    });
+    open_accessibility_settings()?;
+    if !WATCHING.swap(true, Ordering::SeqCst) {
+        std::thread::spawn(move || {
+            for _ in 0..300 {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if crate::paste::accessibility_trusted() {
+                    crate::applog!("accessibility: granted");
+                    let _ = app.emit("accessibility-granted", ());
+                    break;
+                }
+            }
+            WATCHING.store(false, Ordering::SeqCst);
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

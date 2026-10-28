@@ -35,7 +35,7 @@ export function ReadinessPanel({ onNavigate }: { onNavigate: (fix: ReadinessFix)
 
   function fix(kind: ReadinessFix) {
     if (kind === "grant_accessibility") {
-      invoke("open_accessibility_settings").catch((err) => notifyError("open_accessibility_settings", err));
+      invoke("request_accessibility").catch((err) => notifyError("request_accessibility", err));
     } else if (kind === "allow_microphone") {
       // Shows macOS's own prompt; the list refreshes once it's answered.
       invoke("request_microphone_access")

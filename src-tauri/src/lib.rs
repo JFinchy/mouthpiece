@@ -443,6 +443,7 @@ pub fn run() {
             llm::get_llm_only_when_needed,
             llm::set_llm_only_when_needed,
             readiness::open_accessibility_settings,
+            readiness::request_accessibility,
             agents::get_waiting_agents,
             agents::dismiss_waiting_agent,
             agents::focus_waiting_agent,

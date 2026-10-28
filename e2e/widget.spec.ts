@@ -301,4 +301,28 @@ test.describe("widget", () => {
     await emit(page, "transcript-ready", "Fix the stop path.");
     await expect(page.getByTestId("last-pasted")).toHaveText("Fix the stop path.");
   });
+
+  test("without Accessibility the words are copied and the widget offers the fix", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "recording-stopped", "/tmp/x.wav");
+    await emit(page, "paste-needs-access");
+    const fix = page.getByTestId("widget-setup");
+    await expect(fix).toHaveText("Copied · Allow pasting");
+    await expect(fix).toHaveAttribute("title", /on the clipboard: press ⌘V/);
+    await expect(fix).toHaveAttribute("title", /switch it off and on again/);
+    await fix.click();
+    expect(await calls(page, "request_accessibility")).toHaveLength(1);
+
+    await emit(page, "accessibility-granted");
+    await expect(page.getByText("Pasting is on")).toBeVisible();
+    await expect(page.getByTestId("widget-setup")).toHaveCount(0);
+  });
+
+  test("the pill offers the same fix in fewer words", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget", { widgetMode: "pill" });
+    await emit(page, "paste-needs-access");
+    await expect(page.getByTestId("widget-setup")).toHaveText("Allow pasting");
+    await page.getByTestId("widget-setup").click();
+    expect(await calls(page, "request_accessibility")).toHaveLength(1);
+  });
 });

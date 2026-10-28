@@ -499,13 +499,25 @@ function WidgetView() {
   // Blocking setup problems (no model, can't paste, hotkey taken), shown
   // in place of "Ready" so a fresh install says what's missing up front.
   const [setupProblem, setSetupProblem] = useState<ReadinessCheck | null>(null);
+  // The last dictation couldn't paste for lack of Accessibility, so it was
+  // copied instead; the widget offers the fix until it's granted.
+  const [needsAccess, setNeedsAccess] = useState(false);
+  const needsAccessRef = useRef(false);
+  needsAccessRef.current = needsAccess;
   useEffect(() => {
     const refresh = () =>
       getReadiness()
         .then((checks) => setSetupProblem(checks.find((c) => c.level === "error") ?? null))
         .catch((err) => console.error("get_readiness failed:", err));
     refresh();
-    const events = ["model-download-complete", "audio-device-status", "shortcut-changed", "transcript-error"];
+    const events = [
+      "model-download-complete",
+      "audio-device-status",
+      "shortcut-changed",
+      "transcript-error",
+      "paste-needs-access",
+      "accessibility-granted",
+    ];
     const unlisteners = events.map((event) => listen(event, refresh));
     // Catches what has no event, like Accessibility being granted.
     const interval = setInterval(refresh, 30_000);
@@ -587,7 +599,18 @@ function WidgetView() {
       setPhase("idle");
       announce(event.payload, true);
     });
+    const unlistenNeedsAccess = listen("paste-needs-access", () => {
+      setPhase("idle");
+      setOverrideMode(null);
+      setFlashVisible(false);
+      setNeedsAccess(true);
+    });
+    const unlistenAccessGranted = listen("accessibility-granted", () => {
+      if (needsAccessRef.current) announce("Pasting is on", false);
+      setNeedsAccess(false);
+    });
     const unlistenTranscriptReady = listen<string>("transcript-ready", (event) => {
+      setNeedsAccess(false);
       setLastPasted(event.payload || null);
       setPhase("idle");
       announce("Pasted", false);
@@ -641,6 +664,8 @@ function WidgetView() {
       unlistenLevel.then((f) => f());
       unlistenRecordingError.then((f) => f());
       unlistenTranscriptReady.then((f) => f());
+      unlistenNeedsAccess.then((f) => f());
+      unlistenAccessGranted.then((f) => f());
       unlistenTranscriptError.then((f) => f());
       unlistenUpdateAvailable.then((f) => f());
       unlistenDevice.then((f) => f());
@@ -657,7 +682,7 @@ function WidgetView() {
 
   // Notch grows from the middle while it has something to show (the
   // backend re-centers it on every resize).
-  const notchActive = phase !== "idle" || (flashVisible && message !== null) || undoOffer;
+  const notchActive = phase !== "idle" || (flashVisible && message !== null) || undoOffer || needsAccess;
   useEffect(() => {
     if (mode !== "notch") return;
     invoke("set_widget_size", notchActive ? NOTCH_ACTIVE : NOTCH_IDLE).catch((err) =>
@@ -780,17 +805,37 @@ function WidgetView() {
             ? "Paused (mic in use)"
             : STATUS_LABEL.idle;
   const flashing = flashVisible && message !== null;
-  const showSetup = phase === "idle" && !flashing && setupProblem !== null;
+  const showSetup = phase === "idle" && !flashing && (needsAccess || setupProblem !== null);
+  // Pasting is fixed right here (macOS's prompt, then its Accessibility
+  // list); anything else opens the setup checklist in Settings.
+  const pasteProblem = needsAccess || setupProblem?.id === "paste";
+  const narrow = mode === "pill" || mode === "notch";
+  const setupLabel =
+    needsAccess && !narrow ? "Copied · Allow pasting" : pasteProblem ? "Allow pasting" : "Finish setup";
+  const setupTitle = pasteProblem
+    ? `${needsAccess ? "Your words are on the clipboard: press ⌘V to paste them. " : ""}Mouthpiece needs Accessibility permission to paste for you. Click to allow it. If Mouthpiece is already on in the list, switch it off and on again: macOS asks again after an update.`
+    : setupProblem
+      ? `${setupProblem.title}. ${setupProblem.detail}`
+      : undefined;
+  function fixSetup() {
+    if (pasteProblem) {
+      invoke("request_accessibility").catch(actionFailed("open the Accessibility settings"));
+    } else {
+      openSettings();
+    }
+  }
 
   const setupButton = (
     <button
       type="button"
-      className="flex-1 truncate text-left text-sm font-medium text-error hover:underline"
-      onClick={openSettings}
-      title={setupProblem ? `${setupProblem.title}. ${setupProblem.detail}` : undefined}
+      className={`min-w-0 flex-1 truncate text-left font-medium hover:underline ${
+        mode === "pill" || mode === "notch" || mode === "caption" ? "text-xs" : "text-sm"
+      } ${needsAccess ? "text-warning" : "text-error"}`}
+      onClick={fixSetup}
+      title={setupTitle}
       data-testid="widget-setup"
     >
-      Finish setup
+      {setupLabel}
     </button>
   );
 
@@ -871,7 +916,7 @@ function WidgetView() {
       title={
         micSilent ??
         message ??
-        (showSetup && setupProblem ? `${setupProblem.title}. ${setupProblem.detail}` : null) ??
+        (showSetup ? (setupTitle ?? null) : null) ??
         warning?.full ??
         (newestAgent && mode === "minimal" ? `Claude is waiting · ${newestAgent.folder}` : null) ??
         (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel)
@@ -910,14 +955,14 @@ function WidgetView() {
           : flashing
             ? (message ?? "")
             : showSetup
-              ? "Finish setup"
+              ? setupLabel
               : idleLabel;
   const statusTone =
     flashing && isError ? "text-error" : micSilent || (showSetup && !flashing) ? "text-warning" : "";
   const fullStatus =
     micSilent ??
     (flashing ? message : null) ??
-    (showSetup && setupProblem ? `${setupProblem.title}. ${setupProblem.detail}` : null) ??
+    (showSetup ? (setupTitle ?? null) : null) ??
     (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel);
 
   if (mode === "pill") {
@@ -931,7 +976,9 @@ function WidgetView() {
         <div className="flex h-4 min-w-0 flex-1 items-center">
           {showProgress ? (
             <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
-          ) : flashing || showSetup ? (
+          ) : showSetup ? (
+            setupButton
+          ) : flashing ? (
             <span className={`truncate text-xs ${statusTone}`}>{shortStatus}</span>
           ) : (
             <>
@@ -960,7 +1007,11 @@ function WidgetView() {
         {notchActive ? (
           <>
             <span className="dw-small-record">{recordButton}</span>
-            <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
+            {showSetup ? (
+              setupButton
+            ) : (
+              <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
+            )}
             <div className="flex h-4 min-w-0 flex-1 items-center">
               {showProgress ? (
                 <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
@@ -1018,9 +1069,13 @@ function WidgetView() {
               </>
             ) : (
               <>
-                <span className={`shrink-0 truncate text-xs ${statusTone || "opacity-70"}`}>
-                  {phase === "idle" && !flashing && lastPasted ? "Pasted" : shortStatus}
-                </span>
+                {showSetup ? (
+                  setupButton
+                ) : (
+                  <span className={`shrink-0 truncate text-xs ${statusTone || "opacity-70"}`}>
+                    {phase === "idle" && !flashing && lastPasted ? "Pasted" : shortStatus}
+                  </span>
+                )}
                 {showProgress && <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />}
               </>
             )}

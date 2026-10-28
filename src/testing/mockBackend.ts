@@ -160,6 +160,7 @@ export function installMockBackend() {
     // readiness + recording
     get_readiness: () => state.readiness,
     open_accessibility_settings: () => null,
+    request_accessibility: () => null,
     toggle_recording_command: () => null,
     paste_as_is_command: () => null,
     ui_ready: () => null,

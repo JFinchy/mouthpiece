@@ -656,7 +656,17 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
     let reply = ctx.reply_target.as_ref().map(|target| {
         crate::agents::deliver_reply(app, target, &formatted, should_press_enter, cfg.copy_only)
     });
-    let copy_only = cfg.copy_only || focus_moved || reply.as_ref().is_some_and(|r| r.copied);
+    // Without Accessibility the paste can't happen: copy instead, so the
+    // words aren't lost, and the widget offers to fix it.
+    let needs_access = !cfg.copy_only
+        && reply.is_none()
+        && !formatted.is_empty()
+        && !crate::paste::accessibility_trusted();
+    if needs_access {
+        crate::applog!("paste: no Accessibility permission, copied instead");
+    }
+    let copy_only =
+        cfg.copy_only || focus_moved || needs_access || reply.as_ref().is_some_and(|r| r.copied);
     let deliver_started = std::time::Instant::now();
     let deliver = if let Some(reply) = &reply {
         reply.result.clone()
@@ -784,6 +794,8 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
 
             if let Some(reply) = &reply {
                 let _ = app.emit("transcript-copied", reply.notice.clone());
+            } else if needs_access {
+                let _ = app.emit("paste-needs-access", ());
             } else if focus_moved {
                 let _ = app.emit(
                     "transcript-copied",

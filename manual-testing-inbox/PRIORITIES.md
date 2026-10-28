@@ -6,6 +6,7 @@ place with a one-line note.
 
 ## Critical
 
+- [ ] Allow pasting: words copied when Accessibility is missing, one-click fix in the widget - see `allow-pasting.md`
 - [ ] Rename to Mouthpiece: an updated Dev Whisper keeps its data, hook and login item - see `rename-to-mouthpiece.md`
 - [ ] Microphone permission in the built app (prompt, denied, MDM-blocked states) - see `mic-permission.md`
 - [ ] Production hardening: CSP in the built app, single instance, setup checklist, verified downloads - see `production-hardening.md`

@@ -67,7 +67,7 @@ test.describe("settings", () => {
       readiness: [{ id: "paste", level: "error", title: "Allow pasting", detail: "Needs Accessibility.", fix: "grant_accessibility" }],
     });
     await page.getByRole("button", { name: "Open System Settings" }).click();
-    await expect.poll(() => calls(page, "open_accessibility_settings")).toHaveLength(1);
+    await expect.poll(() => calls(page, "request_accessibility")).toHaveLength(1);
   });
 
   test("the microphone fixes ask macOS or open its settings", async ({ page, consoleErrors: _ }) => {

@@ -4,12 +4,12 @@ use std::{thread, time::Duration};
 const PASTE_SETTLE_BEFORE_ENTER: Duration = Duration::from_millis(150);
 
 #[cfg(target_os = "macos")]
-fn accessibility_trusted() -> bool {
+pub fn accessibility_trusted() -> bool {
     macos_accessibility_client::accessibility::application_is_trusted()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn accessibility_trusted() -> bool {
+pub fn accessibility_trusted() -> bool {
     true
 }
 
