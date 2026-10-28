@@ -25,6 +25,39 @@ jobs:
 
       - run: bun install
 
+      # Signs with the project's own certificate (self-made, not Apple's;
+      # see RELEASING.md). Ad-hoc signatures change with every build, so
+      # macOS dropped Accessibility and Microphone permission on each
+      # update; with one certificate every release is the same app to it.
+      # Gatekeeper's "can't verify" prompt is unchanged (that needs Apple's
+      # notarization). Without the secret (a fork), builds stay ad-hoc.
+      - name: Set up the release signing certificate
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_SIGNING_P12" ]; then
+            echo "No MACOS_SIGNING_P12 secret: building ad-hoc signed."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/release-signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          printf %s "$MACOS_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" \
+            -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # The certificate isn't trusted by macOS, so it's picked by hash
+          # (codesign accepts that; a name lookup only finds trusted ones).
+          identity=$(security find-identity "$keychain" | awk '/Mouthpiece Release Signing/ { print $2; exit }')
+          [ -n "$identity" ] || { echo "the signing certificate didn't import"; exit 1; }
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "Signing with the release certificate ($identity)."
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
@@ -50,6 +83,12 @@ jobs:
         run: |
           app=$(ls -d src-tauri/target/release/bundle/macos/*.app | head -1)
           codesign --verify --deep --strict --verbose=2 "$app"
+          # Signed with the release certificate, not ad-hoc: macOS keeps
+          # permissions across updates only if this holds.
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            codesign -d -r- "$app" 2>&1 | tee /dev/stderr | grep -q "certificate leaf" \
+              || { echo "the app isn't signed with the release certificate"; exit 1; }
+          fi
           codesign -dv "$app" 2>&1 | grep -q "Sealed Resources version" \
             || { echo "app bundle resources aren't sealed"; exit 1; }
           # Without this key macOS never asks for the microphone and the app

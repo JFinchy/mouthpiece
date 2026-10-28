@@ -26,6 +26,31 @@ secrets above — but note every already-installed copy of the app will
 reject updates signed by the new key until it's manually reinstalled
 once, since that's the whole point of the signature check.
 
+### macOS signing certificate
+
+Releases are signed with a self-made code-signing certificate, "Mouthpiece
+Release Signing" (created 2026-10-27, valid to 2046). It isn't Apple's, so
+Gatekeeper still shows its "can't verify" prompt, but every release
+carries the same signer, and macOS keeps Accessibility and Microphone
+permission across updates. (Ad-hoc signatures differ per build, so each
+update used to silently lose them.)
+
+The identity lives at `~/.tauri/mouthpiece-release-signing.p12`, its
+password in the sibling `.p12.password` file, and the public certificate
+in `.cert.pem`. **Back these up and never commit them.** The release
+workflow reads them from two repo secrets:
+
+```sh
+base64 -i ~/.tauri/mouthpiece-release-signing.p12 | tr -d '\n' | gh secret set MACOS_SIGNING_P12
+gh secret set MACOS_SIGNING_P12_PASSWORD < ~/.tauri/mouthpiece-release-signing.p12.password
+```
+
+Without the secrets the workflow builds ad-hoc signed; with them, its
+verify step fails the release unless the app's designated requirement is
+anchored to the certificate (`certificate leaf = H"da951adf…"`). If the
+identity is ever lost, a new certificate works the same way, but every
+installed copy asks for its permissions once more after that update.
+
 ## Per-release checklist
 
 1. Bump the version everywhere it lives (`package.json`, `Cargo.toml`,
