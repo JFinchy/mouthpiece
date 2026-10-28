@@ -16,6 +16,7 @@ mod error_context;
 mod file_tagging;
 mod focus;
 mod history;
+mod input_devices;
 mod insights;
 mod isolate;
 mod lifecycle;
@@ -45,6 +46,7 @@ mod undo;
 mod voice_isolation;
 mod webhook;
 mod widget;
+mod widget_menu;
 
 use std::sync::Mutex;
 use tauri::{
@@ -372,6 +374,8 @@ pub fn run() {
             get_active_input_device,
             get_audio_device_status,
             set_input_device,
+            widget_menu::show_mic_menu,
+            widget_menu::show_widget_menu,
             get_shortcut,
             set_shortcut,
             get_double_tap_enabled,
@@ -761,6 +765,9 @@ pub fn run() {
                     &quit,
                 ],
             )?;
+
+            // The widget's own menus (`widget_menu`).
+            app.on_menu_event(|app, event| widget_menu::handle(app, event.id.as_ref()));
 
             TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .icon(tray_base_icon())

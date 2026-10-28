@@ -146,7 +146,15 @@ pub fn transcribe_held_recording(
     crate::discard::set_processing(app, false);
 }
 
-fn current_mic_name(state: &RecordingState) -> String {
+/// Payload of `mic-switched`: a mic sent nothing mid-recording and another
+/// took over.
+#[derive(Clone, serde::Serialize)]
+struct MicSwitched {
+    from: String,
+    to: String,
+}
+
+pub(crate) fn current_mic_name(state: &RecordingState) -> String {
     use crate::audio::DeviceStatus::*;
     match state.audio.device_status() {
         Some(Preferred { using } | Fallback { using, .. } | SystemDefault { using }) => using,
@@ -181,9 +189,10 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
     std::thread::spawn(move || {
         let state = level_app.state::<RecordingState>();
         let mut silence = crate::audio::SilenceWatch::default();
+        let mut switched = false;
         while state.capture.is_session_active(session) {
             let level = state.audio.current_level();
-            let _ = level_app.emit("audio-level", level);
+            let _ = level_app.emit("audio-level", crate::audio::meter_level(level));
             match silence.observe(level, std::time::Instant::now()) {
                 Some(true) => {
                     let mic = current_mic_name(&state);
@@ -191,10 +200,34 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
                     crate::applog!(
                         "audio: no signal from {mic} for 2s while recording (mic access {access:?})"
                     );
+                    // A mic you didn't pick (a stand-in for a missing one,
+                    // or whatever macOS defaults to) that sends nothing at
+                    // all is swapped for another once per recording. What
+                    // it recorded is silence, so nothing is lost.
+                    let picked = matches!(
+                        state.audio.device_status(),
+                        Some(crate::audio::DeviceStatus::Preferred { .. })
+                    );
+                    let can_switch = !switched
+                        && !picked
+                        && access == crate::mic_permission::MicAccess::Authorized;
+                    if let Some(now_on) = can_switch.then(|| state.audio.switch_now(None)).flatten()
+                    {
+                        switched = true;
+                        silence = crate::audio::SilenceWatch::default();
+                        let _ = level_app.emit(
+                            "mic-switched",
+                            MicSwitched {
+                                from: mic,
+                                to: now_on,
+                            },
+                        );
+                        continue;
+                    }
                     let message = crate::mic_permission::silence_explanation(access)
                         .map(str::to_string)
                         .unwrap_or_else(|| {
-                            format!("No sound from {mic}. Is it muted? Hover to switch mics.")
+                            format!("No sound from {mic}. Is it muted? Switch mics to keep going.")
                         });
                     let _ = level_app.emit("mic-silent", message);
                 }
@@ -362,10 +395,13 @@ fn transcribe_and_paste(
                 .map(str::to_string)
                 .unwrap_or_else(|| {
                     format!(
-                        "{mic} sent no audio. Is it muted, or is the input level at zero in \
-                         System Settings > Sound? Hover to switch mics."
+                        "{mic} sent no audio. Switch mics, or check it isn't muted in \
+                         System Settings > Sound."
                     )
                 });
+            if access == crate::mic_permission::MicAccess::Authorized {
+                let _ = app.emit("mic-dead", ());
+            }
             let _ = app.emit("transcript-error", message);
             return;
         }
@@ -952,6 +988,19 @@ pub fn set_input_device(app: AppHandle, name: Option<String>, state: tauri::Stat
     let mut cfg = crate::config::load(&app);
     cfg.input_device = name;
     let _ = crate::config::save(&app, &cfg);
+}
+
+/// Picks a mic from the "Switch mic" menu: it becomes the chosen mic, and
+/// a recording in progress moves to it right away instead of at the next
+/// one.
+pub fn pick_mic_now(app: &AppHandle, name: Option<String>) {
+    let state = app.state::<RecordingState>();
+    let from = current_mic_name(&state);
+    set_input_device(app.clone(), name.clone(), state.clone());
+    let target = name.or_else(crate::audio::default_device_name);
+    if let Some(to) = target.and_then(|t| state.audio.switch_now(Some(t))) {
+        let _ = app.emit("mic-switched", MicSwitched { from, to });
+    }
 }
 
 #[tauri::command]

@@ -124,8 +124,9 @@ const METER_GAP = 2;
 // one most dictation apps show while listening. `levels` is the most
 // recent samples from the backend's `audio-level` event (oldest first).
 // It fills whatever width it's given: as many bars as fit, newest on the
-// right, mirrored around the middle, older bars fading out. Levels are
-// square-rooted so quiet speech still visibly moves.
+// right, mirrored around the middle, older bars fading out. Levels arrive
+// already on a decibel scale (see `audio::meter_level`), so heights are
+// linear: normal speech fills about half, loud speech most of it.
 function LevelMeter({ levels, className }: { levels: number[]; className?: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [count, setCount] = useState(12);
@@ -155,7 +156,7 @@ function LevelMeter({ levels, className }: { levels: number[]; className?: strin
             className="shrink-0 rounded-full bg-error transition-[height] duration-100 ease-out"
             style={{
               width: METER_BAR,
-              height: `${Math.max(Math.sqrt(level) * 100, 14)}%`,
+              height: `${Math.max(level * 100, 10)}%`,
               opacity: 0.35 + 0.65 * ((i + 1) / shown.length),
             }}
           />
@@ -182,6 +183,14 @@ function GearIcon() {
     <svg viewBox="0 0 24 24" className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
       <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 opacity-70" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }
@@ -330,6 +339,17 @@ function WidgetView() {
     else if (wasMeeting.current) setPhase("idle");
     wasMeeting.current = meetingRecording !== null;
   }, [meetingRecording]);
+  // A mic that sent nothing was swapped for another mid-recording (or one
+  // was picked from the "Switch mic" menu): shown in place of the timer
+  // for a moment.
+  const [micNote, setMicNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!micNote) return;
+    const timer = setTimeout(() => setMicNote(null), 4000);
+    return () => clearTimeout(timer);
+  }, [micNote]);
+  // The last recording came back silent: its error offers "Switch mic".
+  const [micDead, setMicDead] = useState(false);
   // "Dictation is paused…", shown in place of the meeting's timer for a moment.
   const [meetingNote, setMeetingNote] = useState<string | null>(null);
   useEffect(() => {
@@ -574,6 +594,7 @@ function WidgetView() {
       setUndoOffer(false);
       setLiveText("");
       setMicSilent(null);
+      setMicDead(false);
       setPhase("recording");
     });
     const unlistenStop = listen("recording-stopped", () => {
@@ -583,6 +604,14 @@ function WidgetView() {
     });
     const unlistenMicSilent = listen<string>("mic-silent", (e) => setMicSilent(e.payload));
     const unlistenMicCleared = listen("mic-silent-cleared", () => setMicSilent(null));
+    const unlistenMicSwitched = listen<{ from: string; to: string }>("mic-switched", (e) => {
+      setMicSilent(null);
+      setMicNote(`Switched from ${e.payload.from} to ${e.payload.to}`);
+    });
+    const unlistenMicDead = listen("mic-dead", () => setMicDead(true));
+    // Changed from the widget's native menu.
+    const unlistenMicMode = listen<boolean>("mic-mode-changed", (e) => setMicMode(e.payload));
+    const unlistenNextMode = listen<string | null>("next-mode-changed", (e) => setOverrideMode(e.payload));
     const unlistenRefining = listen<string | null>("refining-started", (e) => {
       setRefineModel(e.payload ?? null);
       // Stays null (an indeterminate bar) for boilerplate generation, which
@@ -657,6 +686,10 @@ function WidgetView() {
       unlistenLive.then((f) => f());
       unlistenMicSilent.then((f) => f());
       unlistenMicCleared.then((f) => f());
+      unlistenMicSwitched.then((f) => f());
+      unlistenMicDead.then((f) => f());
+      unlistenMicMode.then((f) => f());
+      unlistenNextMode.then((f) => f());
       unlistenStop.then((f) => f());
       unlistenRefining.then((f) => f());
       unlistenProgress.then((f) => f());
@@ -791,7 +824,9 @@ function WidgetView() {
   const phaseLabel = meetingRecording && phase === "recording" ? "Recording a meeting" : STATUS_LABEL[phase];
   const elapsedText = meetingRecording
     ? (meetingNote ?? `Meeting ${formatElapsed(elapsedMs)}`)
-    : formatElapsed(elapsedMs);
+    : micNote
+      ? "Mic switched"
+      : formatElapsed(elapsedMs);
   const idleLabel =
     phase !== "idle"
       ? phaseLabel
@@ -836,6 +871,42 @@ function WidgetView() {
       data-testid="widget-setup"
     >
       {setupLabel}
+    </button>
+  );
+
+  // The mic isn't sending anything: offer the others, the Mac's own first.
+  const showSwitchMic = (phase === "recording" && micSilent !== null) || (micDead && flashing && isError);
+  const switchMicButton = (
+    <button
+      type="button"
+      className="btn btn-warning btn-xs h-5 min-h-0 shrink-0 rounded-full px-2 text-[11px]"
+      onClick={() => invoke("show_mic_menu").catch(actionFailed("list the mics"))}
+      onMouseDown={(e) => e.stopPropagation()}
+      title="Pick another microphone"
+      data-testid="switch-mic"
+    >
+      Switch mic
+    </button>
+  );
+
+  // The widget's menu (mic, mic mode, next dictation, style, Settings) as a
+  // native menu, which can draw outside the widget: every style has it on
+  // right-click, and those with room (not Minimal's dot) on a ⌄ button.
+  function openMenu(e?: React.MouseEvent) {
+    e?.preventDefault();
+    invoke("show_widget_menu").catch(actionFailed("open the menu"));
+  }
+  const menuButton = (className = "") => (
+    <button
+      type="button"
+      className={`btn btn-ghost btn-circle h-6 w-6 min-h-0 shrink-0 ${className}`}
+      onClick={() => openMenu()}
+      onMouseDown={(e) => e.stopPropagation()}
+      aria-label="Widget menu"
+      title="Microphone, mode and style"
+      data-testid="widget-menu"
+    >
+      <ChevronIcon />
     </button>
   );
 
@@ -962,22 +1033,25 @@ function WidgetView() {
   const fullStatus =
     micSilent ??
     (flashing ? message : null) ??
+    (phase === "recording" ? micNote : null) ??
     (showSetup ? (setupTitle ?? null) : null) ??
     (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel);
 
   if (mode === "pill") {
     return (
-      <main
+      <main onContextMenu={openMenu}
         className="dw-widget group flex h-screen w-screen cursor-grab items-center gap-1.5 overflow-hidden rounded-full border border-white/10 bg-neutral/90 pl-0.5 pr-2 text-neutral-content backdrop-blur-md active:cursor-grabbing"
         onMouseDown={startDrag}
         title={fullStatus ?? undefined}
       >
         <span className="dw-small-record">{recordButton}</span>
-        <div className="flex h-4 min-w-0 flex-1 items-center">
+        <div className="flex h-6 min-w-0 flex-1 items-center">
           {showProgress ? (
             <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
           ) : showSetup ? (
             setupButton
+          ) : showSwitchMic ? (
+            switchMicButton
           ) : flashing ? (
             <span className={`truncate text-xs ${statusTone}`}>{shortStatus}</span>
           ) : (
@@ -992,14 +1066,15 @@ function WidgetView() {
         </div>
         {discardButton}
         {undoButton}
+        {menuButton("hidden group-hover:inline-flex")}
       </main>
     );
   }
 
   if (mode === "notch") {
     return (
-      <main
-        className={`dw-widget dw-notch flex h-screen w-screen items-center overflow-hidden text-neutral-content ${
+      <main onContextMenu={openMenu}
+        className={`dw-widget dw-notch group flex h-screen w-screen items-center overflow-hidden text-neutral-content ${
           notchActive ? "gap-2 px-2" : "justify-center gap-1.5 px-3"
         }`}
         title={fullStatus ?? undefined}
@@ -1012,15 +1087,17 @@ function WidgetView() {
             ) : (
               <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
             )}
-            <div className="flex h-4 min-w-0 flex-1 items-center">
+            <div className="flex h-6 min-w-0 flex-1 items-center">
               {showProgress ? (
                 <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
               ) : phase === "recording" ? (
                 <LevelMeter levels={levels} className="flex-1" />
               ) : null}
             </div>
+            {showSwitchMic && switchMicButton}
             {discardButton}
             {undoButton}
+            {menuButton("opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
           </>
         ) : (
           <button type="button" className="dw-notch-idle" onClick={toggleRecording} aria-label="Start recording">
@@ -1058,10 +1135,10 @@ function WidgetView() {
         </span>
       );
     return (
-      <main className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
+      <main onContextMenu={openMenu} className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
         <div className="flex items-center gap-2">
           {recordButton}
-          <div className="flex h-5 min-w-0 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
+          <div className="flex h-6 min-w-0 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
             {phase === "recording" && !micSilent ? (
               <>
                 <LevelMeter levels={levels} className="flex-1" />
@@ -1080,8 +1157,10 @@ function WidgetView() {
               </>
             )}
           </div>
+          {showSwitchMic && switchMicButton}
           {discardButton}
           {undoButton}
+          {menuButton()}
           <button
             className="btn btn-ghost btn-circle relative h-7 w-7 min-h-0"
             onClick={openSettings}
@@ -1100,7 +1179,7 @@ function WidgetView() {
 
   if (mode === "minimal") {
     return (
-      <main
+      <main onContextMenu={openMenu}
         className="dw-widget relative flex h-screen w-screen cursor-grab items-center justify-center overflow-hidden rounded-full border border-white/10 bg-neutral/90 backdrop-blur-md active:cursor-grabbing"
         onMouseDown={startDrag}
       >
@@ -1112,7 +1191,7 @@ function WidgetView() {
 
   if (mode === "detailed") {
     return (
-      <main className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
+      <main onContextMenu={openMenu} className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
         <div className="flex items-center gap-2">
           {recordButton}
           {phase === "recording" && micSilent ? (
@@ -1121,10 +1200,10 @@ function WidgetView() {
               onMouseDown={startDrag}
               title={micSilent}
             >
-              No sound from mic
+              No sound
             </span>
           ) : phase === "recording" ? (
-            <div className="flex h-4 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
+            <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
               <LevelMeter levels={levels} className="flex-1" />
               <span className="shrink-0 text-xs tabular-nums opacity-60" data-testid="recording-elapsed">
                 {elapsedText}
@@ -1150,8 +1229,10 @@ function WidgetView() {
               {idleLabel}
             </span>
           )}
+          {showSwitchMic && switchMicButton}
           {discardButton}
           {undoButton}
+          {menuButton()}
           <button
             className="btn btn-ghost btn-circle relative h-7 w-7 min-h-0"
             onClick={openSettings}
@@ -1191,7 +1272,7 @@ function WidgetView() {
 
   // Compact
   return (
-    <main
+    <main onContextMenu={openMenu}
       className={`dw-widget flex h-screen flex-col gap-1 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 px-2.5 py-2 text-neutral-content backdrop-blur-md ${
         flyoutHovered ? "justify-start" : "justify-center"
       }`}
@@ -1206,10 +1287,10 @@ function WidgetView() {
             onMouseDown={startDrag}
             title={micSilent}
           >
-            No sound from mic
+            No sound
           </span>
         ) : phase === "recording" ? (
-          <div className="flex h-4 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
+          <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
             <LevelMeter levels={levels} className="flex-1" />
             <span className="shrink-0 text-xs tabular-nums opacity-60" data-testid="recording-elapsed">
               {elapsedText}
@@ -1239,6 +1320,7 @@ function WidgetView() {
             {flashing ? message : phase === "idle" && warning ? warning.short : idleLabel}
           </span>
         )}
+        {showSwitchMic && switchMicButton}
         {discardButton}
         {undoButton}
         <button

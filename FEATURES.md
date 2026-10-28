@@ -249,7 +249,8 @@ built yet.
 - **Live input level meter** while recording — a small animated bar
   visualizer (Compact/Detailed) or a pulsing record dot (Minimal), driven
   by the mic's real-time RMS level, so it's visibly obvious audio is
-  actually being picked up rather than trusting a static "recording" dot.
+  actually being picked up rather than trusting a static "recording" dot. Bar height is linear in decibels (-60 dBFS empty, -3 dBFS
+  full), so normal speech sits mid-meter and louder or quieter words show.
 - **Errors that don't get lost** — Compact mode auto-grows and holds
   error text on screen for 6 seconds instead of truncating it (this used
   to silently swallow the Accessibility-permission error).
@@ -343,7 +344,21 @@ built yet.
 
 - **Mic device retry+fallback** — retries opening a specific input
   device a few times before falling back to the system default, fixing
-  the "stale device handle right after selecting it" failure mode.
+  the "stale device handle right after selecting it" failure mode. When the picked mic is missing and the system default is Bluetooth
+  headphones, the Mac's own mic is used instead (CoreAudio transport
+  type, `input_devices.rs`).
+- **A dead mic is swapped mid-recording** — a mic you didn't pick that
+  sends pure silence for 2 s is replaced by the next real mic (the Mac's
+  own first) in the same recording; its audio is converted to the clip's
+  format, so nothing is lost. A silent mic (during or after recording)
+  shows **Switch mic**, a menu of mics with the Mac's own first; a pick
+  becomes the chosen mic and takes effect mid-recording.
+- **Widget menu in every style** — right-click the widget, or click its
+  ⌄ button on hover (Pill, Notch, Caption, Detailed), for a native menu
+  with the hover panel's choices: microphone (the Mac's own first), mic
+  mode, next dictation's mode, widget style, Settings. Native, so it draws
+  outside the widget instead of resizing it. Compact and Stacked keep the
+  hover panel too.
 - **Warm model pre-load on startup**, so the first real recording doesn't
   pay for Metal shader compilation during the user's first
   "transcribing…".

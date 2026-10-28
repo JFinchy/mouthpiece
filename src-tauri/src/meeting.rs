@@ -371,7 +371,10 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         let state = level_app.state::<RecordingState>();
         let started = Instant::now();
         while state.capture.is_session_active(session) {
-            let _ = level_app.emit("audio-level", state.audio.current_level());
+            let _ = level_app.emit(
+                "audio-level",
+                crate::audio::meter_level(state.audio.current_level()),
+            );
             if started.elapsed() >= MAX_DURATION {
                 crate::applog!(
                     "meeting: stopping after {} hours",

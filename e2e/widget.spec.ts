@@ -49,12 +49,69 @@ test.describe("widget", () => {
     await open(page, "widget");
     await emit(page, "recording-started");
     await emit(page, "mic-silent", "No sound from Microsoft Teams Audio. Check it's on and unmuted.");
-    await expect(page.getByText("No sound from mic")).toBeVisible();
+    await expect(page.getByText("No sound", { exact: true })).toBeVisible();
     await expect(page.getByTestId("level-meter")).toHaveCount(0);
 
     await emit(page, "mic-silent-cleared");
-    await expect(page.getByText("No sound from mic")).toHaveCount(0);
+    await expect(page.getByText("No sound", { exact: true })).toHaveCount(0);
     await expect(page.getByTestId("level-meter")).toBeVisible();
+  });
+
+  test("a silent mic offers the others, during and after the recording", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "recording-started");
+    await emit(page, "mic-silent", "No sound from Jake’s AirPods #2. Is it muted? Switch mics to keep going.");
+    await page.getByTestId("switch-mic").click();
+    expect(await calls(page, "show_mic_menu")).toHaveLength(1);
+
+    // Picked from the menu (or swapped automatically): the warning goes.
+    await emit(page, "mic-switched", { from: "Jake’s AirPods #2", to: "MacBook Pro Microphone" });
+    await expect(page.getByTestId("switch-mic")).toHaveCount(0);
+    await expect(page.getByTestId("recording-elapsed")).toContainText("Mic switched");
+
+    await emit(page, "recording-stopped", "/tmp/x.wav");
+    await emit(page, "mic-dead");
+    await emit(page, "transcript-error", "Jake’s AirPods #2 sent no audio. Switch mics, or check it isn't muted.");
+    await expect(page.getByTestId("switch-mic")).toBeVisible();
+    await emit(page, "recording-started");
+    await expect(page.getByTestId("switch-mic")).toHaveCount(0);
+  });
+
+  test("a silent mic in the pill still offers the others", async ({ page, consoleErrors: _ }) => {
+    await page.setViewportSize({ width: 156, height: 34 });
+    await open(page, "widget", { widgetMode: "pill" });
+    await emit(page, "recording-started");
+    await emit(page, "mic-silent", "No sound from Jake’s AirPods #2.");
+    await expect(page.getByTestId("switch-mic")).toBeVisible();
+    await page.getByTestId("switch-mic").click();
+    expect(await calls(page, "show_mic_menu")).toHaveLength(1);
+  });
+
+  for (const style of ["pill", "notch", "minimal", "caption", "detailed", "compact", "stacked"] as const) {
+    test(`the ${style} style opens the widget menu on right-click`, async ({ page, consoleErrors: _ }) => {
+      await open(page, "widget", { widgetMode: style });
+      await page.locator("main").click({ button: "right" });
+      expect(await calls(page, "show_widget_menu")).toHaveLength(1);
+    });
+  }
+
+  test("the pill shows a menu button on hover", async ({ page, consoleErrors: _ }) => {
+    await page.setViewportSize({ width: 156, height: 34 });
+    await open(page, "widget", { widgetMode: "pill" });
+    await page.mouse.move(150, 300);
+    await expect(page.getByTestId("widget-menu")).toBeHidden();
+    await page.locator("main").hover();
+    await page.getByTestId("widget-menu").click();
+    expect(await calls(page, "show_widget_menu")).toHaveLength(1);
+  });
+
+  test("choices made in the native menu show in the hover panel", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "mic-mode-changed", true);
+    await emit(page, "next-mode-changed", "Terminal");
+    await page.locator("main").hover();
+    await expect(page.getByRole("button", { name: "Voice Isolation" })).toHaveClass(/sel/);
+    await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveClass(/sel/);
   });
 
   test("errors from the pipeline are shown, then fade back to ready", async ({ page, consoleErrors: _ }) => {

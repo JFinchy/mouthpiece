@@ -6,7 +6,6 @@ place with a one-line note.
 
 ## Critical
 
-- [ ] Allow pasting: words copied when Accessibility is missing, one-click fix in the widget - see `allow-pasting.md`
 - [ ] Rename to Mouthpiece: an updated Dev Whisper keeps its data, hook and login item - see `rename-to-mouthpiece.md`
 - [ ] Microphone permission in the built app (prompt, denied, MDM-blocked states) - see `mic-permission.md`
 - [ ] Production hardening: CSP in the built app, single instance, setup checklist, verified downloads - see `production-hardening.md`
@@ -18,6 +17,7 @@ place with a one-line note.
 
 ## Important
 
+- [ ] Mic fallback skips Bluetooth, dead mic swapped mid-recording, Switch mic menu, decibel level meter, widget menu in every style - see `mic-fallback-and-switch.md`
 - [ ] Dictation accuracy fixes (casing, lists, backtrack, capitalization) - see `dictation-accuracy.md`
 - [ ] Mic visibility, quick switching, "no sound" warnings - see `mic-visibility-and-silence.md`
 - [ ] Isolated Voice + voice enrollment (required before always-on) - see `isolated-voice.md`
@@ -47,5 +47,6 @@ place with a one-line note.
 
 ## Backlog (passed)
 
+- [x] 2026-10-28 - Allow pasting: words copied when Accessibility is missing, one-click fix in the widget (personal and corporate Mac; an update from an ad-hoc build needed `tccutil reset Accessibility dev.mouthpiece` once) - see `allow-pasting.md`
 - [x] 2026-10-14 - Stable dev signing + crash-proof logging - see `dev-signing-crash-logging.md`
 - [x] 2026-09-08 - Append clipboard - see `clipboard-append.md`

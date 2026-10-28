@@ -19,6 +19,11 @@ enum AudioCommand {
     /// is listening) so its status is known immediately, not at the next
     /// recording.
     Refresh,
+    /// Mid-recording, move to another mic and keep recording into the same
+    /// clip: `Some` names the mic, `None` picks the best replacement for the
+    /// current one. Replies with the mic now recording, or `None` if
+    /// nothing changed.
+    SwitchNow(Option<String>, Sender<Option<String>>),
 }
 
 /// Handle stored in Tauri state. The `cpal::Stream` itself is not `Send`/`Sync`
@@ -30,7 +35,7 @@ pub struct AudioHandle {
     /// audio thread so a device picked in Settings takes effect on the next
     /// recording without needing a dedicated command/round-trip.
     selected_device: Arc<Mutex<Option<String>>>,
-    /// Most recent input level (0.0-1.0, see `rms_level`), bit-packed since
+    /// Most recent input RMS (linear, 0.0-1.0), bit-packed since
     /// there's no stable `AtomicF32`. Updated on every audio callback,
     /// polled by `recording.rs`'s level-meter thread at a much lower,
     /// UI-appropriate rate — decoupled from the callback's own cadence
@@ -87,6 +92,7 @@ impl AudioHandle {
                 tap: Arc::new(Mutex::new(None)),
                 meeting: Arc::new(Mutex::new(None)),
                 level: level_thread.clone(),
+                conform: Arc::new(Mutex::new(None)),
             };
             let publish = |stream: &Option<WarmStream>, wanted: &Option<String>| {
                 let next = device_status(
@@ -166,6 +172,7 @@ impl AudioHandle {
             for command in rx {
                 match command {
                     AudioCommand::Start => {
+                        *sinks.conform.lock().unwrap() = None;
                         sinks.samples.lock().unwrap().clear();
                         ensure_playing(&mut current);
                         sinks.buffering.store(true, Ordering::SeqCst);
@@ -176,7 +183,15 @@ impl AudioHandle {
                         pause_if_unused(&current);
                         let captured = std::mem::take(&mut *sinks.samples.lock().unwrap());
                         crate::applog!("audio: stopped, captured {} samples", captured.len());
+                        // The clip's own format: after a mid-recording switch
+                        // the stream's differs, but the new mic's audio was
+                        // converted to this one.
+                        let (rate, channels) = unpack_format(sinks.format.load(Ordering::Relaxed));
+                        *sinks.conform.lock().unwrap() = None;
                         let result = match &current {
+                            Some(_) if !captured.is_empty() && rate != 0 => {
+                                write_wav(&captured, rate, channels)
+                            }
                             Some(cs) if !captured.is_empty() => {
                                 write_wav(&captured, cs.sample_rate, cs.channels)
                             }
@@ -208,6 +223,15 @@ impl AudioHandle {
                             pause_if_unused(&current);
                             publish(&current, &device_name);
                         }
+                    }
+                    AudioCommand::SwitchNow(to, reply) => {
+                        let switched = switch_now(&sinks, &mut current, to, |stream| {
+                            let wanted = selected_device_thread.lock().unwrap().clone();
+                            stream.requested_device = wanted;
+                        });
+                        let wanted = selected_device_thread.lock().unwrap().clone();
+                        publish(&current, &wanted);
+                        let _ = reply.send(switched);
                     }
                     AudioCommand::SetTap(tap) => {
                         let attach = tap.is_some();
@@ -303,6 +327,20 @@ impl AudioHandle {
         (samples[from..].to_vec(), channels, rate)
     }
 
+    /// Mid-recording, move to `to` (or, with `None`, the best replacement
+    /// for the current mic) without losing what's been recorded. Returns
+    /// the mic now recording, or `None` if nothing changed: not recording,
+    /// a meeting or ambient listening is using the stream, or there's no
+    /// other mic to try.
+    pub fn switch_now(&self, to: Option<String>) -> Option<String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx.send(AudioCommand::SwitchNow(to, reply_tx)).ok()?;
+        reply_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .ok()
+            .flatten()
+    }
+
     /// `None` resets to the system default input device.
     pub fn set_device(&self, name: Option<String>) {
         *self.selected_device.lock().unwrap() = name;
@@ -319,10 +357,11 @@ impl AudioHandle {
         self.status.lock().unwrap().clone()
     }
 
-    /// Most recent input level, 0.0-1.0 — 0.0 at rest (not recording, or no
-    /// callback has landed yet). Polled by `recording.rs`'s level-meter
-    /// thread; not itself pushed anywhere, so reading it costs nothing when
-    /// nobody's watching.
+    /// Most recent input RMS (linear sample amplitude) — 0.0 at rest (not
+    /// recording, or no callback has landed yet). Polled by `recording.rs`'s
+    /// level-meter thread, which turns it into a meter height with
+    /// `meter_level`; not itself pushed anywhere, so reading it costs
+    /// nothing when nobody's watching.
     pub fn current_level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
@@ -362,16 +401,27 @@ struct Sinks {
     /// The meeting recorder, while a meeting is being recorded.
     meeting: Arc<Mutex<Option<Sender<AudioChunk>>>>,
     level: Arc<AtomicU32>,
+    /// Set when the mic changed mid-recording: converts the new mic's audio
+    /// to the format the recording started in.
+    conform: Arc<Mutex<Option<Conformer>>>,
 }
 
 impl Sinks {
     fn deliver(&self, data: &[f32], channels: u16, sample_rate: u32) {
-        self.level
-            .store(rms_level(data).to_bits(), Ordering::Relaxed);
+        self.level.store(rms(data).to_bits(), Ordering::Relaxed);
         if self.buffering.load(Ordering::Relaxed) {
-            self.format
-                .store(pack_format(sample_rate, channels), Ordering::Relaxed);
-            self.samples.lock().unwrap().extend_from_slice(data);
+            let mut conform = self.conform.lock().unwrap();
+            match conform.as_mut() {
+                Some(conformer) => {
+                    let converted = conformer.push(data, channels, sample_rate);
+                    self.samples.lock().unwrap().extend_from_slice(&converted);
+                }
+                None => {
+                    self.format
+                        .store(pack_format(sample_rate, channels), Ordering::Relaxed);
+                    self.samples.lock().unwrap().extend_from_slice(data);
+                }
+            }
         }
         for tap in [&self.tap, &self.meeting] {
             if let Some(tap) = tap.lock().unwrap().as_ref() {
@@ -402,6 +452,9 @@ struct WarmStream {
     /// The requested device was unavailable and this is the system default
     /// standing in for it.
     fallback: bool,
+    /// A mic that sent nothing and was switched away from mid-recording:
+    /// the system default isn't switched back to while it's still this one.
+    avoid: Option<String>,
     /// Set by the stream's error callback (e.g. the device was unplugged
     /// while idle). A dead stream can still report `play()` as Ok and then
     /// deliver nothing, so it has to be rebuilt rather than resumed.
@@ -417,6 +470,7 @@ struct StreamFacts {
     requested: Option<String>,
     resolved: String,
     fallback: bool,
+    avoid: Option<String>,
     invalid: bool,
 }
 
@@ -426,6 +480,7 @@ impl WarmStream {
             requested: self.requested_device.clone(),
             resolved: self.resolved_name.clone(),
             fallback: self.fallback,
+            avoid: self.avoid.clone(),
             invalid: self.invalid.load(Ordering::SeqCst),
         }
     }
@@ -451,8 +506,10 @@ fn rebuild_reason(
     }
     match requested {
         Some(name) if facts.fallback && preferred_present(name) => Some("preferred device is back"),
-        None if default_now().as_deref() != Some(facts.resolved.as_str()) => {
-            Some("system default device changed")
+        None => {
+            let now = default_now();
+            let changed = now.as_deref() != Some(facts.resolved.as_str());
+            (changed && now != facts.avoid).then_some("system default device changed")
         }
         _ => None,
     }
@@ -497,6 +554,7 @@ fn build_warm_stream(sinks: &Sinks, device_name: Option<String>) -> Option<WarmS
                 requested_device: device_name,
                 resolved_name: opened.resolved_name,
                 fallback: opened.fallback,
+                avoid: None,
                 invalid: opened.invalid,
                 sample_rate: opened.sample_rate,
                 channels: opened.channels,
@@ -509,11 +567,11 @@ fn build_warm_stream(sinks: &Sinks, device_name: Option<String>) -> Option<WarmS
     }
 }
 
-/// Input quieter than this (on the widget meter's 0–1 scale) is treated as
-/// "nothing coming through": about -84 dBFS, below the self-noise of any
-/// working mic in a quiet room. A muted or disconnected device delivers
-/// exact zeros, and a device that never starts delivering stays at 0.
-const DEAD_LEVEL: f32 = 0.03;
+/// Input RMS quieter than this is treated as "nothing coming through":
+/// about -84 dBFS, below the self-noise of any working mic in a quiet
+/// room. A muted or disconnected device delivers exact zeros, and a device
+/// that never starts delivering stays at 0.
+const DEAD_LEVEL: f32 = 6e-5;
 const DEAD_FOR: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Watches the live input level during one recording and says when to
@@ -526,8 +584,8 @@ pub struct SilenceWatch {
 }
 
 impl SilenceWatch {
-    pub fn observe(&mut self, level: f32, now: std::time::Instant) -> Option<bool> {
-        if level >= DEAD_LEVEL {
+    pub fn observe(&mut self, rms: f32, now: std::time::Instant) -> Option<bool> {
+        if rms >= DEAD_LEVEL {
             self.quiet_since = None;
             return std::mem::take(&mut self.warned).then_some(false);
         }
@@ -622,8 +680,24 @@ fn open_with_retry_and_fallback(
     }
 
     if let Some(name) = device_name {
-        crate::applog!("audio: '{name}' unavailable ({last_err}), falling back to system default");
-        return build_input_stream(sinks, None).map(|opened| OpenedStream {
+        // Not Bluetooth headphones if the Mac has its own mic: see
+        // `input_devices`.
+        let instead = crate::input_devices::fallback_for_missing(
+            &crate::input_devices::inputs(),
+            default_device_name().as_deref(),
+        );
+        crate::applog!(
+            "audio: '{name}' unavailable ({last_err}), falling back to {}",
+            instead.as_deref().unwrap_or("system default")
+        );
+        let opened = match instead {
+            Some(builtin) => build_input_stream(sinks, Some(&builtin)).or_else(|err| {
+                crate::applog!("audio: '{builtin}' failed too ({err}), using system default");
+                build_input_stream(sinks, None)
+            }),
+            None => build_input_stream(sinks, None),
+        };
+        return opened.map(|opened| OpenedStream {
             fallback: true,
             ..opened
         });
@@ -632,25 +706,152 @@ fn open_with_retry_and_fallback(
     Err(last_err)
 }
 
-/// Root-mean-square level of a chunk, scaled into a visually useful
-/// 0.0-1.0 range for the widget's live level meter. A straight linear gain
-/// (tried at 4x, then 8x) couldn't satisfy both ends at once: high enough
-/// to make normal speech clearly move the meter meant loud speech
-/// overshot 1.0 almost immediately, low enough to keep loud speech from
-/// clipping meant normal speech barely registered above the floor. A
-/// sqrt-compressed (perceptual) curve fixes that — it boosts quiet/
-/// moderate input much more than loud input, so normal speech already
-/// shows clear, obvious movement, while genuinely loud speech still
-/// saturates to a full "every bar lit" 1.0 rather than needing to be
-/// shouted. Still a rough tuning (15x gain before the compression), not a
-/// calibrated measurement.
-fn rms_level(samples: &[f32]) -> f32 {
+/// Replaces the playing stream with one on another mic, mid-recording. The
+/// old stream is dropped first so two mics never write into the clip at
+/// once, and the new mic's audio is converted to the clip's format. Only
+/// for push-to-talk: a meeting or ambient listener would see the format
+/// change under it.
+fn switch_now(
+    sinks: &Sinks,
+    current: &mut Option<WarmStream>,
+    to: Option<String>,
+    set_requested: impl FnOnce(&mut WarmStream),
+) -> Option<String> {
+    if !sinks.buffering.load(Ordering::SeqCst) || sinks.tapped() {
+        return None;
+    }
+    let dead = current.as_ref().map(|cs| cs.resolved_name.clone());
+    let picked = to.is_some();
+    let target = to.or_else(|| {
+        crate::input_devices::alternative_to(
+            &crate::input_devices::inputs(),
+            dead.as_deref().unwrap_or_default(),
+        )
+    })?;
+    if Some(&target) == dead.as_ref() {
+        return None;
+    }
+    let (rate, channels) = unpack_format(sinks.format.load(Ordering::Relaxed));
+    if rate != 0 {
+        *sinks.conform.lock().unwrap() = Some(Conformer::new(rate, channels));
+    }
+    let previous = current.take();
+    let requested = previous.as_ref().and_then(|cs| cs.requested_device.clone());
+    drop(previous);
+    match build_input_stream(sinks, Some(&target)) {
+        Ok(opened) => {
+            if let Err(err) = opened.stream.play() {
+                crate::applog!("audio: switching to '{target}' failed to play: {err}");
+            }
+            crate::applog!(
+                "audio: switched mid-recording from {} to '{target}' at {}Hz",
+                dead.as_deref().unwrap_or("nothing"),
+                opened.sample_rate
+            );
+            let mut stream = WarmStream {
+                stream: opened.stream,
+                requested_device: requested,
+                resolved_name: opened.resolved_name,
+                fallback: !picked,
+                avoid: if picked { None } else { dead },
+                invalid: opened.invalid,
+                sample_rate: opened.sample_rate,
+                channels: opened.channels,
+            };
+            set_requested(&mut stream);
+            // An explicit pick of a mic is that mic, not a stand-in.
+            if picked {
+                stream.fallback = stream.requested_device.as_deref() != Some(&target);
+            }
+            *current = Some(stream);
+            Some(target)
+        }
+        Err(err) => {
+            crate::applog!("audio: couldn't switch to '{target}': {err}");
+            *sinks.conform.lock().unwrap() = None;
+            None
+        }
+    }
+}
+
+/// Turns audio from a mic picked mid-recording into the format the
+/// recording started in (its sample rate and channel count), so one clip
+/// never mixes two. Linear interpolation, which is plenty for speech headed
+/// to a 16 kHz model.
+struct Conformer {
+    rate: u32,
+    channels: u16,
+    /// Where the next output sample falls, in input samples from the start
+    /// of the next chunk (-1.0 is `previous`).
+    position: f64,
+    previous: f32,
+}
+
+impl Conformer {
+    fn new(rate: u32, channels: u16) -> Self {
+        Self {
+            rate,
+            channels: channels.max(1),
+            position: 0.0,
+            previous: 0.0,
+        }
+    }
+
+    fn push(&mut self, data: &[f32], channels: u16, sample_rate: u32) -> Vec<f32> {
+        let mono = crate::stt::downmix(data, channels);
+        if mono.is_empty() || sample_rate == 0 {
+            return Vec::new();
+        }
+        let step = sample_rate as f64 / self.rate as f64;
+        let at = |i: isize| {
+            if i < 0 {
+                self.previous
+            } else {
+                mono[i as usize]
+            }
+        };
+        let last = (mono.len() - 1) as f64;
+        let mut out = Vec::new();
+        while self.position <= last {
+            let base = self.position.floor();
+            let frac = (self.position - base) as f32;
+            let a = at(base as isize);
+            let b = if frac > 0.0 { at(base as isize + 1) } else { a };
+            let sample = a + (b - a) * frac;
+            out.extend(std::iter::repeat_n(sample, self.channels as usize));
+            self.position += step;
+        }
+        self.position -= mono.len() as f64;
+        self.previous = mono[mono.len() - 1];
+        out
+    }
+}
+
+/// Root-mean-square amplitude of a chunk (linear, 0.0-1.0).
+fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
     let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    let rms = (sum_sq / samples.len() as f32).sqrt();
-    (rms * 15.0).clamp(0.0, 1.0).sqrt()
+    (sum_sq / samples.len() as f32).sqrt()
+}
+
+/// The meter shows -60 dBFS (below a quiet room) as empty and -3 dBFS
+/// (shouting into the mic) as full.
+const METER_FLOOR_DB: f32 = -60.0;
+const METER_CEILING_DB: f32 = -3.0;
+
+/// An RMS level as the widget meter's 0.0-1.0 height. Linear in decibels,
+/// which is how loudness is heard: normal speech (about -35 to -20 dBFS)
+/// sits around the middle with room to show louder and quieter words. The
+/// old linear-gain-then-square-root curve hit the top at -24 dBFS, so
+/// ordinary speech pinned every bar.
+pub fn meter_level(rms: f32) -> f32 {
+    if rms <= 0.0 {
+        return 0.0;
+    }
+    let db = 20.0 * rms.log10();
+    ((db - METER_FLOOR_DB) / (METER_CEILING_DB - METER_FLOOR_DB)).clamp(0.0, 1.0)
 }
 
 fn build_input_stream(sinks: &Sinks, device_name: Option<&str>) -> Result<OpenedStream, String> {
@@ -770,44 +971,41 @@ mod tests {
 
     #[test]
     fn silence_is_zero() {
-        assert_eq!(rms_level(&[0.0; 100]), 0.0);
+        assert_eq!(rms(&[0.0; 100]), 0.0);
+        assert_eq!(meter_level(rms(&[0.0; 100])), 0.0);
     }
 
     #[test]
     fn empty_slice_is_zero() {
-        assert_eq!(rms_level(&[]), 0.0);
+        assert_eq!(rms(&[]), 0.0);
     }
 
     #[test]
-    fn a_quiet_tone_still_produces_a_clearly_visible_level() {
-        // The whole point of the sqrt compression: even fairly quiet input
-        // should already read as a clear, visible movement on the meter,
-        // not a barely-there flicker near the floor.
-        let quiet = vec![0.02; 100];
-        let level = rms_level(&quiet);
-        assert!(
-            level > 0.4 && level < 1.0,
-            "expected a clearly visible but unsaturated level, got {level}"
-        );
+    fn a_quiet_room_reads_as_an_empty_meter() {
+        // Mic self-noise in a quiet room is about -65 dBFS.
+        assert_eq!(meter_level(rms(&[0.0006; 100])), 0.0);
     }
 
     #[test]
-    fn a_loud_tone_clamps_to_one() {
-        let loud = vec![0.9; 100];
-        assert_eq!(rms_level(&loud), 1.0);
+    fn normal_speech_sits_mid_meter_with_room_above() {
+        // -30 dBFS and -20 dBFS: an ordinary and a fairly loud voice.
+        let normal = meter_level(0.0316);
+        let loud = meter_level(0.1);
+        assert!(normal > 0.4 && normal < 0.6, "normal speech at {normal}");
+        assert!(loud > normal + 0.1 && loud < 0.8, "loud speech at {loud}");
     }
 
     #[test]
-    fn louder_input_produces_a_higher_level() {
-        let quiet = vec![0.02; 100];
-        let louder = vec![0.1; 100];
-        assert!(rms_level(&louder) > rms_level(&quiet));
+    fn shouting_fills_the_meter() {
+        assert_eq!(meter_level(rms(&[0.9; 100])), 1.0);
     }
+
     fn facts(requested: Option<&str>, resolved: &str, fallback: bool) -> StreamFacts {
         StreamFacts {
             requested: requested.map(str::to_string),
             resolved: resolved.to_string(),
             fallback,
+            avoid: None,
             invalid: false,
         }
     }
@@ -894,6 +1092,61 @@ mod tests {
     }
 
     #[test]
+    fn a_mic_switched_away_from_isnt_switched_back_to() {
+        let f = StreamFacts {
+            avoid: Some("AirPods".to_string()),
+            ..facts(None, "MacBook Pro Microphone", true)
+        };
+        assert_eq!(
+            rebuild_reason(Some(&f), None, never_called_present, || Some(
+                "AirPods".to_string()
+            )),
+            None,
+            "AirPods are still the default but sent nothing"
+        );
+        assert!(
+            rebuild_reason(Some(&f), None, never_called_present, || Some(
+                "AIRHUG 28".to_string()
+            ))
+            .is_some(),
+            "a new default is tried"
+        );
+    }
+
+    #[test]
+    fn conformer_passes_the_same_format_through() {
+        let mut c = Conformer::new(48_000, 1);
+        let input: Vec<f32> = (0..480).map(|i| i as f32 / 480.0).collect();
+        let out = c.push(&input, 1, 48_000);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn conformer_resamples_across_chunks_without_drift() {
+        // 48 kHz stereo from the new mic into a clip that started at
+        // 24 kHz mono: half as many samples, one channel.
+        let mut c = Conformer::new(24_000, 1);
+        let mut total = 0;
+        for _ in 0..100 {
+            let chunk = vec![0.5f32; 960];
+            let out = c.push(&chunk, 2, 48_000);
+            assert!(out.iter().all(|s| (s - 0.5).abs() < 1e-6));
+            total += out.len();
+        }
+        // 100 chunks x 480 frames at 48 kHz = 1 s = 24000 samples.
+        assert!((total as i64 - 24_000).abs() <= 1, "got {total}");
+    }
+
+    #[test]
+    fn conformer_upsamples_and_duplicates_channels() {
+        let mut c = Conformer::new(48_000, 2);
+        let out = c.push(&[0.0, 1.0], 1, 24_000);
+        // Positions 0, 0.5, 1 (the last one only once the next chunk is
+        // known isn't needed: 1.0 is exactly the last sample).
+        assert_eq!(out, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
     fn status_distinguishes_fallback_from_preferred_and_default() {
         assert_eq!(
             device_status(
@@ -946,7 +1199,7 @@ mod tests {
             None
         );
         assert_eq!(
-            w.observe(0.01, t0 + std::time::Duration::from_secs(2)),
+            w.observe(0.00001, t0 + std::time::Duration::from_secs(2)),
             Some(true)
         );
         assert_eq!(
@@ -955,18 +1208,21 @@ mod tests {
             "warns only once"
         );
         assert_eq!(
-            w.observe(0.4, t0 + std::time::Duration::from_secs(4)),
+            w.observe(0.01, t0 + std::time::Duration::from_secs(4)),
             Some(false)
         );
-        assert_eq!(w.observe(0.4, t0 + std::time::Duration::from_secs(5)), None);
+        assert_eq!(
+            w.observe(0.01, t0 + std::time::Duration::from_secs(5)),
+            None
+        );
     }
 
     #[test]
     fn silence_watch_ignores_a_normal_quiet_room() {
         let t0 = std::time::Instant::now();
         let mut w = SilenceWatch::default();
-        // A real mic's self-noise in a quiet room (~-65 dBFS) reads ~0.1.
-        let room = rms_level(&[0.0006; 512]);
+        // A real mic's self-noise in a quiet room is about -65 dBFS.
+        let room = rms(&[0.0006; 512]);
         for i in 0..100 {
             assert_eq!(
                 w.observe(room, t0 + std::time::Duration::from_millis(i * 50)),
