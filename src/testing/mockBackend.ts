@@ -41,6 +41,8 @@ declare global {
       emit: (event: string, payload?: Json) => Promise<void>;
       calls: Call[];
       state: ReturnType<typeof initialState>;
+      /** Events the page has subscribed to, so a test can wait for one. */
+      listening: Set<string>;
     };
   }
 }
@@ -437,5 +439,16 @@ export function installMockBackend() {
     { shouldMockEvents: true },
   );
 
-  window.__dw = { emit: (event, payload) => emit(event, payload), calls, state };
+  // Note each subscription: the page subscribes in effects after its first
+  // render, and an event a test plays before then would be lost.
+  const listening = new Set<string>();
+  const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (...a: unknown[]) => unknown } })
+    .__TAURI_INTERNALS__;
+  const invokeEvent = internals.invoke;
+  internals.invoke = (cmd, args, options) => {
+    if (cmd === "plugin:event|listen") listening.add((args as { event: string }).event);
+    return invokeEvent(cmd, args, options);
+  };
+
+  window.__dw = { emit: (event, payload) => emit(event, payload), calls, state, listening };
 }

@@ -25,7 +25,13 @@ export async function open(page: Page, window: "widget" | "settings", scenario: 
   await page.goto(`/?window=${window}`);
 }
 
-export function emit(page: Page, event: string, payload?: unknown) {
+// Waits (briefly) for the page to subscribe to `event` first, so an event
+// played right after `open` isn't lost on a slow machine. Some tests play
+// events nothing listens to, so it plays it anyway after the wait.
+export async function emit(page: Page, event: string, payload?: unknown) {
+  await page
+    .waitForFunction((e) => window.__dw?.listening.has(e) ?? false, event, { timeout: 2000 })
+    .catch(() => {});
   return page.evaluate(([e, p]) => window.__dw!.emit(e as string, p), [event, payload] as const);
 }
 

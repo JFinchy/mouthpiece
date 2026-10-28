@@ -61,8 +61,9 @@ test.describe("widget", () => {
     await open(page, "widget");
     await emit(page, "recording-started");
     await emit(page, "mic-silent", "No sound from Jake’s AirPods #2. Is it muted? Switch mics to keep going.");
+    await page.locator("main").hover();
     await page.getByTestId("switch-mic").click();
-    expect(await calls(page, "show_mic_menu")).toHaveLength(1);
+    await expect.poll(() => calls(page, "show_mic_menu")).toHaveLength(1);
 
     // Picked from the menu (or swapped automatically): the warning goes.
     await emit(page, "mic-switched", { from: "Jake’s AirPods #2", to: "MacBook Pro Microphone" });
@@ -84,14 +85,14 @@ test.describe("widget", () => {
     await emit(page, "mic-silent", "No sound from Jake’s AirPods #2.");
     await expect(page.getByTestId("switch-mic")).toBeVisible();
     await page.getByTestId("switch-mic").click();
-    expect(await calls(page, "show_mic_menu")).toHaveLength(1);
+    await expect.poll(() => calls(page, "show_mic_menu")).toHaveLength(1);
   });
 
   for (const style of ["pill", "notch", "minimal", "caption", "detailed", "compact", "stacked"] as const) {
     test(`the ${style} style opens the widget menu on right-click`, async ({ page, consoleErrors: _ }) => {
       await open(page, "widget", { widgetMode: style });
       await page.locator("main").click({ button: "right" });
-      expect(await calls(page, "show_widget_menu")).toHaveLength(1);
+      await expect.poll(() => calls(page, "show_widget_menu")).toHaveLength(1);
     });
   }
 
@@ -102,7 +103,7 @@ test.describe("widget", () => {
     await expect(page.getByTestId("widget-menu")).toBeHidden();
     await page.locator("main").hover();
     await page.getByTestId("widget-menu").click();
-    expect(await calls(page, "show_widget_menu")).toHaveLength(1);
+    await expect.poll(() => calls(page, "show_widget_menu")).toHaveLength(1);
   });
 
   test("choices made in the native menu show in the hover panel", async ({ page, consoleErrors: _ }) => {
@@ -367,8 +368,10 @@ test.describe("widget", () => {
     await expect(fix).toHaveText("Copied · Allow pasting");
     await expect(fix).toHaveAttribute("title", /on the clipboard: press ⌘V/);
     await expect(fix).toHaveAttribute("title", /switch it off and on again/);
+    // Hovering opens the panel, which moves the row: settle it first.
+    await page.locator("main").hover();
     await fix.click();
-    expect(await calls(page, "request_accessibility")).toHaveLength(1);
+    await expect.poll(() => calls(page, "request_accessibility")).toHaveLength(1);
 
     await emit(page, "accessibility-granted");
     await expect(page.getByText("Pasting is on")).toBeVisible();
@@ -380,6 +383,6 @@ test.describe("widget", () => {
     await emit(page, "paste-needs-access");
     await expect(page.getByTestId("widget-setup")).toHaveText("Allow pasting");
     await page.getByTestId("widget-setup").click();
-    expect(await calls(page, "request_accessibility")).toHaveLength(1);
+    await expect.poll(() => calls(page, "request_accessibility")).toHaveLength(1);
   });
 });
