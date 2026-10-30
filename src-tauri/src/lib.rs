@@ -91,7 +91,10 @@ use voice_isolation::{
     get_voice_enrollment_status, start_voice_enrollment, stop_voice_enrollment, VoiceIsolationState,
 };
 use webhook::{get_webhook_url, send_test_webhook, set_webhook_url};
-use widget::{get_widget_mode, set_widget_mode, set_widget_size};
+use widget::{
+    get_widget_mode, get_widget_only_while_dictating, hide_idle_widget, set_widget_mode,
+    set_widget_only_while_dictating, set_widget_size,
+};
 
 /// Shared between the tray builder in `run()` and `recording::toggle_recording`
 /// (which looks the tray back up via `AppHandle::tray_by_id` to swap its icon)
@@ -436,6 +439,9 @@ pub fn run() {
             clear_logs,
             get_widget_mode,
             set_widget_mode,
+            get_widget_only_while_dictating,
+            set_widget_only_while_dictating,
+            hide_idle_widget,
             set_widget_size,
             get_webhook_url,
             set_webhook_url,

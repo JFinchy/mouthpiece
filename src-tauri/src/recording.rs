@@ -262,12 +262,7 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
         );
         *state.active_app.lock().unwrap() = info;
 
-        // `show()` only, not `set_focus()` — stealing keyboard focus made
-        // the paste land in the widget instead of the app being dictated
-        // into.
-        if let Some(window) = main_thread_app.get_webview_window("widget") {
-            let _ = window.show();
-        }
+        crate::widget::show(&main_thread_app);
     });
 
     let _ = app.emit("recording-started", ());

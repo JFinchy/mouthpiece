@@ -179,4 +179,12 @@ test.describe("settings", () => {
     await expect.poll(() => calls(page, "set_widget_mode")).toEqual([{ mode: "caption" }]);
     await expect(page.getByTestId("style-caption")).toHaveAttribute("aria-checked", "true");
   });
+
+  test("the widget can be set to show only while dictating", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    const toggle = page.getByRole("checkbox", { name: "Show the widget only while dictating" });
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect.poll(() => calls(page, "set_widget_only_while_dictating")).toEqual([{ enabled: true }]);
+  });
 });

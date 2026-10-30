@@ -74,6 +74,11 @@ pub struct AppConfig {
     /// active — see widget.rs.
     #[serde(default)]
     pub widget_mode: crate::widget::WidgetMode,
+    /// When true, the widget appears only for a dictation (or meeting) and
+    /// hides itself once it's done, like most dictation apps. When false
+    /// it stays on screen.
+    #[serde(default)]
+    pub widget_only_while_dictating: bool,
     /// When true, each pasted dictation gets a one-line LLM-generated
     /// summary attached in History (see `llm::summarize_for_journal`),
     /// turning the raw transcript log into a scannable work journal. Off
@@ -203,6 +208,7 @@ impl Default for AppConfig {
             widget_position: None,
             copy_only: false,
             widget_mode: crate::widget::WidgetMode::default(),
+            widget_only_while_dictating: false,
             journal_enabled: false,
             meeting_speakers: 0,
             isolated_voice_enabled: false,

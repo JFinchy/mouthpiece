@@ -378,6 +378,13 @@ function WidgetView() {
   // real backend state (isolated_voice_enabled / the one-shot mode
   // override), not local-only UI state.
   const [flyoutHovered, setFlyoutHovered] = useState(false);
+  // "Show the widget only while dictating" (Settings > General): once a
+  // dictation is over, the widget hides itself. `hideWhenDone` is set by a
+  // dictation (or by turning the setting on), so a widget opened from the
+  // menu bar stays until the next one.
+  const [onlyWhileDictating, setOnlyWhileDictating] = useState(false);
+  const hideWhenDone = useRef(false);
+  const [pointerInside, setPointerInside] = useState(false);
   // A discarded recording (or cancelled paste) can be brought back for a
   // few seconds; see discard.rs.
   const [undoOffer, setUndoOffer] = useState(false);
@@ -841,6 +848,46 @@ function WidgetView() {
             : STATUS_LABEL.idle;
   const flashing = flashVisible && message !== null;
   const showSetup = phase === "idle" && !flashing && (needsAccess || setupProblem !== null);
+
+  useEffect(() => {
+    invoke<boolean>("get_widget_only_while_dictating")
+      .then(setOnlyWhileDictating)
+      .catch((err) => console.error("get_widget_only_while_dictating failed:", err));
+    const unlisten = listen<boolean>("widget-only-while-dictating-changed", (e) => {
+      hideWhenDone.current = e.payload;
+      setOnlyWhileDictating(e.payload);
+    });
+    const root = document.documentElement;
+    const enter = () => setPointerInside(true);
+    const leave = () => setPointerInside(false);
+    root.addEventListener("mouseenter", enter);
+    root.addEventListener("mouseleave", leave);
+    return () => {
+      unlisten.then((f) => f());
+      root.removeEventListener("mouseenter", enter);
+      root.removeEventListener("mouseleave", leave);
+    };
+  }, []);
+  useEffect(() => {
+    if (phase !== "idle") hideWhenDone.current = true;
+  }, [phase]);
+  // A paste hides the widget almost at once; an error or note stays up
+  // until it's had its time, as do the undo offer, "Allow pasting", and
+  // anything the pointer is resting on.
+  const justPasted = flashing && !isError && message === "Pasted";
+  const dictationOver =
+    phase === "idle" && (!flashing || justPasted) && !undoOffer && !needsAccess && !pointerInside;
+  useEffect(() => {
+    if (!onlyWhileDictating || !dictationOver || !hideWhenDone.current) return;
+    const timer = setTimeout(
+      () => {
+        hideWhenDone.current = false;
+        invoke("hide_idle_widget").catch((err) => console.error("hide_idle_widget failed:", err));
+      },
+      justPasted ? 600 : 300,
+    );
+    return () => clearTimeout(timer);
+  }, [onlyWhileDictating, dictationOver, justPasted]);
   // Pasting is fixed right here (macOS's prompt, then its Accessibility
   // list); anything else opens the setup checklist in Settings.
   const pasteProblem = needsAccess || setupProblem?.id === "paste";

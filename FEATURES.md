@@ -359,6 +359,13 @@ built yet.
   mode, next dictation's mode, widget style, Settings. Native, so it draws
   outside the widget instead of resizing it. Compact and Stacked keep the
   hover panel too.
+- **Show the widget only while dictating** (Settings > Dictation >
+  General, off by default) — the widget appears when a dictation or
+  meeting starts and hides itself once it's over: 0.6 s after a paste,
+  after an error or note has had its 6 s, never while the pointer is on
+  it, the undo offer is up, or it's asking to allow pasting. The menu
+  bar's Show/Hide Widget still brings it up by hand, and it stays until
+  the next dictation ends.
 - **Warm model pre-load on startup**, so the first real recording doesn't
   pay for Metal shader compilation during the user's first
   "transcribing…".

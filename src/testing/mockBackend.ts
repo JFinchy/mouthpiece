@@ -20,6 +20,8 @@ export type Scenario = {
   /// Commands that reject, with this message.
   failing?: Record<string, string>;
   widgetMode?: "minimal" | "compact" | "detailed" | "pill" | "notch" | "caption" | "stacked";
+  /// Settings > General: "Show the widget only while dictating".
+  onlyWhileDictating?: boolean;
   layout?: "sidebar" | "chain";
   insights?: Json;
   /// The project Settings reports as last detected.
@@ -62,6 +64,7 @@ function initialState(scenario: Scenario) {
     selectedDevice: null as string | null,
     deviceStatus: scenario.deviceStatus ?? { kind: "system_default", using: devices[0] },
     widgetMode: scenario.widgetMode ?? "compact",
+    onlyWhileDictating: scenario.onlyWhileDictating ?? false,
     layout: scenario.layout ?? "sidebar",
     theme: "terminal",
     shortcut: { meta: true, ctrl: false, alt: false, shift: true, code: "Space" },
@@ -189,6 +192,13 @@ export function installMockBackend() {
       return null;
     },
     set_widget_size: () => null,
+    get_widget_only_while_dictating: () => state.onlyWhileDictating,
+    set_widget_only_while_dictating: (args) => {
+      state.onlyWhileDictating = args.enabled as boolean;
+      void emit("widget-only-while-dictating-changed", state.onlyWhileDictating);
+      return null;
+    },
+    hide_idle_widget: () => null,
     open_settings: () => null,
     get_theme: () => state.theme,
     set_theme: setter("theme", "theme"),

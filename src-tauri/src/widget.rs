@@ -151,6 +151,46 @@ pub fn set_widget_size(app: AppHandle, width: f64, height: f64) {
     apply_size(&app, width, height);
 }
 
+/// Shows the widget for a dictation or meeting starting. `show()` only,
+/// never `set_focus()`: stealing keyboard focus made the paste land in the
+/// widget instead of the app being dictated into.
+pub fn show(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("widget") {
+        let _ = window.show();
+    }
+}
+
+#[tauri::command]
+pub fn get_widget_only_while_dictating(app: AppHandle) -> bool {
+    crate::config::load(&app).widget_only_while_dictating
+}
+
+/// Turning it off brings the widget back; turning it on lets the widget
+/// hide itself once it's idle (it knows whether a dictation is running).
+#[tauri::command]
+pub fn set_widget_only_while_dictating(app: AppHandle, enabled: bool) {
+    let mut cfg = crate::config::load(&app);
+    cfg.widget_only_while_dictating = enabled;
+    let _ = crate::config::save(&app, &cfg);
+    if !enabled {
+        show(&app);
+    }
+    let _ = app.emit("widget-only-while-dictating-changed", enabled);
+}
+
+/// Called by the widget once a dictation is over (pasted, or its message
+/// has been read). Does nothing unless the widget is set to show only
+/// while dictating.
+#[tauri::command]
+pub fn hide_idle_widget(app: AppHandle) {
+    if !crate::config::load(&app).widget_only_while_dictating {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("widget") {
+        let _ = window.hide();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,6 +17,7 @@ place with a one-line note.
 
 ## Important
 
+- [ ] Show the widget only while dictating (appears on the shortcut, hides after the paste) - see `widget-only-while-dictating.md`
 - [ ] Mic fallback skips Bluetooth, dead mic swapped mid-recording, Switch mic menu, decibel level meter, widget menu in every style - see `mic-fallback-and-switch.md`
 - [ ] Dictation accuracy fixes (casing, lists, backtrack, capitalization) - see `dictation-accuracy.md`
 - [ ] Mic visibility, quick switching, "no sound" warnings - see `mic-visibility-and-silence.md`

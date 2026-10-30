@@ -385,4 +385,36 @@ test.describe("widget", () => {
     await page.getByTestId("widget-setup").click();
     await expect.poll(() => calls(page, "request_accessibility")).toHaveLength(1);
   });
+
+  test("set to show only while dictating, the widget hides once the words are pasted", async ({
+    page,
+    consoleErrors: _,
+  }) => {
+    await open(page, "widget", { onlyWhileDictating: true });
+    await emit(page, "recording-started");
+    await emit(page, "recording-stopped", "/tmp/x.wav");
+    await page.waitForTimeout(800);
+    expect(await calls(page, "hide_idle_widget")).toHaveLength(0);
+
+    await emit(page, "transcript-ready", "Ship it.");
+    await expect.poll(() => calls(page, "hide_idle_widget")).toHaveLength(1);
+  });
+
+  test("an error stays up before the widget hides, and it stays put when the setting is off", async ({
+    page,
+    consoleErrors: _,
+  }) => {
+    await open(page, "widget", { onlyWhileDictating: true });
+    await emit(page, "recording-started");
+    await emit(page, "transcript-error", "no speech detected");
+    await page.waitForTimeout(1500);
+    expect(await calls(page, "hide_idle_widget")).toHaveLength(0);
+    await expect.poll(() => calls(page, "hide_idle_widget"), { timeout: 8000 }).toHaveLength(1);
+
+    await emit(page, "widget-only-while-dictating-changed", false);
+    await emit(page, "recording-started");
+    await emit(page, "transcript-ready", "Ship it.");
+    await page.waitForTimeout(1200);
+    expect(await calls(page, "hide_idle_widget")).toHaveLength(1);
+  });
 });

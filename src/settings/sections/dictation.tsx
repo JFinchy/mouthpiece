@@ -276,13 +276,19 @@ export function WidgetStylePicker({ value, onChange }: { value: WidgetMode; onCh
 export function GeneralSection() {
   const [autostart, setAutostart] = useState(false);
   const [widgetMode, setWidgetModeState] = useState<WidgetMode>("compact");
+  const [onlyWhileDictating, setOnlyWhileDictating] = useState(false);
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    Promise.all([invoke<boolean>("get_autostart_enabled"), invoke<WidgetMode>("get_widget_mode")])
-      .then(([autostartValue, widgetModeValue]) => {
+    Promise.all([
+      invoke<boolean>("get_autostart_enabled"),
+      invoke<WidgetMode>("get_widget_mode"),
+      invoke<boolean>("get_widget_only_while_dictating"),
+    ])
+      .then(([autostartValue, widgetModeValue, onlyWhileDictatingValue]) => {
         setAutostart(autostartValue);
         setWidgetModeState(widgetModeValue);
+        setOnlyWhileDictating(onlyWhileDictatingValue);
       })
       .catch((err) => notifyError("Couldn't load general settings", err))
       .finally(() => setChecked(true));
@@ -298,6 +304,14 @@ export function GeneralSection() {
     invoke("set_autostart_enabled", { enabled }).catch((err) => {
       notifyError("set_autostart_enabled", err);
       setAutostart(!enabled);
+    });
+  }
+
+  function toggleOnlyWhileDictating(enabled: boolean) {
+    setOnlyWhileDictating(enabled);
+    invoke("set_widget_only_while_dictating", { enabled }).catch((err) => {
+      notifyError("set_widget_only_while_dictating", err);
+      setOnlyWhileDictating(!enabled);
     });
   }
 
@@ -325,6 +339,21 @@ export function GeneralSection() {
               onChange={(e) => toggleAutostart(e.target.checked)}
             />
             Launch Mouthpiece at login
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-xs mt-0.5"
+              checked={onlyWhileDictating}
+              onChange={(e) => toggleOnlyWhileDictating(e.target.checked)}
+            />
+            <span className="flex flex-col gap-0.5">
+              Show the widget only while dictating
+              <span className="text-[11px] opacity-60">
+                It appears when you press the shortcut and hides once your words are pasted. Show it any
+                time from the menu bar icon.
+              </span>
+            </span>
           </label>
           <div className="flex flex-col gap-1.5">
             <span className="text-xs">Widget style</span>

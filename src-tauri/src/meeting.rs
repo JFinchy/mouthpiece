@@ -362,6 +362,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     });
     crate::applog!("meeting: recording {id}");
     crate::refresh_tray_indicator(app);
+    crate::widget::show(app);
     let _ = app.emit("recording-started", ());
     announce(app);
 
