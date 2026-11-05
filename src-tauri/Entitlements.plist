@@ -1,9 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Only takes effect under the hardened runtime, which notarization
-  requires; there, an app without audio-input gets a silent microphone.
-  Harmless with today's ad-hoc signing (hardenedRuntime is off).
+  Entitlements for the hardened runtime (tauri.conf.json:
+  bundle.macOS.hardenedRuntime). The hardened runtime stops other code on
+  the Mac from injecting into Mouthpiece (DYLD_INSERT_LIBRARIES, unsigned
+  dylibs, debugger attach) and riding on its Microphone, Accessibility and
+  system-audio permissions.
+
+  Keep this list minimal; each key re-opens something the runtime closes:
+  - audio-input: required, or the hardened app gets a silent microphone.
+  - No allow-jit / allow-unsigned-executable-memory: nothing in-process
+    JITs (WebKit's JIT runs in Apple's own WebContent process; ONNX
+    Runtime, whisper.cpp and Metal don't need it).
+  - No disable-library-validation: the binary links only system
+    libraries (ONNX Runtime and whisper.cpp are static), so there are no
+    third-party dylibs to validate. If a bundled .dylib/.framework is ever
+    added it must be signed with the same identity, or loading fails.
+  - No allow-dyld-environment-variables / get-task-allow: those are the
+    injection paths this exists to close.
+
+  The release workflow fails if the built app lacks the runtime flag or
+  this entitlement.
 -->
 <plist version="1.0">
 <dict>

@@ -15,6 +15,7 @@ place with a one-line note.
 - [ ] Modes: per-mode model and LLM refinement - see `modes-rework.md`
 - [ ] Auto-update from a published release - see `auto-update.md`
 - [ ] Dictation deep links require the install token; webhook URLs kept out of logs - see `deep-link-token.md`
+- [ ] Hardened runtime on release builds (mic, models, taps, updater still work) - see `hardened-runtime.md`
 
 ## Important
 

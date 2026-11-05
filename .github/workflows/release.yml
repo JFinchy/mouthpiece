@@ -91,6 +91,18 @@ jobs:
           fi
           codesign -dv "$app" 2>&1 | grep -q "Sealed Resources version" \
             || { echo "app bundle resources aren't sealed"; exit 1; }
+          # Hardened runtime: blocks DYLD injection into an app that holds
+          # Microphone and Accessibility. Under it, a missing audio-input
+          # entitlement means a silently dead microphone.
+          codesign -dv "$app" 2>&1 | grep -Eq "flags=0x[0-9a-f]*\(.*runtime.*\)" \
+            || { echo "the app isn't signed with the hardened runtime"; exit 1; }
+          codesign -d --entitlements - --xml "$app" 2>/dev/null | grep -q "com.apple.security.device.audio-input" \
+            || { echo "the app has no audio-input entitlement"; exit 1; }
+          # Nothing should depend on a third-party dylib: there's no
+          # disable-library-validation entitlement to let one load.
+          if otool -L "$app/Contents/MacOS/"* | tail -n +2 | grep -vE "^\s*(/System/|/usr/lib/)"; then
+            echo "the binary links a non-system library (above); sign it or rethink hardenedRuntime"; exit 1
+          fi
           # Without this key macOS never asks for the microphone and the app
           # records silence (src-tauri/Info.plist).
           /usr/libexec/PlistBuddy -c "Print NSMicrophoneUsageDescription" "$app/Contents/Info.plist" \
