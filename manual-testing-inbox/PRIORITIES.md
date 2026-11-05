@@ -14,6 +14,8 @@ place with a one-line note.
 - [ ] Voice commands (punctuation, lists, press enter) - see `voice-commands.md`
 - [ ] Modes: per-mode model and LLM refinement - see `modes-rework.md`
 - [ ] Auto-update from a published release - see `auto-update.md`
+- [ ] Dictation deep links require the install token; webhook URLs kept out of logs - see `deep-link-token.md`
+- [ ] Hardened runtime on release builds (mic, models, taps, updater still work) - see `hardened-runtime.md`
 
 ## Important
 
@@ -30,12 +32,14 @@ place with a one-line note.
 - [ ] History search + reprocessing - see `history-search-reprocess.md`
 - [ ] History keeps the original + learning from corrections - see `history-original-and-corrections.md`
 - [ ] Output webhook - see `output-webhook.md`
+- [ ] LLMs from LM Studio / llama.cpp / Jan, and adding a .gguf file to Ollama - see `local-llm-servers-and-model-files.md`
 - [ ] Agent prompt voice commands (send it, attach the error, scratch that) - see `agent-prompt-voice-commands.md`
 - [ ] Transcribe while you talk (chunked transcription, silence skipping) - see `transcribe-while-talking.md`
 - [ ] Reply to a waiting coding agent by voice (hook, pill, reply shortcut, focus hop) - see `agent-reply.md`
 - [ ] Privacy: History lock (Touch ID), transcript-free logs, no Ollama cloud models - see `privacy-lock.md`
 - [ ] Discard with Esc (and ⇧Esc undo), seven widget styles incl. Notch - see `discard-and-styles.md`
 - [ ] Meeting mode: record a meeting, transcript split by speaker - see `meeting-mode.md`
+- [ ] Meeting mode Phase 2: dual-channel system audio (`CATapDescription`), speakerphone echo gate, push-to-talk coexistence, local call auto-detect/auto-stop, and offline active-speaker naming via Accessibility - see `meeting-phase2.md`
 
 ## Minor
 

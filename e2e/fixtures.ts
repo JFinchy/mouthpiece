@@ -23,6 +23,9 @@ export async function open(page: Page, window: "widget" | "settings", scenario: 
     window.__DW_SCENARIO__ = s;
   }, scenario);
   await page.goto(`/?window=${window}`);
+  // The mock backend installs `window.__dw` once the app's modules load;
+  // tests that touch it right after `open` would otherwise race that.
+  await page.waitForFunction(() => window.__dw !== undefined);
 }
 
 // Waits (briefly) for the page to subscribe to `event` first, so an event

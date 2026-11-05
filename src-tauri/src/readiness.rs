@@ -61,6 +61,9 @@ pub struct Facts {
     pub llm_models_needed: Vec<String>,
     /// Models Ollama has pulled, or `None` if Ollama isn't reachable.
     pub llm_models_pulled: Option<Vec<String>>,
+    /// Models running local servers (LM Studio, llama.cpp, Jan) offer, as
+    /// stored names (`lmstudio::...`).
+    pub llm_server_models: Vec<String>,
 }
 
 pub fn assess(facts: &Facts) -> Vec<Check> {
@@ -146,41 +149,7 @@ pub fn assess(facts: &Facts) -> Vec<Check> {
     checks.push(mic_access_check(facts));
 
     if !facts.llm_models_needed.is_empty() {
-        checks.push(match &facts.llm_models_pulled {
-            None => Check {
-                id: "llm",
-                level: Level::Warn,
-                title: "Ollama isn't running".into(),
-                detail: "Dictation still works, but without LLM cleanup until Ollama is running."
-                    .into(),
-                fix: Some(Fix::StartOllama),
-            },
-            Some(pulled) => {
-                let missing: Vec<&str> = facts
-                    .llm_models_needed
-                    .iter()
-                    .filter(|m| !pulled.iter().any(|p| p == *m))
-                    .map(String::as_str)
-                    .collect();
-                if missing.is_empty() {
-                    ok(
-                        "llm",
-                        "LLM cleanup ready",
-                        &facts.llm_models_needed.join(", "),
-                    )
-                } else {
-                    Check {
-                        id: "llm",
-                        level: Level::Warn,
-                        title: format!("Download {}", missing.join(", ")),
-                        detail: "A mode refines with this model, but Ollama doesn't have it yet; \
-                                 those dictations paste without cleanup."
-                            .into(),
-                        fix: Some(Fix::PullLlmModel),
-                    }
-                }
-            }
-        });
+        checks.push(llm_check(facts));
     }
 
     checks
@@ -276,14 +245,97 @@ pub fn get_readiness(app: AppHandle) -> Vec<Check> {
         device: recording.audio.device_status(),
         mic_access: crate::mic_permission::status(),
         mic_usage_description: crate::mic_permission::usage_description_present(),
-        llm_models_pulled: if llm_models_needed.is_empty() {
-            None
-        } else {
+        llm_models_pulled: if llm_models_needed
+            .iter()
+            .any(|m| crate::local_llm::parse(m).is_none())
+        {
             crate::llm::ollama_models()
+        } else {
+            None
+        },
+        llm_server_models: if llm_models_needed
+            .iter()
+            .any(|m| crate::local_llm::parse(m).is_some())
+        {
+            crate::local_llm::reachable()
+                .iter()
+                .flat_map(|f| {
+                    f.models
+                        .iter()
+                        .map(|m| crate::local_llm::model_id(f.server, m))
+                })
+                .collect()
+        } else {
+            vec![]
         },
         llm_models_needed,
     };
     assess(&facts)
+}
+
+/// LLM cleanup: Ollama models need Ollama running and the model pulled;
+/// models from another local server need that server running.
+fn llm_check(facts: &Facts) -> Check {
+    let (on_server, on_ollama): (Vec<&String>, Vec<&String>) = facts
+        .llm_models_needed
+        .iter()
+        .partition(|m| crate::local_llm::parse(m).is_some());
+    if !on_ollama.is_empty() {
+        match &facts.llm_models_pulled {
+            None => {
+                return Check {
+                    id: "llm",
+                    level: Level::Warn,
+                    title: "Ollama isn't running".into(),
+                    detail:
+                        "Dictation still works, but without LLM cleanup until Ollama is running."
+                            .into(),
+                    fix: Some(Fix::StartOllama),
+                }
+            }
+            Some(pulled) => {
+                let missing: Vec<&str> = on_ollama
+                    .iter()
+                    .filter(|m| !pulled.iter().any(|p| p == **m))
+                    .map(|m| m.as_str())
+                    .collect();
+                if !missing.is_empty() {
+                    return Check {
+                        id: "llm",
+                        level: Level::Warn,
+                        title: format!("Download {}", missing.join(", ")),
+                        detail: "A mode refines with this model, but Ollama doesn't have it yet; \
+                                 those dictations paste without cleanup."
+                            .into(),
+                        fix: Some(Fix::PullLlmModel),
+                    };
+                }
+            }
+        }
+    }
+    if let Some((server, model)) = on_server
+        .iter()
+        .filter(|m| !facts.llm_server_models.contains(m))
+        .find_map(|m| crate::local_llm::parse(m))
+    {
+        return Check {
+            id: "llm",
+            level: Level::Warn,
+            title: format!("{} isn't running", server.name),
+            detail: format!(
+                "A mode refines with {model} from {}. Start its local server with that model \
+                 available; until then those dictations paste without cleanup.",
+                server.name
+            ),
+            fix: None,
+        };
+    }
+    let names: Vec<String> = facts
+        .llm_models_needed
+        .iter()
+        .map(|m| crate::local_llm::label(m).unwrap_or_else(|| m.clone()))
+        .collect();
+    ok("llm", "LLM cleanup ready", &names.join(", "))
 }
 
 /// Opens System Settings at the Accessibility list, where the user flips
@@ -348,6 +400,7 @@ mod tests {
             mic_usage_description: true,
             llm_models_needed: vec![],
             llm_models_pulled: None,
+            llm_server_models: vec![],
         }
     }
 
@@ -460,5 +513,28 @@ mod tests {
         assert_eq!(needs(None).fix, Some(Fix::StartOllama));
         assert_eq!(needs(Some(vec![])).fix, Some(Fix::PullLlmModel));
         assert_eq!(needs(Some(vec!["qwen3.5:4b".into()])).level, Level::Ok);
+    }
+
+    #[test]
+    fn llm_check_for_a_local_server_model_ignores_ollama() {
+        let needs = |server_models: Vec<String>| {
+            assess(&Facts {
+                llm_models_needed: vec!["lmstudio::google/gemma-3-4b".into()],
+                // Ollama down: irrelevant to an LM Studio model.
+                llm_models_pulled: None,
+                llm_server_models: server_models,
+                ..healthy()
+            })
+            .into_iter()
+            .find(|c| c.id == "llm")
+            .unwrap()
+        };
+        let down = needs(vec![]);
+        assert_eq!(down.level, Level::Warn);
+        assert_eq!(down.title, "LM Studio isn't running");
+        assert_eq!(down.fix, None);
+        let up = needs(vec!["lmstudio::google/gemma-3-4b".into()]);
+        assert_eq!(up.level, Level::Ok);
+        assert_eq!(up.detail, "google/gemma-3-4b · LM Studio");
     }
 }

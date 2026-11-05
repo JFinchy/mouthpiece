@@ -31,9 +31,13 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 const SEGMENTATION_MODEL: &str = "pyannote_segmentation_3_0.onnx";
-/// A forgotten meeting stops itself rather than filling the disk (about
-/// 115 MB of audio per hour).
-const MAX_DURATION: Duration = Duration::from_secs(4 * 60 * 60);
+/// Meetings stop themselves at 2.5 hours; the user starts a new one to keep
+/// going. This bounds the disk (about 230 MB of stereo audio per hour) and,
+/// more importantly, transcription memory: both channels are held in RAM as
+/// f32 while diarizing and transcribing (about 1.15 GB at the cap).
+const MAX_DURATION: Duration = Duration::from_secs(150 * 60);
+/// How long before `MAX_DURATION` the widget warns that the meeting will stop.
+const LIMIT_WARNING: Duration = Duration::from_secs(10 * 60);
 /// Shorter than this and there's nothing worth separating.
 const MIN_SECONDS: f32 = 2.0;
 /// One speaker's segments closer together than this become one turn.
@@ -66,12 +70,17 @@ pub struct MeetingState {
     /// One transcript at a time: Whisper and the diarization models are
     /// heavy, and a second meeting can wait its turn.
     processing: Mutex<()>,
+    /// Tracks consecutive call-detection polls and user dismissals so the
+    /// widget can offer "Record <App>?" and "Call ended · Stop?".
+    auto_detect: Mutex<crate::meeting_detect::AutoDetectTracker>,
 }
 
 struct Recording {
     id: String,
     started_ms: u64,
     writer: std::thread::JoinHandle<Result<(), String>>,
+    system_tap: Option<crate::system_audio::SystemAudioTap>,
+    speaker_poller: Option<crate::speaker_poller::SpeakerPollerHandle>,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq)]
@@ -95,6 +104,9 @@ pub struct MeetingStatus {
 pub struct RecordingStatus {
     pub id: String,
     pub started_ms: u64,
+    /// The meeting stops itself this long after `started_ms`; the widget
+    /// counts down to it once `LIMIT_WARNING` remains.
+    pub limit_ms: u64,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq)]
@@ -232,6 +244,14 @@ impl To16k {
         }
     }
 
+    /// Frames (at 16 kHz) buffered in the pending partial block.
+    fn pending_16k(&self) -> usize {
+        if self.rate == 0 {
+            return 0;
+        }
+        (self.pending.len() as u64 * WHISPER_SAMPLE_RATE as u64 / self.rate as u64) as usize
+    }
+
     fn finish(&mut self, out: &mut Vec<f32>) {
         if !self.pending.is_empty() && self.rate != 0 {
             out.extend(resample_linear(
@@ -279,9 +299,166 @@ fn write_meeting(file: std::fs::File, chunks: Receiver<AudioChunk>) -> Result<()
     writer.finalize().map_err(|e| e.to_string())
 }
 
+/// Writes a 2-channel 16 kHz WAV (`Left = Mic`, `Right = System`).
+///
+/// The mic stream is the master clock. Each stream's position is measured
+/// in 16 kHz frames including `To16k`'s pending partial block, so 100 ms
+/// block-boundary jitter never splices zeros into either channel.
+///
+/// Gaps are handled by aligning the two streams' *ends* (both chunks arrived
+/// "now") whenever a stream resumes:
+/// - System tap late to start, stalled, or restarted by its watchdog: mic
+///   frames beyond `JITTER_TOLERANCE` are written against silence, and when
+///   system audio resumes, the remaining unpaired mic backlog is also
+///   written against silence, so the new system audio pairs with the mic
+///   audio captured at the same moment. Without this, a 200 ms startup
+///   offset persisted for the whole meeting and pushed real speakerphone
+///   echo outside the echo gate's lag window.
+/// - Mic stalled while the call keeps playing: system audio is written
+///   against a silent mic instead of piling up unbounded in memory and then
+///   being thrown away.
+pub fn write_meeting_stereo(
+    file: std::fs::File,
+    mic_chunks: Receiver<AudioChunk>,
+    sys_chunks: Receiver<AudioChunk>,
+) -> Result<(), String> {
+    use std::sync::mpsc::RecvTimeoutError;
+    const JITTER_TOLERANCE: usize = (WHISPER_SAMPLE_RATE as usize) / 5; // 200 ms
+    const MAX_SYS_LOOKAHEAD: usize = (WHISPER_SAMPLE_RATE as usize) / 2; // 500 ms
+    const MIC_STALL: Duration = Duration::from_millis(300);
+    const POLL: Duration = Duration::from_millis(100);
+
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: WHISPER_SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer =
+        hound::WavWriter::new(std::io::BufWriter::new(file), spec).map_err(|e| e.to_string())?;
+    let mut mic_to16k = To16k::default();
+    let mut sys_to16k = To16k::default();
+    let mut mic_buf: Vec<f32> = Vec::new();
+    let mut sys_buf: Vec<f32> = Vec::new();
+    let mut last_flush = Instant::now();
+    let mut last_mic = Instant::now();
+    // The system stream hasn't started yet counts as stalled.
+    let mut sys_stalled = true;
+    let mut mic_stalled = false;
+
+    let write_frames = |mic_slice: &[f32],
+                        sys_slice: &[f32],
+                        count: usize,
+                        writer: &mut hound::WavWriter<_>|
+     -> Result<(), String> {
+        for i in 0..count {
+            let m = mic_slice.get(i).copied().unwrap_or(0.0);
+            let s = sys_slice.get(i).copied().unwrap_or(0.0);
+            writer
+                .write_sample((m.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .map_err(|e| e.to_string())?;
+            writer
+                .write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    };
+
+    loop {
+        let mut mic_arrived = false;
+        match mic_chunks.recv_timeout(POLL) {
+            Ok(chunk) => {
+                mic_to16k.push(&chunk, &mut mic_buf);
+                mic_arrived = true;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        while let Ok(more) = mic_chunks.try_recv() {
+            mic_to16k.push(&more, &mut mic_buf);
+            mic_arrived = true;
+        }
+        let mut sys_arrived = false;
+        while let Ok(chunk) = sys_chunks.try_recv() {
+            sys_to16k.push(&chunk, &mut sys_buf);
+            sys_arrived = true;
+        }
+        if mic_arrived {
+            last_mic = Instant::now();
+        }
+        let mic_end = mic_buf.len() + mic_to16k.pending_16k();
+        let sys_end = sys_buf.len() + sys_to16k.pending_16k();
+
+        // System resumed after a gap: write the mic backlog that predates it
+        // against silence so both streams' ends line up.
+        if sys_arrived && sys_stalled {
+            let pad = mic_end.saturating_sub(sys_end).min(mic_buf.len());
+            write_frames(&mic_buf[..pad], &[], pad, &mut writer)?;
+            mic_buf.drain(..pad);
+            sys_stalled = false;
+        }
+        // Mic resumed after a stall: same, the other way round.
+        if mic_arrived && mic_stalled {
+            let pad = sys_end.saturating_sub(mic_end).min(sys_buf.len());
+            write_frames(&[], &sys_buf[..pad], pad, &mut writer)?;
+            sys_buf.drain(..pad);
+            mic_stalled = false;
+        }
+
+        // Pair everything available on both channels.
+        let common = mic_buf.len().min(sys_buf.len());
+        if common > 0 {
+            write_frames(&mic_buf[..common], &sys_buf[..common], common, &mut writer)?;
+            mic_buf.drain(..common);
+            sys_buf.drain(..common);
+        }
+
+        if mic_buf.len() > JITTER_TOLERANCE {
+            // System tap silent/stalled: keep the file advancing.
+            let pad = mic_buf.len() - JITTER_TOLERANCE;
+            write_frames(&mic_buf[..pad], &[], pad, &mut writer)?;
+            mic_buf.drain(..pad);
+            sys_stalled = true;
+        }
+
+        if last_mic.elapsed() >= MIC_STALL {
+            // Mic stalled (device gone, profile switch) but the call goes on.
+            if !sys_buf.is_empty() {
+                let n = sys_buf.len();
+                write_frames(&[], &sys_buf, n, &mut writer)?;
+                sys_buf.clear();
+            }
+            mic_stalled = true;
+        } else if sys_buf.len() > MAX_SYS_LOOKAHEAD {
+            // Device clock skew: the mic is the master clock, so drop the
+            // oldest excess system audio.
+            let drop_count = sys_buf.len() - MAX_SYS_LOOKAHEAD;
+            sys_buf.drain(..drop_count);
+        }
+
+        if last_flush.elapsed() >= Duration::from_secs(5) {
+            // Rewrites the header too, so the file is valid up to here.
+            writer.flush().map_err(|e| e.to_string())?;
+            last_flush = Instant::now();
+        }
+    }
+
+    while let Ok(chunk) = sys_chunks.try_recv() {
+        sys_to16k.push(&chunk, &mut sys_buf);
+    }
+    mic_to16k.finish(&mut mic_buf);
+    sys_to16k.finish(&mut sys_buf);
+    let tail = mic_buf.len().max(sys_buf.len());
+    if tail > 0 {
+        write_frames(&mic_buf, &sys_buf, tail, &mut writer)?;
+    }
+    writer.finalize().map_err(|e| e.to_string())
+}
+
 pub fn status(app: &AppHandle) -> MeetingStatus {
     let state = app.state::<MeetingState>();
     let recording = lock(&state.recording).as_ref().map(|r| RecordingStatus {
+        limit_ms: MAX_DURATION.as_millis() as u64,
         id: r.id.clone(),
         started_ms: r.started_ms,
     });
@@ -307,6 +484,18 @@ fn set_progress(app: &AppHandle, progress: Option<Progress>) {
 pub fn is_recording(app: &AppHandle) -> bool {
     app.try_state::<MeetingState>()
         .is_some_and(|s| lock(&s.recording).is_some())
+}
+
+/// Current RMS level of the system audio tap while a meeting is recording,
+/// or 0.0 if no system tap is active.
+pub fn current_system_audio_level(app: &AppHandle) -> f32 {
+    app.try_state::<MeetingState>()
+        .and_then(|s| {
+            lock(&s.recording)
+                .as_ref()
+                .and_then(|r| r.system_tap.as_ref().map(|t| t.current_level()))
+        })
+        .unwrap_or(0.0)
 }
 
 /// Adds a meeting to the transcription queue; false if it's already there.
@@ -352,18 +541,44 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         }
     };
 
-    let (tx, rx) = mpsc::channel();
-    let writer = std::thread::spawn(move || write_meeting(file, rx));
-    recording_state.audio.set_meeting_tap(Some(tx));
+    let started_instant = Instant::now();
+    let (mic_tx, mic_rx) = mpsc::channel();
+    let (sys_tx, sys_rx) = mpsc::channel();
+
+    // Attach the mic tap first so mic and system chunks begin accumulating at
+    // the same instant.
+    recording_state.audio.set_meeting_tap(Some(mic_tx));
+
+    // Try starting the macOS 14.4+ CoreAudio Process Tap for dual-channel
+    // capture (Left = Mic, Right = System). Fall back to mono mic-only if
+    // unavailable or denied.
+    let (system_tap, writer) = match crate::system_audio::SystemAudioTap::start(sys_tx) {
+        Ok(tap) => {
+            let writer = std::thread::spawn(move || write_meeting_stereo(file, mic_rx, sys_rx));
+            (Some(tap), writer)
+        }
+        Err(reason) => {
+            crate::applog!("meeting: system audio tap unavailable ({reason}); recording mic only");
+            let writer = std::thread::spawn(move || write_meeting(file, mic_rx));
+            (None, writer)
+        }
+    };
+
+    let speaker_poller = Some(crate::speaker_poller::SpeakerPollerHandle::start(
+        started_instant,
+    ));
+
     *lock(&app.state::<MeetingState>().recording) = Some(Recording {
         id: id.clone(),
         started_ms: now_ms(),
         writer,
+        system_tap,
+        speaker_poller,
     });
     crate::applog!("meeting: recording {id}");
     crate::refresh_tray_indicator(app);
     crate::widget::show(app);
-    let _ = app.emit("recording-started", ());
+    let _ = app.emit("recording-started", "meeting");
     announce(app);
 
     // The widget's level meter, and the safety stop.
@@ -371,17 +586,44 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let state = level_app.state::<RecordingState>();
         let started = Instant::now();
+        let mut warned = false;
         while state.capture.is_session_active(session) {
-            let _ = level_app.emit(
-                "audio-level",
-                crate::audio::meter_level(state.audio.current_level()),
+            // Push-to-talk during the meeting runs its own meter loop; two
+            // loops emitting "audio-level" at once make the meter flicker.
+            let dictating = matches!(
+                state.capture.state(),
+                crate::capture::CaptureState::Dictating { .. }
             );
+            if !dictating {
+                let mic_level = state.audio.current_level();
+                let sys_level = current_system_audio_level(&level_app);
+                let _ = level_app.emit(
+                    "audio-level",
+                    crate::audio::meter_level(mic_level.max(sys_level)),
+                );
+            }
+            if !warned && started.elapsed() >= MAX_DURATION - LIMIT_WARNING {
+                warned = true;
+                crate::applog!(
+                    "meeting: {} minutes left before the limit",
+                    LIMIT_WARNING.as_secs() / 60
+                );
+                // Shown even with "only while dictating" on: the user needs
+                // to know the meeting is about to stop.
+                crate::widget::show(&level_app);
+                let _ = level_app.emit(
+                    "meeting-limit-warning",
+                    (LIMIT_WARNING.as_secs() / 60) as u32,
+                );
+            }
             if started.elapsed() >= MAX_DURATION {
                 crate::applog!(
-                    "meeting: stopping after {} hours",
-                    MAX_DURATION.as_secs() / 3600
+                    "meeting: stopping at the {}-minute limit",
+                    MAX_DURATION.as_secs() / 60
                 );
                 let _ = stop(&level_app);
+                crate::widget::show(&level_app);
+                let _ = level_app.emit("meeting-limit-reached", ());
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -413,12 +655,14 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
     };
     crate::refresh_tray_indicator(app);
     let _ = app.emit("meeting-stopped", ());
-    let Some(recording) = recording else {
+    let Some(mut recording) = recording else {
         announce(app);
         return Ok(());
     };
     let id = recording.id.clone();
-    crate::applog!("meeting: stopped {id}");
+    let system_tap = recording.system_tap.take();
+    let speaker_poller = recording.speaker_poller.take();
+
     enqueue(app, &id);
     if lock(&app.state::<MeetingState>().progress).is_none() {
         set_progress(
@@ -434,6 +678,31 @@ pub fn stop(app: &AppHandle) -> Result<(), String> {
     }
     let app = app.clone();
     std::thread::spawn(move || {
+        // Tearing down the CoreAudio tap joins its watchdog and can block;
+        // keep it off the command thread.
+        if let Some(tap) = system_tap {
+            if !tap.has_non_zero_audio() {
+                crate::applog!(
+                    "meeting: system audio for {id} was silent the whole time \
+                     (capture permission denied, or nothing played); transcribing mic only"
+                );
+            }
+            drop(tap);
+        }
+        let observations = speaker_poller
+            .map(|p| p.stop_and_take())
+            .unwrap_or_default();
+        if !observations.is_empty() {
+            if let Ok(dir) = meetings_dir(&app) {
+                if let Ok(json) = serde_json::to_string(&observations) {
+                    let _ = write_private(&dir.join(format!("{id}.obs.json")), &json);
+                }
+            }
+        }
+        crate::applog!(
+            "meeting: stopped {id} ({} speaker observations)",
+            observations.len()
+        );
         match recording.writer.join() {
             Ok(Ok(())) => {}
             Ok(Err(err)) => crate::applog!("meeting: writing {id} failed: {err}"),
@@ -497,9 +766,20 @@ fn transcribe_saved(app: &AppHandle, id: &str) {
     }
 }
 
+const YOU_SPEAKER_ID: i32 = -1;
+
+fn load_observations(dir: &Path, id: &str) -> Vec<crate::speaker_poller::SpeakerObservation> {
+    let path = dir.join(format!("{id}.obs.json"));
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
 fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> {
     let dir = meetings_dir(app)?;
     let wav = dir.join(format!("{id}.wav"));
+    let obs_path = dir.join(format!("{id}.obs.json"));
     let progress = |step: &str, percent: Option<u8>| {
         set_progress(
             app,
@@ -511,10 +791,14 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         )
     };
     progress("Finding who spoke", None);
-    let samples = load_recording(&wav)?;
-    let duration = samples.len() as f32 / WHISPER_SAMPLE_RATE as f32;
+    let LoadedRecording {
+        mut mic,
+        system: sys_opt,
+    } = load_recording_channels(&wav)?;
+    let duration = mic.len() as f32 / WHISPER_SAMPLE_RATE as f32;
     if duration < MIN_SECONDS {
         let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(&obs_path);
         return Err("The meeting was too short to transcribe.".into());
     }
 
@@ -523,23 +807,67 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         segmentation: resource_path(app, SEGMENTATION_MODEL)?,
         embedding: crate::voice_isolation::resolve_model_path(app)?,
     };
-    let turns = diarize(&samples, &models, speakers)?;
+    let observations = load_observations(&dir, id);
+
+    let has_active_system = sys_opt.as_ref().is_some_and(|sys| has_call_audio(sys));
+
+    let (turns, names) = if let Some(sys_samples) = sys_opt.as_ref().filter(|_| has_active_system) {
+        // Dual-channel path:
+        // 1. Suppress speakerphone acoustic bleed from `system` into `mic`.
+        suppress_speakerphone_echo(&mut mic, sys_samples);
+
+        // 2. Segment the local microphone track directly as "You".
+        let you_segments = if crate::audio::is_dead_air(&mic) {
+            Vec::new()
+        } else {
+            segment_single_speaker_segments(&mic, &models, YOU_SPEAKER_ID)?
+        };
+
+        // 3. Diarize the remote system audio track, merge the two channels
+        //    into turns (see `merge_dual_channel_turns`), and fuse UI names.
+        //    Since "You" is already isolated on Channel 0, pass `speakers - 1`
+        //    as the remote speaker count when a total speaker count is configured.
+        let remote_speakers = if speakers > 0 {
+            (speakers - 1).max(1)
+        } else {
+            0
+        };
+        let remote_segments = diarize_segments(sys_samples, &models, remote_speakers)?;
+        let all_turns = merge_dual_channel_turns(&you_segments, &remote_segments);
+        let mut names = resolve_cluster_names(&all_turns, &observations, Some(YOU_SPEAKER_ID));
+        names.insert(YOU_SPEAKER_ID, "You".to_string());
+        (all_turns, names)
+    } else {
+        // Single-channel fallback (mono WAV or silent system channel during an
+        // in-person room meeting).
+        let turns = diarize(&mic, &models, speakers)?;
+        let you = find_you(app, &mic, &turns);
+        let names = resolve_cluster_names(&turns, &observations, you);
+        (turns, names)
+    };
+
     if turns.is_empty() {
-        if crate::audio::is_dead_air(&samples) {
+        let sys_dead = sys_opt
+            .as_ref()
+            .is_none_or(|s| crate::audio::is_dead_air(s));
+        if crate::audio::is_dead_air(&mic) && sys_dead {
             let _ = std::fs::remove_file(&wav);
+            let _ = std::fs::remove_file(&obs_path);
             return Err("The meeting recording was silent. Check the microphone.".into());
         }
         return Err("No speech was found in the meeting recording.".into());
     }
 
-    let you = find_you(app, &samples, &turns);
-    let names = speaker_names(&turns, you);
     let whisper = &app.state::<RecordingState>().whisper;
     let mut lines = Vec::new();
     let total = turns.len();
     for (index, turn) in turns.iter().enumerate() {
         progress("Transcribing", Some((index * 100 / total).min(99) as u8));
-        let clip = clip(&samples, turn);
+        let source_samples = match (&sys_opt, has_active_system, turn.speaker == YOU_SPEAKER_ID) {
+            (Some(sys_samples), true, false) => sys_samples.as_slice(),
+            _ => mic.as_slice(),
+        };
+        let clip = clip(source_samples, turn);
         let mut text = String::new();
         for piece in pieces(&clip) {
             let context = format!("{} {text}", recent_context(&lines));
@@ -556,7 +884,10 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         if !text.is_empty() {
             lines.push(Line {
                 start: turn.start,
-                speaker: names[&turn.speaker].clone(),
+                speaker: names
+                    .get(&turn.speaker)
+                    .cloned()
+                    .unwrap_or_else(|| "Speaker 1".to_string()),
                 text,
             });
         }
@@ -571,6 +902,7 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
     let markdown = render_markdown(&title, &detail, &lines);
     write_private(&dir.join(format!("{id}.md")), &markdown)?;
     let _ = std::fs::remove_file(&wav);
+    let _ = std::fs::remove_file(&obs_path);
     Ok(MeetingSummary {
         id: id.to_string(),
         title,
@@ -579,10 +911,64 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
     })
 }
 
+/// Whether the system channel carries a call's worth of audio, rather than
+/// dead air (denied capture permission, in-room meeting) or a stray chime or
+/// short clip. Only then is the mic channel treated as "You" alone; otherwise
+/// the mic is diarized so several people in the room stay distinct.
+fn has_call_audio(system: &[f32]) -> bool {
+    const FRAME: usize = 320; // 20 ms
+    const ACTIVE_RMS: f32 = 0.01;
+    const MAX_REQUIRED_SECS: f32 = 10.0;
+    const MIN_FRACTION: f32 = 0.2;
+    let secs = system.len() as f32 / WHISPER_SAMPLE_RATE as f32;
+    let required = MAX_REQUIRED_SECS.min(secs * MIN_FRACTION);
+    let active_frames = system
+        .chunks_exact(FRAME)
+        .filter(|f| (f.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt() >= ACTIVE_RMS)
+        .count();
+    active_frames as f32 * FRAME as f32 / WHISPER_SAMPLE_RATE as f32 >= required
+}
+
+/// De-interleaved recording channels loaded from `<id>.wav`.
+pub struct LoadedRecording {
+    pub mic: Vec<f32>,
+    pub system: Option<Vec<f32>>,
+}
+
+/// Loads either a 2-channel 16 kHz stereo meeting recording (`Left = mic`,
+/// `Right = system`) or a 1-channel mono recording.
+pub fn load_recording_channels(path: &Path) -> Result<LoadedRecording, String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
+    let spec = reader.spec();
+    if spec.channels == 2
+        && spec.sample_rate == WHISPER_SAMPLE_RATE
+        && spec.bits_per_sample == 16
+        && spec.sample_format == hound::SampleFormat::Int
+    {
+        let frames = (reader.len() as usize) / 2;
+        let mut mic = Vec::with_capacity(frames);
+        let mut system = Vec::with_capacity(frames);
+        let mut samples = reader.samples::<i16>().map_while(Result::ok);
+        while let (Some(left), Some(right)) = (samples.next(), samples.next()) {
+            mic.push(left as f32 / i16::MAX as f32);
+            system.push(right as f32 / i16::MAX as f32);
+        }
+        return Ok(LoadedRecording {
+            mic,
+            system: Some(system),
+        });
+    }
+    Ok(LoadedRecording {
+        mic: load_recording(path)?,
+        system: None,
+    })
+}
+
 /// The recording as samples. It's always 16 kHz mono 16-bit, read straight
 /// into one buffer (a 4-hour meeting is ~900 MB as f32; the general loader
 /// would hold three copies). A crash can leave a partial last sample,
 /// which is skipped.
+#[allow(dead_code)]
 fn load_recording(path: &Path) -> Result<Vec<f32>, String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
@@ -601,6 +987,178 @@ fn load_recording(path: &Path) -> Result<Vec<f32>, String> {
             .map(|s| s as f32 / i16::MAX as f32),
     );
     Ok(samples)
+}
+
+/// Conference-Room Echo Gate: detects and zeroes speakerphone bleed in `mic`
+/// where remote speech from `system` played out of the Mac's speakers and
+/// re-entered the microphone with an acoustic lag between `0ms` and `120ms`.
+///
+/// Preserves double-talk when the local user speaks louder than the remote
+/// bleed (`mic_rms > 1.25 * sys_rms`).
+pub fn suppress_speakerphone_echo(mic: &mut [f32], system: &[f32]) {
+    const FRAME_SAMPLES: usize = 320; // 20ms at 16 kHz
+    const MAX_LAG_SAMPLES: usize = 1920; // 120ms at 16 kHz
+    const LAG_STEP_SAMPLES: usize = 16; // 1ms coarse step
+    const MIN_SYS_RMS: f32 = 0.015;
+    const ECHO_NCC_THRESHOLD: f32 = 0.55;
+    const DOUBLE_TALK_RATIO: f32 = 1.25;
+    const ATTACK_WALKBACK_FRAMES: usize = 4; // 80ms
+    const HANGOVER_FRAMES: usize = 7; // 140ms
+
+    let len = mic.len().min(system.len());
+    let num_frames = len / FRAME_SAMPLES;
+    if num_frames == 0 {
+        return;
+    }
+
+    // Prefix sums of squared system samples: any window's energy in O(1)
+    // instead of 320 multiply-adds at each of ~150 lags per frame.
+    let mut sys_sq = Vec::with_capacity(len + 1);
+    sys_sq.push(0.0f64);
+    let mut acc = 0.0f64;
+    for &x in &system[..len] {
+        acc += (x as f64) * (x as f64);
+        sys_sq.push(acc);
+    }
+    let energy = |start: usize, n: usize| (sys_sq[start + n] - sys_sq[start]).max(0.0) as f32;
+    let min_sys_energy = MIN_SYS_RMS * MIN_SYS_RMS * FRAME_SAMPLES as f32;
+
+    let mut echo_frames = vec![false; num_frames];
+
+    for (frame_idx, is_echo) in echo_frames.iter_mut().enumerate() {
+        let pos = frame_idx * FRAME_SAMPLES;
+        let mic_frame = &mic[pos..pos + FRAME_SAMPLES];
+        let mic_energy: f32 = mic_frame.iter().map(|&x| x * x).sum();
+        let mic_rms = (mic_energy / FRAME_SAMPLES as f32).sqrt();
+        if mic_rms < 0.001 {
+            continue;
+        }
+
+        let max_lag = pos.min(MAX_LAG_SAMPLES);
+        // No window in the lag span can reach MIN_SYS_RMS if the whole span
+        // is quieter than one such window: nothing to correlate against.
+        if energy(pos - max_lag, max_lag + FRAME_SAMPLES) < min_sys_energy {
+            continue;
+        }
+        let mut best_ncc = 0.0f32;
+        let mut best_lag = 0usize;
+        let mut best_sys_rms = 0.0f32;
+
+        let mut lag = 0usize;
+        while lag <= max_lag {
+            let sys_start = pos - lag;
+            let sys_frame = &system[sys_start..sys_start + FRAME_SAMPLES];
+            let sys_energy = energy(sys_start, FRAME_SAMPLES);
+            let sys_rms = (sys_energy / FRAME_SAMPLES as f32).sqrt();
+            if sys_rms >= MIN_SYS_RMS {
+                let dot: f32 = mic_frame
+                    .iter()
+                    .zip(sys_frame.iter())
+                    .map(|(&m, &s)| m * s)
+                    .sum();
+                let denom = (mic_energy * sys_energy).sqrt();
+                if denom > 1e-9 {
+                    let ncc = (dot / denom).abs();
+                    if ncc > best_ncc {
+                        best_ncc = ncc;
+                        best_lag = lag;
+                        best_sys_rms = sys_rms;
+                    }
+                }
+            }
+            lag += LAG_STEP_SAMPLES;
+        }
+
+        // Fine 1-sample search around `best_lag` so high-frequency waveforms
+        // between coarse lag steps still hit their exact phase peak.
+        if best_ncc > 0.0 {
+            let fine_start = best_lag.saturating_sub(LAG_STEP_SAMPLES);
+            let fine_end = (best_lag + LAG_STEP_SAMPLES).min(max_lag);
+            for fine_lag in fine_start..=fine_end {
+                let sys_start = pos - fine_lag;
+                let sys_frame = &system[sys_start..sys_start + FRAME_SAMPLES];
+                let sys_energy = energy(sys_start, FRAME_SAMPLES);
+                let sys_rms = (sys_energy / FRAME_SAMPLES as f32).sqrt();
+                if sys_rms >= MIN_SYS_RMS {
+                    let dot: f32 = mic_frame
+                        .iter()
+                        .zip(sys_frame.iter())
+                        .map(|(&m, &s)| m * s)
+                        .sum();
+                    let denom = (mic_energy * sys_energy).sqrt();
+                    if denom > 1e-9 {
+                        let ncc = (dot / denom).abs();
+                        if ncc > best_ncc {
+                            best_ncc = ncc;
+                            best_sys_rms = sys_rms;
+                        }
+                    }
+                }
+            }
+        }
+
+        if best_ncc >= ECHO_NCC_THRESHOLD && mic_rms <= DOUBLE_TALK_RATIO * best_sys_rms {
+            *is_echo = true;
+        }
+    }
+
+    // Apply attack walkback and hangover to cover room reverb onset/tails.
+    let mut masked = echo_frames.clone();
+    for (i, _) in echo_frames.iter().enumerate().filter(|(_, &e)| e) {
+        let start = i.saturating_sub(ATTACK_WALKBACK_FRAMES);
+        let end = (i + HANGOVER_FRAMES).min(num_frames - 1);
+        masked[start..=end].fill(true);
+    }
+
+    for (frame_idx, &is_echo) in masked.iter().enumerate() {
+        if is_echo {
+            let pos = frame_idx * FRAME_SAMPLES;
+            mic[pos..pos + FRAME_SAMPLES].fill(0.0);
+        }
+    }
+}
+
+/// Finds speech segments on a single-speaker track (the local microphone
+/// channel in stereo meeting mode) and labels all segments with `speaker_id`.
+fn segment_single_speaker_segments(
+    samples: &[f32],
+    models: &DiarizationModels,
+    speaker_id: i32,
+) -> Result<Vec<(f32, f32, i32)>, String> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(4) as i32)
+        .unwrap_or(2);
+    let config = OfflineSpeakerDiarizationConfig {
+        segmentation: OfflineSpeakerSegmentationModelConfig {
+            pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
+                model: Some(models.segmentation.to_string_lossy().to_string()),
+            },
+            num_threads: threads,
+            ..Default::default()
+        },
+        embedding: SpeakerEmbeddingExtractorConfig {
+            model: Some(models.embedding.to_string_lossy().to_string()),
+            num_threads: threads,
+            ..Default::default()
+        },
+        clustering: FastClusteringConfig {
+            num_clusters: 1,
+            threshold: 0.9,
+        },
+        ..Default::default()
+    };
+    let diarizer = OfflineSpeakerDiarization::create(&config)
+        .ok_or("couldn't load the speaker separation models")?;
+    let result = diarizer
+        .process(samples)
+        .ok_or("speaker separation failed")?;
+    let labelled: Vec<(f32, f32, i32)> = result
+        .sort_by_start_time()
+        .into_iter()
+        .filter(|s| s.end - s.start >= MIN_SEGMENT_SECONDS)
+        .map(|s| (s.start, s.end, speaker_id))
+        .collect();
+    Ok(labelled)
 }
 
 /// A clip cut into roughly equal pieces of at most `MAX_PIECE_SECONDS`.
@@ -657,6 +1215,15 @@ pub fn diarize(
     models: &DiarizationModels,
     speakers: u32,
 ) -> Result<Vec<Turn>, String> {
+    let labelled = diarize_segments(samples, models, speakers)?;
+    Ok(merge_turns(&labelled))
+}
+
+fn diarize_segments(
+    samples: &[f32],
+    models: &DiarizationModels,
+    speakers: u32,
+) -> Result<Vec<(f32, f32, i32)>, String> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(4) as i32)
         .unwrap_or(2);
@@ -719,7 +1286,7 @@ pub fn diarize(
         .zip(labels)
         .map(|(&(start, end), label)| (start, end, label as i32))
         .collect();
-    Ok(merge_turns(&labelled))
+    Ok(labelled)
 }
 
 /// sherpa-onnx's grouping threshold, set low so that it splits rather than
@@ -908,6 +1475,57 @@ pub fn merge_turns(segments: &[(f32, f32, i32)]) -> Vec<Turn> {
     turns
 }
 
+/// Merges the two channels of a stereo meeting into turns.
+///
+/// The channels are recorded independently, so "You" and remote speech
+/// overlap all the time (backchannels, talking over each other). Merging
+/// everything as one time-sorted list would split a remote turn at every
+/// overlapping "yeah" from the mic, fragmenting it into short clips Whisper
+/// transcribes worse, and dropping fragments under `MIN_TURN_SECONDS`.
+///
+/// Instead each channel merges on its own, and a turn only breaks where the
+/// other channel has a real interjection *in the pause* between two of its
+/// segments (one that overlaps neither), so the transcript still reads in
+/// order. Turns are then interleaved by start time.
+pub fn merge_dual_channel_turns(you: &[(f32, f32, i32)], remote: &[(f32, f32, i32)]) -> Vec<Turn> {
+    let mut turns = merge_turns_split_by(you, remote);
+    turns.extend(merge_turns_split_by(remote, you));
+    turns.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.speaker.cmp(&b.speaker)));
+    turns
+}
+
+/// `merge_turns` for one channel, except two segments don't merge when an
+/// `other`-channel segment of at least `MIN_TURN_SECONDS` sits entirely in
+/// the gap between them.
+fn merge_turns_split_by(segments: &[(f32, f32, i32)], other: &[(f32, f32, i32)]) -> Vec<Turn> {
+    let mut sorted = segments.to_vec();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let interjects = |gap_start: f32, gap_end: f32| {
+        other
+            .iter()
+            .any(|&(s, e, _)| s >= gap_start && e <= gap_end && e - s >= MIN_TURN_SECONDS)
+    };
+    let mut turns: Vec<Turn> = Vec::new();
+    for (start, end, speaker) in sorted {
+        if let Some(last) = turns.last_mut() {
+            if last.speaker == speaker
+                && start - last.end <= MERGE_GAP_SECONDS
+                && !interjects(last.end, start)
+            {
+                last.end = last.end.max(end);
+                continue;
+            }
+        }
+        turns.push(Turn {
+            start,
+            end,
+            speaker,
+        });
+    }
+    turns.retain(|t| t.end - t.start >= MIN_TURN_SECONDS);
+    turns
+}
+
 /// One turn's audio, padded with silence to a length Whisper accepts.
 fn clip(samples: &[f32], turn: &Turn) -> Vec<f32> {
     let rate = WHISPER_SAMPLE_RATE as f32;
@@ -956,6 +1574,19 @@ fn first_appearance_order(turns: &[Turn]) -> Vec<i32> {
     order
 }
 
+/// Minimum corroborated turns required to promote a UI speaker name onto a
+/// diarized voice cluster (matching Wispr Flow's `promoteThreshold = 3`).
+const SPEAKER_PROMOTE_TURNS: usize = 3;
+/// Minimum unambiguous single-speaker overlap (seconds) within a single turn
+/// for that turn to count as corroborated by the UI active-speaker border.
+const MIN_TURN_OVERLAP_SECONDS: f32 = 0.30;
+/// Alternative promotion threshold for a single long monologue turn where a
+/// participant speaks unambiguously for at least 4 seconds.
+const MIN_MONOLOGUE_OVERLAP_SECONDS: f32 = 4.0;
+/// Minimum share of a cluster's total UI-observed active time that must
+/// belong to the winning participant name.
+const MIN_CLUSTER_OVERLAP_RATIO: f32 = 0.30;
+
 /// "You" for the enrolled voice, the rest "Speaker 1", "Speaker 2", ... in
 /// the order they first speak.
 pub fn speaker_names(turns: &[Turn], you: Option<i32>) -> std::collections::HashMap<i32, String> {
@@ -969,6 +1600,164 @@ pub fn speaker_names(turns: &[Turn], you: Option<i32>) -> std::collections::Hash
             next += 1;
         }
     }
+    names
+}
+
+/// Fuses timestamped UI active-speaker observations (`AXUIElement` tile
+/// polling) with diarized voice clusters (`turns`) using temporal overlap
+/// and muted-tile negative evidence.
+///
+/// Any cluster that does not meet the promotion threshold (`>= 3`
+/// corroborated turns or `>= 4.0s` unambiguous overlap, and `>= 30%` share
+/// of observed speaking time for that cluster) retains its default
+/// `"Speaker N"` label from [`speaker_names`]. The `you` cluster always
+/// remains `"You"`.
+pub fn resolve_cluster_names(
+    turns: &[Turn],
+    observations: &[crate::speaker_poller::SpeakerObservation],
+    you: Option<i32>,
+) -> std::collections::HashMap<i32, String> {
+    let mut names = speaker_names(turns, you);
+    if observations.is_empty() || turns.is_empty() {
+        return names;
+    }
+
+    // Precompute observation intervals [start_sec, end_sec]. Each state-change
+    // observation holds until the next observation (capped at 15s, or 1.5s for
+    // the final observation in the log).
+    let spans: Vec<(f32, f32, &crate::speaker_poller::SpeakerObservation)> = observations
+        .iter()
+        .enumerate()
+        .map(|(i, obs)| {
+            let start = obs.offset_ms as f32 / 1000.0;
+            let end = observations
+                .get(i + 1)
+                .map(|next| (next.offset_ms as f32 / 1000.0).min(start + 15.0))
+                .unwrap_or(start + 1.5)
+                .max(start);
+            (start, end, obs)
+        })
+        .collect();
+
+    // BTreeMaps throughout: deterministic iteration (and float sums), so
+    // re-transcribing the same meeting always picks the same names.
+    // Per (speaker_id, candidate_name): (weighted_overlap_seconds, corroborated_turns)
+    let mut cluster_scores: std::collections::BTreeMap<
+        i32,
+        std::collections::BTreeMap<String, (f32, usize)>,
+    > = std::collections::BTreeMap::new();
+
+    for speaker in first_appearance_order(turns) {
+        if Some(speaker) == you {
+            continue;
+        }
+        let mut by_name: std::collections::BTreeMap<String, (f32, usize)> =
+            std::collections::BTreeMap::new();
+
+        for turn in turns.iter().filter(|t| t.speaker == speaker) {
+            let turn_dur = (turn.end - turn.start).max(0.0);
+            if turn_dur <= 0.0 {
+                continue;
+            }
+            let mut turn_active: std::collections::BTreeMap<&str, f32> =
+                std::collections::BTreeMap::new();
+            let mut turn_muted: std::collections::BTreeMap<&str, f32> =
+                std::collections::BTreeMap::new();
+
+            for &(obs_start, obs_end, obs) in &spans {
+                let overlap_start = turn.start.max(obs_start);
+                let overlap_end = turn.end.min(obs_end);
+                if overlap_end <= overlap_start {
+                    continue;
+                }
+                let dt = overlap_end - overlap_start;
+
+                for muted in &obs.muted_names {
+                    *turn_muted.entry(muted.as_str()).or_insert(0.0) += dt;
+                }
+
+                // Only unambiguous single-speaker intervals contribute positive evidence.
+                if obs.speaking_names.len() == 1 {
+                    let active = obs.speaking_names[0].as_str();
+                    if !obs.muted_names.iter().any(|m| m == active) {
+                        *turn_active.entry(active).or_insert(0.0) += dt;
+                    }
+                }
+            }
+
+            for (active_name, active_dt) in turn_active {
+                let muted_dt = turn_muted.get(active_name).copied().unwrap_or(0.0);
+                if muted_dt > 0.5 * turn_dur {
+                    // Muted for the majority of the turn: penalize by 0.5x and do
+                    // not count as a corroborated turn.
+                    let entry = by_name.entry(active_name.to_string()).or_insert((0.0, 0));
+                    entry.0 += active_dt * 0.5;
+                } else {
+                    let entry = by_name.entry(active_name.to_string()).or_insert((0.0, 0));
+                    entry.0 += active_dt;
+                    if active_dt >= MIN_TURN_OVERLAP_SECONDS {
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+
+        if !by_name.is_empty() {
+            cluster_scores.insert(speaker, by_name);
+        }
+    }
+
+    // Collect eligible (speaker, name, score_seconds, turns) candidates and assign
+    // greedily in descending order of score so two voice clusters never collide on
+    // the same participant name.
+    let mut candidates: Vec<(i32, String, f32, usize)> = Vec::new();
+    for (speaker, by_name) in &cluster_scores {
+        let total_cluster_active: f32 = by_name.values().map(|(s, _)| *s).sum();
+        if total_cluster_active <= 0.0 {
+            continue;
+        }
+        for (name, &(score_sec, corr_turns)) in by_name {
+            let ratio = score_sec / total_cluster_active;
+            let promoted =
+                corr_turns >= SPEAKER_PROMOTE_TURNS || score_sec >= MIN_MONOLOGUE_OVERLAP_SECONDS;
+            if promoted && ratio >= MIN_CLUSTER_OVERLAP_RATIO {
+                candidates.push((*speaker, name.clone(), score_sec, corr_turns));
+            }
+        }
+    }
+
+    candidates.sort_by(|a, b| {
+        b.2.total_cmp(&a.2)
+            .then_with(|| b.3.cmp(&a.3))
+            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    let mut assigned_speakers = std::collections::HashSet::new();
+    let mut assigned_names = std::collections::HashSet::new();
+    for (speaker, name, _, _) in candidates {
+        if assigned_speakers.contains(&speaker) || assigned_names.contains(&name) {
+            continue;
+        }
+        names.insert(speaker, name.clone());
+        assigned_speakers.insert(speaker);
+        assigned_names.insert(name);
+    }
+
+    // Re-number remaining unpromoted non-`you` clusters sequentially ("Speaker 1",
+    // "Speaker 2", ...) in first-appearance order so promoting earlier clusters
+    // never leaves a gap like "You", "Alice", "Speaker 2".
+    if !assigned_speakers.is_empty() {
+        let mut next_speaker_num = 1usize;
+        for speaker in first_appearance_order(turns) {
+            if Some(speaker) == you || assigned_speakers.contains(&speaker) {
+                continue;
+            }
+            names.insert(speaker, format!("Speaker {next_speaker_num}"));
+            next_speaker_num += 1;
+        }
+    }
+
     names
 }
 
@@ -1163,7 +1952,7 @@ pub async fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
         return Err("That meeting is still being recorded or transcribed.".into());
     }
     let dir = meetings_dir(&app)?;
-    for ext in ["md", "wav"] {
+    for ext in ["md", "wav", "obs.json"] {
         let path = dir.join(format!("{id}.{ext}"));
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
@@ -1199,6 +1988,105 @@ pub fn set_meeting_speakers(app: AppHandle, speakers: u32) -> Result<(), String>
     let mut cfg = crate::config::load(&app);
     cfg.meeting_speakers = speakers.min(10);
     crate::config::save(&app, &cfg)
+}
+
+#[tauri::command]
+pub fn get_meeting_auto_detect(app: AppHandle) -> bool {
+    crate::config::load(&app).meeting_auto_detect
+}
+
+#[tauri::command]
+pub fn set_meeting_auto_detect(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut cfg = crate::config::load(&app);
+    cfg.meeting_auto_detect = enabled;
+    crate::config::save(&app, &cfg)?;
+    if !enabled {
+        let state = app.state::<MeetingState>();
+        lock(&state.auto_detect).dismiss_start_prompt();
+        let _ = app.emit("meeting-detect-cleared", ());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dismiss_meeting_prompt(app: AppHandle) {
+    let state = app.state::<MeetingState>();
+    lock(&state.auto_detect).dismiss_start_prompt();
+    let _ = app.emit("meeting-detect-cleared", ());
+}
+
+#[tauri::command]
+pub fn get_detected_meeting(app: AppHandle) -> Option<crate::meeting_detect::DetectedCall> {
+    if !crate::config::load(&app).meeting_auto_detect || is_recording(&app) {
+        return None;
+    }
+    let state = app.state::<MeetingState>();
+    let detected = lock(&state.auto_detect).prompted_call().cloned();
+    detected
+}
+
+/// Spawns the lightweight background poller (every 2s) that inspects CoreAudio
+/// process holders and browser call window titles to offer non-intrusive
+/// "Record <App>?" and "Call ended · Stop?" prompts in the widget.
+pub fn spawn_auto_detect(app: AppHandle) {
+    use crate::meeting_detect::AutoDetectAction;
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(2));
+        if !crate::config::load(&app).meeting_auto_detect {
+            // Forget bindings/latches, or re-enabling later could suppress
+            // the prompt for a new call on the same app.
+            if let Some(state) = app.try_state::<MeetingState>() {
+                lock(&state.auto_detect).reset();
+            }
+            continue;
+        }
+        let meeting_recording = is_recording(&app);
+        // While recording, a muted user's call app (or browser) stops holding
+        // the mic but keeps playing output; requiring mic input here would
+        // prompt "Call ended" in the middle of a live call.
+        let detected = if meeting_recording {
+            crate::meeting_detect::detect_active_call_for_poller()
+        } else {
+            crate::meeting_detect::detect_active_call()
+        };
+        let sys_silent = current_system_audio_level(&app) < 0.005;
+
+        let action = {
+            let Some(state) = app.try_state::<MeetingState>() else {
+                continue;
+            };
+            let mut tracker = lock(&state.auto_detect);
+            tracker.observe(detected, meeting_recording, sys_silent)
+        };
+
+        match action {
+            AutoDetectAction::None => {}
+            AutoDetectAction::PromptStart(call) => {
+                crate::applog!(
+                    "meeting: auto-detected active {} call ({})",
+                    call.platform.label(),
+                    call.bundle_id
+                );
+                crate::widget::show(&app);
+                let _ = app.emit("meeting-detected", call);
+            }
+            AutoDetectAction::ClearStartPrompt => {
+                let _ = app.emit("meeting-detect-cleared", ());
+            }
+            AutoDetectAction::PromptStop(call) => {
+                crate::applog!(
+                    "meeting: detected {} call ended ({}); prompting to stop recording",
+                    call.platform.label(),
+                    call.bundle_id
+                );
+                crate::widget::show(&app);
+                let _ = app.emit("meeting-ended-detected", call);
+            }
+            AutoDetectAction::ClearStopPrompt => {
+                let _ = app.emit("meeting-ended-cleared", ());
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1520,5 +2408,373 @@ mod tests {
         assert_eq!(timestamp(0.0), "00:00");
         assert_eq!(timestamp(65.4), "01:05");
         assert_eq!(timestamp(3725.0), "1:02:05");
+    }
+
+    #[test]
+    fn resolve_cluster_names_promotes_after_three_corroborated_turns() {
+        use crate::speaker_poller::SpeakerObservation;
+        let turns = vec![
+            Turn {
+                start: 1.0,
+                end: 2.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 4.0,
+                end: 5.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 8.0,
+                end: 9.5,
+                speaker: 0,
+            },
+        ];
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 1100,
+                speaking_names: vec!["Alice Chen".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 2400,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 4100,
+                speaking_names: vec!["Alice Chen".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 5400,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 8100,
+                speaking_names: vec!["Alice Chen".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 9400,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let names = resolve_cluster_names(&turns, &observations, None);
+        assert_eq!(names[&0], "Alice Chen");
+    }
+
+    #[test]
+    fn resolve_cluster_names_rejects_single_turn_ui_flicker() {
+        use crate::speaker_poller::SpeakerObservation;
+        let turns = vec![
+            Turn {
+                start: 1.0,
+                end: 2.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 4.0,
+                end: 5.5,
+                speaker: 0,
+            },
+        ];
+        // Only a single short highlight on turn 1 (< 3 turns and < 4.0s).
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 1200,
+                speaking_names: vec!["Bob".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 1800,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let names = resolve_cluster_names(&turns, &observations, None);
+        assert_eq!(names[&0], "Speaker 1");
+    }
+
+    #[test]
+    fn resolve_cluster_names_penalizes_muted_participants() {
+        use crate::speaker_poller::SpeakerObservation;
+        let turns = vec![
+            Turn {
+                start: 1.0,
+                end: 2.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 4.0,
+                end: 5.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 8.0,
+                end: 9.5,
+                speaker: 0,
+            },
+        ];
+        // Charlie's tile flickers active on all 3 turns, but Charlie is muted!
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 1000,
+                speaking_names: vec!["Charlie".into()],
+                muted_names: vec!["Charlie".into()],
+            },
+            SpeakerObservation {
+                offset_ms: 9500,
+                speaking_names: vec![],
+                muted_names: vec!["Charlie".into()],
+            },
+        ];
+        let names = resolve_cluster_names(&turns, &observations, None);
+        assert_eq!(names[&0], "Speaker 1");
+    }
+
+    #[test]
+    fn resolve_cluster_names_preserves_you_and_falls_back_for_unmatched() {
+        use crate::speaker_poller::SpeakerObservation;
+        let turns = vec![
+            Turn {
+                start: 0.0,
+                end: 2.0,
+                speaker: -1,
+            },
+            Turn {
+                start: 3.0,
+                end: 8.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 10.0,
+                end: 12.0,
+                speaker: 1,
+            },
+        ];
+        // Cluster 0 has a 5.0s unambiguous monologue as "Dana" (>= 4.0s monologue promotion),
+        // while Cluster 1 has no observations and Cluster -1 is `you`.
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 3200,
+                speaking_names: vec!["Dana".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 8200,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let names = resolve_cluster_names(&turns, &observations, Some(-1));
+        assert_eq!(names[&-1], "You");
+        assert_eq!(names[&0], "Dana");
+        assert_eq!(names[&1], "Speaker 1");
+    }
+
+    #[test]
+    fn stereo_recording_writes_and_deinterleaves_mic_and_system_channels() {
+        let dir =
+            std::env::temp_dir().join(format!("mp-meeting-stereo-wav-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stereo.wav");
+        let file = std::fs::File::create(&path).unwrap();
+        let (mic_tx, mic_rx) = mpsc::channel();
+        let (sys_tx, sys_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || write_meeting_stereo(file, mic_rx, sys_rx));
+
+        // Send 1 second of 16 kHz audio on both channels: mic = +0.4, system = -0.6
+        sys_tx
+            .send(AudioChunk {
+                samples: vec![-0.6; 16_000],
+                channels: 1,
+                sample_rate: 16_000,
+            })
+            .unwrap();
+        mic_tx
+            .send(AudioChunk {
+                samples: vec![0.4; 16_000],
+                channels: 1,
+                sample_rate: 16_000,
+            })
+            .unwrap();
+        drop(sys_tx);
+        drop(mic_tx);
+        writer.join().unwrap().unwrap();
+
+        let loaded = load_recording_channels(&path).unwrap();
+        let sys = loaded.system.expect("expected stereo system channel");
+        assert_eq!(loaded.mic.len(), 16_000);
+        assert_eq!(sys.len(), 16_000);
+        assert!((loaded.mic[0] - 0.4).abs() < 1e-3);
+        assert!((sys[0] + 0.6).abs() < 1e-3);
+
+        // Also verify that staggered sub-100ms chunk arrivals (where `mic_to16k`
+        // crosses 100ms block boundaries slightly before `sys_to16k`) do not
+        // splice zero-gaps into the system channel or shift stereo phase.
+        let staggered_path = dir.join("staggered.wav");
+        let staggered_file = std::fs::File::create(&staggered_path).unwrap();
+        let (m_tx, m_rx) = mpsc::channel();
+        let (s_tx, s_rx) = mpsc::channel();
+        let staggered_writer =
+            std::thread::spawn(move || write_meeting_stereo(staggered_file, m_rx, s_rx));
+        for step in 0..20 {
+            // Mic sends 800 samples (50ms) first; system sends 800 samples on
+            // odd steps (1,600 samples every 2 steps) so `mic_to16k` crosses
+            // each 1,600-sample boundary before `sys_to16k`.
+            m_tx.send(AudioChunk {
+                samples: vec![0.35; 800],
+                channels: 1,
+                sample_rate: 16_000,
+            })
+            .unwrap();
+            if step % 2 == 1 {
+                s_tx.send(AudioChunk {
+                    samples: vec![-0.45; 1_600],
+                    channels: 1,
+                    sample_rate: 16_000,
+                })
+                .unwrap();
+            }
+        }
+        drop(s_tx);
+        drop(m_tx);
+        staggered_writer.join().unwrap().unwrap();
+        let staggered = load_recording_channels(&staggered_path).unwrap();
+        let staggered_sys = staggered.system.unwrap();
+        assert_eq!(staggered.mic.len(), 16_000);
+        assert_eq!(staggered_sys.len(), 16_000);
+        assert!(
+            staggered_sys.iter().all(|&s| (s + 0.45).abs() < 1e-3),
+            "staggered block arrivals must not insert 0.0 gaps into system audio"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dual_channel_backchannel_over_remote_speech_does_not_fragment_it() {
+        // Remote speaker 0 talks 0–20 s in three diarizer segments; "You"
+        // says "yeah" at 8.5 s *over* them. A tiny remote piece follows.
+        let remote = [(0.0, 4.0, 0), (4.3, 9.0, 0), (9.2, 9.6, 0), (9.8, 20.0, 0)];
+        let you = [(8.5, 8.9, YOU_SPEAKER_ID)];
+        let turns = merge_dual_channel_turns(&you, &remote);
+        let remote_turns: Vec<_> = turns.iter().filter(|t| t.speaker == 0).collect();
+        assert_eq!(remote_turns.len(), 1, "{turns:?}");
+        assert_eq!((remote_turns[0].start, remote_turns[0].end), (0.0, 20.0));
+    }
+
+    #[test]
+    fn dual_channel_interjection_in_a_pause_splits_the_remote_turn() {
+        // Remote pauses 5.0–6.2 s and "You" answers in the pause: the
+        // transcript must read remote, You, remote.
+        let remote = [(0.0, 5.0, 0), (6.2, 10.0, 0)];
+        let you = [(5.1, 6.0, YOU_SPEAKER_ID)];
+        let turns = merge_dual_channel_turns(&you, &remote);
+        let order: Vec<i32> = turns.iter().map(|t| t.speaker).collect();
+        assert_eq!(order, vec![0, YOU_SPEAKER_ID, 0], "{turns:?}");
+    }
+
+    #[test]
+    fn stereo_writer_aligns_a_late_starting_system_tap_with_the_mic() {
+        // The mic tap attaches 300 ms before the system tap starts delivering
+        // (aggregate device creation). A click heard on both at real time
+        // 0.5 s must land on the same frame in both channels.
+        let dir = std::env::temp_dir().join(format!("mp-meeting-align-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("aligned.wav");
+        let (mic_tx, mic_rx) = mpsc::channel();
+        let (sys_tx, sys_rx) = mpsc::channel();
+        let mut mic = vec![0.0f32; 16_000];
+        mic[8_000..8_160].fill(0.9);
+        let mut sys = vec![0.0f32; 11_200]; // starts at real time 0.3 s
+        sys[3_200..3_360].fill(-0.9);
+        for c in mic.chunks(160) {
+            mic_tx
+                .send(AudioChunk {
+                    samples: c.to_vec(),
+                    channels: 1,
+                    sample_rate: 16_000,
+                })
+                .unwrap();
+        }
+        sys_tx
+            .send(AudioChunk {
+                samples: sys,
+                channels: 1,
+                sample_rate: 16_000,
+            })
+            .unwrap();
+        drop(mic_tx);
+        drop(sys_tx);
+        write_meeting_stereo(std::fs::File::create(&path).unwrap(), mic_rx, sys_rx).unwrap();
+
+        let loaded = load_recording_channels(&path).unwrap();
+        let sys = loaded.system.unwrap();
+        assert_eq!(loaded.mic.len(), 16_000);
+        let first = |v: &[f32]| v.iter().position(|x| x.abs() > 0.5).unwrap();
+        assert_eq!(first(&loaded.mic), 8_000);
+        assert_eq!(first(&sys), 8_000, "system channel shifted against the mic");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn echo_gate_zeroes_speakerphone_bleed_and_preserves_independent_or_double_talk_speech() {
+        let n = 16_000 * 3; // 3 seconds at 16 kHz
+        let mut system = vec![0.0f32; n];
+        let mut mic = vec![0.0f32; n];
+
+        // Segment 1 (0.2s .. 1.0s): Remote speaker plays on system audio; mic picks up
+        // delayed (12ms = 192 samples), attenuated (0.35x) speakerphone bleed.
+        let lag = 192usize;
+        for i in 3200..16_000 {
+            let sig = 0.30 * ((i as f32 * 0.11).sin() + 0.5 * (i as f32 * 0.23).cos());
+            system[i] = sig;
+            if i + lag < n {
+                mic[i + lag] = sig * 0.35;
+            }
+        }
+
+        // Segment 2 (1.5s .. 2.0s): Local user speaks into mic while system is silent.
+        for (i, m) in mic.iter_mut().enumerate().take(32_000).skip(24_000) {
+            *m = 0.25 * ((i as f32 * 0.17).sin() + 0.4 * (i as f32 * 0.29).cos());
+        }
+
+        // Segment 3 (2.2s .. 2.7s): Double-talk — system plays remote speech (0.10),
+        // while local user speaks much louder (0.45) with an uncorrelated waveform.
+        for i in 35_200..43_200 {
+            let sys_sig = 0.10 * (i as f32 * 0.13).sin();
+            let user_sig = 0.45 * (i as f32 * 0.31).cos();
+            system[i] = sys_sig;
+            mic[i] = user_sig + sys_sig * 0.25;
+        }
+
+        suppress_speakerphone_echo(&mut mic, &system);
+
+        // Bleed region (0.3s .. 0.9s) must be completely zeroed.
+        let bleed_energy: f32 = mic[4800..14_400].iter().map(|x| x * x).sum();
+        assert_eq!(
+            bleed_energy, 0.0,
+            "speakerphone bleed should be zeroed by the echo gate"
+        );
+
+        // Solo local speech (1.6s .. 1.9s) must remain intact.
+        let solo_energy: f32 = mic[25_600..30_400].iter().map(|x| x * x).sum();
+        assert!(
+            solo_energy > 50.0,
+            "independent local speech must not be suppressed (energy={solo_energy})"
+        );
+
+        // Double-talk (2.3s .. 2.6s) must remain intact.
+        let dt_energy: f32 = mic[36_800..41_600].iter().map(|x| x * x).sum();
+        assert!(
+            dt_energy > 100.0,
+            "loud local double-talk must not be suppressed (energy={dt_energy})"
+        );
     }
 }

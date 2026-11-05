@@ -22,8 +22,10 @@ mod isolate;
 mod lifecycle;
 mod live;
 mod llm;
+mod local_llm;
 mod logging;
 mod meeting;
+mod meeting_detect;
 mod mic_permission;
 mod mic_usage;
 mod models;
@@ -40,8 +42,10 @@ mod rename;
 mod shortcut;
 mod snippets;
 mod sounds;
+mod speaker_poller;
 mod stt;
 mod syntax;
+mod system_audio;
 mod theme;
 mod undo;
 mod voice_isolation;
@@ -321,6 +325,9 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_deep_link::init())
+        // Native file picker, used from Rust only (choosing a .gguf model
+        // file); the webview gets no dialog or file-system permissions.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
@@ -428,6 +435,9 @@ pub fn run() {
             list_ollama_models,
             list_llm_catalog,
             pull_llm_model,
+            local_llm::find_local_model_files,
+            local_llm::choose_model_file,
+            local_llm::import_model_file,
             get_llm_model,
             set_llm_model,
             get_logs,
@@ -479,6 +489,10 @@ pub fn run() {
             meeting::transcribe_meeting,
             meeting::get_meeting_speakers,
             meeting::set_meeting_speakers,
+            meeting::get_meeting_auto_detect,
+            meeting::set_meeting_auto_detect,
+            meeting::dismiss_meeting_prompt,
+            meeting::get_detected_meeting,
             agents::get_agent_sound_enabled,
             agents::set_agent_sound_enabled,
             agents::get_agent_hook_config,
@@ -514,6 +528,7 @@ pub fn run() {
             app.manage(privacy::PrivacyState::default());
             app.manage(discard::DiscardState::default());
             app.manage(meeting::MeetingState::default());
+            meeting::spawn_auto_detect(app.handle().clone());
             history::make_private(app.handle());
 
             let shortcut_cfg = saved_config.shortcut.clone().unwrap_or_default();
@@ -577,6 +592,19 @@ pub fn run() {
                     // Only the action: agent links carry the hook token
                     // (and the agent's folder and message) in the query.
                     crate::applog!("deep-link: received action={action:?}");
+                    // Dictation links need this install's token too (see
+                    // agents::link_is_authorized): a web page could
+                    // otherwise start the mic.
+                    if matches!(
+                        action,
+                        "toggle-recording" | "start-recording" | "stop-recording"
+                    ) && !agents::link_is_authorized(&deep_link_app, &url)
+                    {
+                        crate::applog!(
+                            "deep-link: ignoring {action:?} without this install's token"
+                        );
+                        continue;
+                    }
                     let request = match action {
                         "toggle-recording" => Request::ToggleDictation(DeepLink),
                         "start-recording" => Request::StartDictation(DeepLink),

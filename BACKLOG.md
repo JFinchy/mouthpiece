@@ -734,14 +734,50 @@ build phases.
     room through one mic. Measure diarization error on a few real
     recordings with 2-4 speakers before going further; overlapping speech
     is where it will be weakest.
-  - **Phase 2: calls, about 1 week more.** The other side of Zoom, Meet
-    or Teams comes through the speakers, not the mic, so it needs system
-    audio capture (ScreenCaptureKit audio, macOS 13+, Screen Recording
-    permission), mixed with the mic or, better, kept as two channels (mic
-    = you, system = everyone else) so "You" needs no guessing.
+  - **Phase 2: calls, auto-detection & offline speaker naming (revised 2026-11-04 after reverse-engineering Wispr Flow Notetaker v1.6.606 via `rea`; built 2026-11-05, in manual testing — see `manual-testing-inbox/meeting-phase2.md` and `MEETING_PHASE2_TRACKER.md`).**
+    The other side of Zoom, Meet, Teams or Slack Huddles comes through the Mac's speakers/headphones rather than the mic, and pure acoustic clustering (`group_voices`) can only label remote clusters `"Speaker 1"`, `"Speaker 2"`, … unless corroborated by call UI metadata. Phase 2 breaks into four concrete, 100% local sub-features:
+
+    1. **Dual-channel system audio capture via CoreAudio Process Tap (`CATapDescription`) + Echo Gate:**
+       - *Why Process Tap over `ScreenCaptureKit`:* On macOS 14.2+ (gated at `>= 14.4` to avoid early Sonoma CoreAudio tap bugs, falling back to `ScreenCaptureKit` on macOS 13–14.3), `AudioHardwareCreateProcessTap` (`CATapDescription` with `monoGlobalTapButExcludeProcesses` excluding our own PID, wrapped in a private aggregate device via `AudioHardwareCreateAggregateDevice`) captures all system/app loopback audio using only `NSAudioCaptureUsageDescription` in `src-tauri/Info.plist` (*"System Audio Recording Only"* permission) — **avoiding the scary macOS "Screen & System Audio Recording" permission prompt**.
+       - *2-Channel Stereo WAV (`meeting.rs` + `audio.rs`):* Add a parallel system-audio tap (`src-tauri/src/system_audio.rs`) resampled via `To16k` to 16 kHz mono and interleave with the mic in `MeetingSession` into a **2-channel (stereo) 16 kHz 16-bit PCM WAV** (`Left = Mic / "You"`, `Right = System / Remote participants`), flushed every 5s.
+       - *Channel-Separated Diarization:*
+         - **Channel 0 (Left / Mic):** Always attributed to `"You"` (no voice enrollment or embedding clustering needed on the mic channel). Run `pyannote` segmentation (or Silero VAD) on Channel 0 solely to find `"You"` speech turn boundaries.
+         - **Channel 1 (Right / System):** Run `pyannote` over-split segmentation + `WeSpeaker` embeddings + `group_voices` clustering exclusively on Channel 1 to separate remote participants without `"You"` polluting the remote clusters.
+         - Merge Channel 0 and Channel 1 turns chronologically before running `transcribe_samples_in_context`.
+       - *Conference-Room / Speakerphone Echo Gate:* When the user is on speakers instead of headphones, remote audio from Channel 1 bleeds into Channel 0 (Mic). Before segmenting Channel 0, run a sliding-window normalized cross-correlation (20 ms frames = 320 samples at 16 kHz, lag search `0..120 ms`) between Channel 0 and Channel 1: when Channel 1 RMS is active and cross-correlation exceeds threshold (without simultaneous near-end speech energy spike), zero out those sample spans (`mic_zero_spans`) on Channel 0 (with ~80 ms attack walkback and ~150 ms hangover trim) so remote speakers aren't double-transcribed as `"You"`.
+
+    2. **Local meeting auto-detection & auto-stop (`mic_usage.rs` extension + browser tab check):**
+       - *CoreAudio Input & Output Holder Inspection (`src-tauri/src/mic_usage.rs`):* `mic_usage.rs` already enumerates `kAudioHardwarePropertyProcessObjectList` and checks `kAudioProcessPropertyIsRunningInput`. Extend it to also query:
+         - `kAudioProcessPropertyBundleID` (`CFStringRef`) and `kAudioProcessPropertyPID` (`pid_t`)
+         - `kAudioProcessPropertyIsRunningOutput` (`u32`)
+         Returning `Vec<AudioProcessHolder { pid, bundle_id, is_input, is_output }>`.
+       - *Known Conferencing App Matching:* Match `bundle_id` against native call apps (`us.zoom.xos`, `com.microsoft.teams2`, `com.microsoft.teams`, `com.tinyspeck.slackmacgap`, `com.cisco.webexmeetingsapp`, `com.apple.FaceTime`, `com.hnc.Discord`) and Chromium/WebKit browsers (`com.google.Chrome`, `company.thebrowser.Browser`, `com.brave.Browser`, `com.microsoft.edgemac`, `com.apple.Safari`).
+       - *Browser Call Verification (Accessibility URL/Title Check):* When a browser holds both input and output (to avoid false-triggering on a browser voice search or dictation), inspect the browser's active window/tab strip via `AXUIElement` (`app_detect.rs` / `selected_text.rs` pattern) for call markers (`meet.google.com/xxx-xxxx-xxx`, `| Microsoft Teams`, `zoom.us/wc`, `app.slack.com/huddle`).
+       - *Auto-Start & Auto-Stop UX:*
+         - **Auto-Start Prompt:** After 3 consecutive 1-second polls confirming a call is active (and no meeting recording is running), emit `"meeting-detected"` (`{ app_name, bundle_id, platform }`) to morph the widget / show a non-intrusive `"Start meeting?"` pill (with a per-call dismiss latch so dismissing doesn't re-prompt for the same call).
+         - **Auto-Stop Prompt:** While recording a meeting, if the conferencing app releases `is_input` + `is_output` (or the browser call tab closes) AND Channel 1 (System Audio) RMS remains silent for 10 seconds, emit `"meeting-ended-detected"` to prompt `"Call ended · Stop & transcribe?"` (or auto-stop after a 30s countdown).
+       - *Push-to-Talk Coexistence During Meetings (`capture.rs`):* Decouple `MeetingSession` from `CaptureState` so `MeetingSession` lives in `MeetingState` (`audio.rs` already supports simultaneous `sinks.dictation` and `sinks.meeting`). When the user holds the push-to-talk hotkey during a meeting, mute/zero the meeting's Channel 0 (`mic`) for the duration of the dictation so the dictated prompt goes to the target app without duplicating into the meeting transcript.
+
+    3. **Offline active-speaker naming via macOS Accessibility (`AXUIElement` UI tile polling + post-call cluster fusion):**
+       - *How it works (zero network, reuses existing Accessibility grant):* During a video call, Zoom, Google Meet, Microsoft Teams, and Slack Huddles visually highlight the active speaker's participant tile in their UI right next to that participant's display name. Because Mouthpiece already holds macOS Accessibility (`AXUIElement`) permission for pasting, a lightweight background poller (`src-tauri/src/speaker_poller.rs`, 300 ms tick during active meetings) can read active-speaker and mute indicators directly from the conferencing app's accessibility tree.
+       - *Two-Tier Anchored AX Discovery (`CompactMonitorBinding` pattern):* Walking a full browser/Electron AX tree every 300 ms is too expensive. Instead:
+         1. **Discovery / Rebind Pass (every 5s or when tile handles invalidate):** Walk the conferencing window's `AXUIElement` tree (setting `AXEnhancedUserInterface = true` on Chromium/Electron PIDs so DOM classes expose via `AXDOMClassList`) to locate participant tile root elements, extract each participant's display name (`AXStaticText` / `AXTitle` / `AXDescription`), and cache `AXUIElementRef` handles to each tile's speaking/mute indicator node.
+         2. **Fast Compact Poll (every 300 ms):** Query only the cached tile `AXUIElementRef` handles using platform strategies:
+            - **Google Meet (Browser):** Tile root has `AXDOMClassList` containing `"oZRSLe"`; active-speaker indicator node inside tile has `AXDOMClassList` containing `"kssMZb"` (or `AXDescription` / `AXValue` indicating active speech / muted mic).
+            - **Slack Huddles (`com.tinyspeck.slackmacgap`):** Tile root has `AXDOMClassList` containing `"p-huddle_peer_tile"`; active speaker has `"p-huddle_peer_tile__overlay--active_speaker"`.
+            - **Microsoft Teams (`com.microsoft.teams2` / Web):** Tile root has `"vdi-frame-occlusion"` or participant tile role whose `AXTitle` / `AXDescription` contains `"speaking"` / `"talking"` / `"active speaker"` / `"muted"`.
+            - **Zoom (`us.zoom.xos`):** Native Cocoa participant gallery/active-speaker `AXWindow` elements where `AXTitle` / `AXDescription` / `AXValue` reports the active speaker name or speaking/muted state.
+       - *In-Memory Observation Log (`Vec<SpeakerObservation>`):* Whenever the active-speaker or muted set changes, append `SpeakerObservation { offset_ms, speaking_names: Vec<String>, muted_names: Vec<String> }` to an in-memory vector on `MeetingSession` (never persisted to disk or sent over the network).
+       - *Post-Meeting Temporal Overlap Fusion (`resolve_cluster_names` in `meeting.rs`):*
+         Because Mouthpiece diarizes post-call, we have the complete set of acoustic clusters (`Cluster 0`, `Cluster 1`, …) and their speech segments `[start_ms, end_ms]` on Channel 1 before rendering Markdown:
+         1. For each acoustic cluster $C_i$ and each observed UI participant name $P_j$, compute total single-speaker overlap duration $O(C_i, P_j)$ across all segments of $C_i$ where `speaking_names == [P_j]` (unambiguous single active speaker) and $P_j \notin \text{muted\_names}$.
+         2. Penalize $(C_i, P_j)$ if $P_j \in \text{muted\_names}$ for $>50\%$ of a segment's duration (negative evidence: a muted participant cannot be speaking).
+         3. Assign $C_i \to P_j$ via maximum-weight bipartite matching if $P_j$ accounts for $\ge 35\%$ of $C_i$'s corroborated speaking time AND is corroborated across at least `PROMOTE_THRESHOLD = 3` distinct turns (or $\ge 4.0\text{ s}$ total unambiguous overlap).
+         4. Unmatched clusters (e.g. a second person talking in a shared conference room tile) cleanly fall back to `"Speaker 1"`, `"Speaker 2"`.
+
   - **Risks.** Long recordings need streaming to disk rather than one
-    in-memory buffer; speaker count has to be estimated (or set by the
-    user); consent: recording other people needs a clear on-screen
+    in-memory buffer (done in Phase 1); speaker count has to be estimated (or set by the
+    user); browser/Electron DOM class names (`oZRSLe`, `kssMZb`, `p-huddle_peer_tile`) can change across web deploys, so the AX poller must also match semantic `AXDescription`/`AXTitle` attributes (`"speaking"`, `"muted"`) and degrade gracefully to `"Speaker N"` if no tiles match; consent: recording other people needs a clear on-screen
     indicator and a note in the UI that the user is responsible for
     telling participants.
 

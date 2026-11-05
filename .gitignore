@@ -28,3 +28,8 @@ test-results
 playwright-report
 dist-e2e
 *.tsbuildinfo
+
+# Secrets (.env.example stays tracked)
+.env
+.env.*
+!.env.example

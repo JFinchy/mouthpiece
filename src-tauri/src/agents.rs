@@ -496,6 +496,17 @@ pub fn link_has_token(url: &tauri::Url, token: &str) -> bool {
         .any(|(k, v)| k == "token" && v.as_bytes() == token.as_bytes())
 }
 
+/// Whether a `mouthpiece://` link carries this install's token. Every
+/// action that does something (agent links, and starting or stopping
+/// dictation) checks this: any web page can open a `mouthpiece://` link,
+/// and an unchecked `start-recording` would let a site record the mic and
+/// have the transcript pasted into its own page.
+pub fn link_is_authorized(app: &AppHandle, url: &tauri::Url) -> bool {
+    app.try_state::<AgentState>()
+        .and_then(|state| state.token.clone())
+        .is_some_and(|token| link_has_token(url, &token))
+}
+
 /// Keeps a copy of the hook script at a stable path outside the app bundle,
 /// so the snippet in `~/.claude/settings.json` survives app updates and
 /// works from a dev build too. Only the user can read it, since it holds
@@ -546,8 +557,7 @@ fn emit_changed(app: &AppHandle) {
 /// Handles `agent-waiting` and `agent-resumed` links. Resolving the owning
 /// app shells out to `ps`, so it runs off the deep-link callback.
 pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
-    let token = app.state::<AgentState>().token.clone();
-    if !token.is_some_and(|token| link_has_token(url, &token)) {
+    if !link_is_authorized(app, url) {
         crate::applog!("agents: ignoring a link without this install's token");
         return;
     }

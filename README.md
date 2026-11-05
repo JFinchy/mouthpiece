@@ -56,7 +56,9 @@ Website: **[jfinchy.github.io/mouthpiece](https://jfinchy.github.io/mouthpiece/)
 
 **Built for automation**
 - Start and stop recording from scripts or other tools with
-  `open mouthpiece://start-recording` (and `stop-` and `toggle-`).
+  `open "mouthpiece://start-recording?token=$(cat ~/Library/Application\ Support/dev.mouthpiece/agent-hook-token)"`
+  (and `stop-` and `toggle-`). The token stops web pages from starting
+  your microphone; links without it are ignored.
 - A webhook can receive each finished transcript.
 - Searchable History lets you re-run any past dictation through a
   different mode.

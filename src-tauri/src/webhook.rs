@@ -27,12 +27,30 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The URL's scheme and host, for logs. Webhook URLs usually carry their
+/// secret in the path or query (Zapier, n8n, Slack), and `app.log` is
+/// attached to bug reports.
+fn redact(url: &str) -> String {
+    match tauri::Url::parse(url) {
+        Ok(u) => format!("{}://{}/…", u.scheme(), u.host_str().unwrap_or("?")),
+        Err(_) => "<invalid url>".to_string(),
+    }
+}
+
 fn post(url: &str, payload: &WebhookPayload) -> Result<(), String> {
     ureq::post(url)
         .timeout(std::time::Duration::from_secs(WEBHOOK_TIMEOUT_SECS))
         .send_json(serde_json::to_value(payload).map_err(|e| e.to_string())?)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        // ureq's own Display includes the full URL; keep it out of the
+        // message, which is both logged and shown in Settings.
+        .map_err(|e| match e {
+            ureq::Error::Status(code, _) => format!("the endpoint answered HTTP {code}"),
+            ureq::Error::Transport(t) => match t.message() {
+                Some(msg) => format!("{}: {msg}", t.kind()),
+                None => t.kind().to_string(),
+            },
+        })
 }
 
 /// Fires in its own background thread (same pattern as journal
@@ -43,7 +61,7 @@ fn post(url: &str, payload: &WebhookPayload) -> Result<(), String> {
 pub fn send_entry(url: String, payload: WebhookPayload) {
     std::thread::spawn(move || {
         if let Err(err) = post(&url, &payload) {
-            crate::applog!("webhook: delivery to {url} failed: {err}");
+            crate::applog!("webhook: delivery to {} failed: {err}", redact(&url));
         }
     });
 }
@@ -83,7 +101,7 @@ pub fn send_test_webhook(app: AppHandle) -> Result<(), String> {
                 let _ = app.emit("webhook-test-result", serde_json::json!({ "ok": true }));
             }
             Err(err) => {
-                crate::applog!("webhook: test send to {url} failed: {err}");
+                crate::applog!("webhook: test send to {} failed: {err}", redact(&url));
                 let _ = app.emit(
                     "webhook-test-result",
                     serde_json::json!({ "ok": false, "error": err }),

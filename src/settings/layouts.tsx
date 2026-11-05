@@ -53,7 +53,7 @@ export const PAGE_TITLE: Record<PageId, string> = {
   voice: "Voice — Whisper model & isolation",
   vocabulary: "Vocabulary",
   modes: "Modes — app-aware formatting rules",
-  llm: "LLM — local refinement (Ollama)",
+  llm: "LLM — local refinement",
   insights: "Insights — usage & feature adoption",
   history: "History",
   meetings: "Meetings — transcripts split by speaker",

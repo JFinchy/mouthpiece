@@ -88,6 +88,19 @@ built yet.
 - **In-app Ollama model catalog** (Gemma, Llama, Phi, Qwen, Mistral) with
   one-click pull and download progress, plus autodiscovery of any model
   you'd already pulled outside the app.
+- **Models from other local servers** — LM Studio (port 1234), llama.cpp's
+  `llama-server` (8080) and Jan (1337) are detected over their
+  OpenAI-compatible API, and their models are listed next to Ollama's,
+  tagged with their source, for refinement, the journal and boilerplate.
+  Loopback only, and redirects are never followed, so text can't be bounced
+  off the Mac. For Macs where Ollama's downloads are blocked but a model is
+  already here (`local_llm.rs`).
+- **Add a model file to Ollama** — `.gguf` files in LM Studio's, Jan's and
+  the Hugging Face folders and `~/models` are listed under "Model files on
+  this Mac" with an "Add to Ollama" button; anything else (Downloads, a
+  shared drive) is picked with "Choose a .gguf file…". The file is hashed,
+  copied into the local Ollama as a blob and turned into a model, with
+  progress; no network beyond localhost.
 - **Last-observed refinement latency** surfaced per model in the LLM
   picker, so you can judge which local models are actually fast enough
   before committing to one (a "thinking" reasoning model can take
@@ -208,11 +221,39 @@ built yet.
   (in the default text editor) and Delete, behind the History lock.
 - **Crash-safe recording** — audio streams to a 16 kHz WAV, flushed every
   5 seconds, so a quit or crash leaves a recording the list offers to
-  Transcribe. The WAV is deleted once the transcript is saved. A
-  forgotten meeting stops itself after 4 hours.
-- Mic only: meetings in the room and calls on speakers. Calls on
-  headphones only include your side (system audio is phase 2, see
-  `ROADMAP.md`).
+  Transcribe. The WAV is deleted once the transcript is saved. Meetings
+  stop themselves at 2.5 hours (bounding disk and transcription memory);
+  the widget counts down for the last 10 minutes and says to start a new
+  meeting to keep recording.
+- **Dual-channel system + mic audio (Phase 2, 2026-11-05)** — on macOS 14.4+,
+  captures remote call audio directly via a CoreAudio Process Tap
+  (`CATapDescription` / `AudioHardwareCreateProcessTap`) alongside your
+  microphone into a 2-channel 16 kHz stereo WAV (`Left = Mic / "You"`,
+  `Right = System / Remote`), so calls on headphones work out of the box
+  without Screen Recording permission or a virtual audio driver. On speakers,
+  a sliding cross-correlation **Conference-Room Echo Gate** suppresses remote
+  bleed from the mic channel while preserving double-talk. Falls back to
+  single-channel mic recording if unavailable or for in-person room meetings.
+- **Push-to-talk coexistence during meetings (Phase 2, 2026-11-05)** — you can
+  still use push-to-talk dictation into Slack, Notion, or your editor while a
+  meeting records; the meeting's mic channel is zeroed for the duration of the
+  dictation utterance so private dictation stays out of the meeting transcript
+  while keeping stereo sample alignment intact.
+- **Local call auto-detection & auto-stop prompt (Phase 2, 2026-11-05)** —
+  inspects CoreAudio per-process input/output holders (`kAudioProcessPropertyBundleID`)
+  and browser window titles/URLs via Accessibility (`AXUIElement`) to offer a
+  one-click `"Record <App>?"` prompt in the widget when a Zoom, Google Meet,
+  Microsoft Teams, Slack Huddle, Webex, FaceTime, or Discord call starts, and
+  a `"Call ended · Stop?"` prompt when the call ends. Toggle: "Offer to record
+  when a call starts" (on by default).
+- **Offline active-speaker naming via Accessibility (Phase 2, 2026-11-05)** —
+  polls participant tiles in the active conferencing window (`AXDOMClassList`
+  for Google Meet `"oZRSLe"`/`"kssMZb"` and Slack Huddles
+  `"p-huddle_peer_tile"`/`"p-huddle_peer_tile__overlay--active_speaker"`, plus
+  Teams and Zoom tile trees) every 300 ms and fuses active-speaker overlap and
+  muted-tile negative evidence with `group_voices` speaker clusters after the
+  call (promoting clusters after `>= 3` corroborated turns or a `>= 4s`
+  monologue).
 
 ## Widget & Settings UI
 
@@ -288,7 +329,11 @@ built yet.
 - **Deep-link/CLI automation hooks** — `open mouthpiece://start-recording`
   / `stop-recording` / `toggle-recording` for Raycast, Hammerspoon,
   Alfred, or plain shell scripts. Start/stop are idempotent, so a script
-  doesn't need to track recording state itself.
+  doesn't need to track recording state itself. Each link must carry
+  `?token=` with this install's token (the file
+  `~/Library/Application Support/dev.mouthpiece/agent-hook-token`), the
+  same one the agent hook uses, because any web page can open a
+  `mouthpiece://` link; links without it are ignored and logged.
 - **Output webhook** — a configurable URL gets a JSON `POST`
   (`timestamp_ms`, `text`, `summary`, `app_name`, `mode`) after every
   delivered dictation, covering Notion/Slack/n8n/Zapier/Make.com/

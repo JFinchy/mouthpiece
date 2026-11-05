@@ -100,16 +100,14 @@ Local Config Agent, vocabulary coaching, the iOS keyboard.
   end-to-end verification (real enrollment, background-voice rejection,
   threshold tuning) before it's considered done. See `BACKLOG.md` for the
   full design.
+- **Meeting mode, phase 2: calls, auto-detection & offline speaker naming** — both phase 1 (mic only,
+  transcript split by speaker, built 2026-10-26) and phase 2 (built 2026-11-05, awaiting manual end-to-end verification per `manual-testing-inbox/meeting-phase2.md`) are now implemented.
+  Phase 2 adds three 100% local capabilities (revised 2026-11-04 after reverse-engineering Wispr Flow Notetaker v1.6.606; full implementation spec in `BACKLOG.md`):
+  1. **Dual-channel system audio capture via CoreAudio Process Tap (`CATapDescription`, macOS 14.4+, graceful mic-only fallback)**: uses `NSAudioCaptureUsageDescription` ("System Audio Recording Only") instead of full Screen Recording permission, with a stalled-IOProc watchdog for seamless device-switch recovery, writing a 2-channel stereo 16 kHz WAV (Left = Mic/"You" with cross-correlation echo gate for speakerphone bleed; Right = System/remote speakers diarized via `pyannote` + `WeSpeaker`). Also decouples `MeetingSession` from `CaptureState` so push-to-talk dictation works mid-meeting.
+  2. **Local meeting auto-detection & auto-stop (`mic_usage.rs` + `meeting_detect.rs`)**: inspects `kAudioProcessPropertyBundleID` and `kAudioProcessPropertyIsRunningOutput` on active CoreAudio processes (plus browser tab URL/title check via `AXUIElement` for Meet/Teams/Zoom/Slack) to prompt starting/stopping meeting recordings automatically across widget styles.
+  3. **Offline active-speaker naming via Accessibility (`AXUIElement`, `speaker_poller.rs`)**: polls cached participant tiles in Zoom, Google Meet, Microsoft Teams, and Slack Huddles every 300 ms during a call to log `{ offset_ms, speaking_names, muted_names }` in memory, then fuses those observations post-call with `group_voices` acoustic clusters via temporal overlap matching (`>= 3` corroborated turns) to replace `"Speaker 1"`, `"Speaker 2"` with real participant names offline.
 
 ## Next — needs its own design pass before implementation
-
-- **Meeting mode, phase 2: calls on headphones** — phase 1 (mic only,
-  transcript split by speaker) is built (2026-10-26, see `FEATURES.md`).
-  Phase 2 also records the Mac's own audio output (ScreenCaptureKit,
-  Screen Recording permission), kept as a second channel so the mic is
-  "You" and system audio is everyone else. About a week. Before it,
-  measure phase 1 on a few real recordings. Full design and risks in
-  `BACKLOG.md`.
 
 - **The Local Config Agent** — voice-driven edits to `~/.zshrc`, Neovim
   `init.lua`, MCP settings. Needs filesystem *write* access driven by

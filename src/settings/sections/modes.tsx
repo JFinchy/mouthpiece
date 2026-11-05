@@ -320,6 +320,7 @@ export function AppModesSection() {
                     <option key={l.id} value={l.id}>
                       {l.downloaded ? "✓ " : "⬇ "}
                       {l.label}
+                      {l.source !== "Ollama" ? ` · ${l.source}` : ""}
                       {!l.downloaded && l.size_gb > 0 ? ` — ${l.size_gb.toFixed(1)}GB, not installed` : ""}
                     </option>
                   ))}
@@ -327,7 +328,7 @@ export function AppModesSection() {
                 <InfoPopover>
                   <p className="mb-1 font-semibold">Installing a model</p>
                   <p>
-                    Models run fully offline via Ollama. "✓" means it's already downloaded and ready to use for free;
+                    Models run fully offline via Ollama, or a local LM Studio, llama.cpp or Jan server. "✓" means it's already downloaded and ready to use for free;
                     "⬇" means selecting it triggers a one-time download (the size shown) that's kept permanently on
                     disk. No ongoing cost either way — no data ever leaves this machine, and there's no per-use fee.
                   </p>

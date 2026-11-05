@@ -28,11 +28,16 @@ pub enum CaptureState {
     Dictating {
         trigger: Trigger,
         session: u64,
+        /// When push-to-talk dictation starts during an active meeting, keeps
+        /// the meeting's session id so stopping dictation resumes `Meeting`
+        /// while the meeting's background level/safety loop stays alive.
+        meeting_session: Option<u64>,
     },
     Enrolling {
         session: u64,
     },
-    /// Recording a meeting (see `meeting.rs`); dictation waits until it ends.
+    /// Recording a meeting (see `meeting.rs`); push-to-talk dictation can
+    /// temporarily borrow the mic while the meeting continues in the background.
     Meeting {
         session: u64,
     },
@@ -78,18 +83,51 @@ fn transition(
             Dictating {
                 trigger,
                 session: next_session,
+                meeting_session: None,
             },
             Transition::StartedDictation {
                 session: next_session,
             },
         ),
-        (Dictating { session, .. }, StopDictation(_) | ToggleDictation(_)) => {
-            (Idle, Transition::StoppedDictation { session })
-        }
-        (Dictating { session, .. }, DiscardDictation) => {
-            (Idle, Transition::DiscardedDictation { session })
-        }
-        (Idle | Enrolling { .. }, DiscardDictation) => {
+        (Meeting { session: meeting }, StartDictation(trigger) | ToggleDictation(trigger)) => (
+            Dictating {
+                trigger,
+                session: next_session,
+                meeting_session: Some(meeting),
+            },
+            Transition::StartedDictation {
+                session: next_session,
+            },
+        ),
+        (
+            Dictating {
+                session,
+                meeting_session,
+                ..
+            },
+            StopDictation(_) | ToggleDictation(_),
+        ) => (
+            match meeting_session {
+                Some(meeting) => Meeting { session: meeting },
+                None => Idle,
+            },
+            Transition::StoppedDictation { session },
+        ),
+        (
+            Dictating {
+                session,
+                meeting_session,
+                ..
+            },
+            DiscardDictation,
+        ) => (
+            match meeting_session {
+                Some(meeting) => Meeting { session: meeting },
+                None => Idle,
+            },
+            Transition::DiscardedDictation { session },
+        ),
+        (Idle | Enrolling { .. } | Meeting { .. }, DiscardDictation) => {
             (state, Transition::Rejected("not dictating"))
         }
         (Idle, StartEnrollment) => (
@@ -105,7 +143,7 @@ fn transition(
         }
 
         (Dictating { .. }, StartDictation(_)) => (state, Transition::Rejected("already dictating")),
-        (Idle, StopDictation(_)) => (state, Transition::Rejected("not dictating")),
+        (Idle | Meeting { .. }, StopDictation(_)) => (state, Transition::Rejected("not dictating")),
         (Idle, StopEnrollment) => (state, Transition::Rejected("not enrolling")),
         (Dictating { .. }, StartEnrollment | StopEnrollment) => (
             state,
@@ -126,13 +164,45 @@ fn transition(
             },
         ),
         (Meeting { session }, StopMeeting) => (Idle, Transition::StoppedMeeting { session }),
-        (Meeting { .. }, StartMeeting) => {
-            (state, Transition::Rejected("already recording a meeting"))
-        }
-        (Idle | Dictating { .. } | Enrolling { .. }, StopMeeting) => {
-            (state, Transition::Rejected("not recording a meeting"))
-        }
-        (Dictating { .. }, StartMeeting) => (
+        (
+            Dictating {
+                trigger,
+                session,
+                meeting_session: Some(meeting),
+            },
+            StopMeeting,
+        ) => (
+            Dictating {
+                trigger,
+                session,
+                meeting_session: None,
+            },
+            Transition::StoppedMeeting { session: meeting },
+        ),
+        (
+            Meeting { .. }
+            | Dictating {
+                meeting_session: Some(_),
+                ..
+            },
+            StartMeeting,
+        ) => (state, Transition::Rejected("already recording a meeting")),
+        (
+            Idle
+            | Dictating {
+                meeting_session: None,
+                ..
+            }
+            | Enrolling { .. },
+            StopMeeting,
+        ) => (state, Transition::Rejected("not recording a meeting")),
+        (
+            Dictating {
+                meeting_session: None,
+                ..
+            },
+            StartMeeting,
+        ) => (
             state,
             Transition::Rejected("microphone is in use for dictation"),
         ),
@@ -140,10 +210,6 @@ fn transition(
             state,
             Transition::Rejected("microphone is in use for voice enrollment"),
         ),
-        (
-            Meeting { .. },
-            StartDictation(_) | StopDictation(_) | ToggleDictation(_) | DiscardDictation,
-        ) => (state, Transition::Rejected("a meeting is being recorded")),
         (Meeting { .. }, StartEnrollment | StopEnrollment) => {
             (state, Transition::Rejected("a meeting is being recorded"))
         }
@@ -203,9 +269,14 @@ impl CaptureController {
     /// loop running alongside the new one.
     pub fn is_session_active(&self, session: u64) -> bool {
         match self.state() {
-            CaptureState::Dictating { session: s, .. }
-            | CaptureState::Enrolling { session: s }
-            | CaptureState::Meeting { session: s } => s == session,
+            CaptureState::Dictating {
+                session: s,
+                meeting_session,
+                ..
+            } => s == session || meeting_session == Some(session),
+            CaptureState::Enrolling { session: s } | CaptureState::Meeting { session: s } => {
+                s == session
+            }
             CaptureState::Idle => false,
         }
     }
@@ -224,7 +295,8 @@ mod tests {
             state,
             Dictating {
                 trigger: Trigger::Hotkey,
-                session: 7
+                session: 7,
+                meeting_session: None,
             }
         );
         assert_eq!(t, Transition::StartedDictation { session: 7 });
@@ -235,6 +307,7 @@ mod tests {
         let current = Dictating {
             trigger: Trigger::Hotkey,
             session: 1,
+            meeting_session: None,
         };
         let (state, t) = transition(current, StartDictation(Trigger::DeepLink), 2);
         assert_eq!(state, current);
@@ -246,6 +319,7 @@ mod tests {
         let current = Dictating {
             trigger: Trigger::Hotkey,
             session: 4,
+            meeting_session: None,
         };
         assert_eq!(
             transition(current, DiscardDictation, 5),
@@ -283,6 +357,7 @@ mod tests {
         let current = Dictating {
             trigger: Trigger::DoubleTapFn,
             session: 5,
+            meeting_session: None,
         };
         let (state, t) = transition(current, ToggleDictation(Trigger::Hotkey), 6);
         assert_eq!(state, Idle);
@@ -305,6 +380,7 @@ mod tests {
         let dictating = Dictating {
             trigger: Trigger::Hotkey,
             session: 1,
+            meeting_session: None,
         };
         for req in [StartEnrollment, StopEnrollment] {
             let (state, t) = transition(dictating, req, 2);
@@ -332,11 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn a_meeting_holds_the_mic_until_it_ends() {
+    fn a_meeting_blocks_enrollment_and_second_meeting_but_allows_push_to_talk_dictation() {
         let meeting = Meeting { session: 2 };
         for request in [
-            StartDictation(Trigger::Hotkey),
-            ToggleDictation(Trigger::Button),
             StopDictation(Trigger::Tray),
             DiscardDictation,
             StartEnrollment,
@@ -346,9 +420,32 @@ mod tests {
             assert_eq!(state, meeting, "{request:?}");
             assert!(matches!(t, Transition::Rejected(_)), "{request:?}");
         }
+
+        // Push-to-talk dictation starts during a meeting and returns to Meeting when stopped.
+        let (dictating_in_meeting, t) = transition(meeting, StartDictation(Trigger::Hotkey), 3);
+        assert_eq!(t, Transition::StartedDictation { session: 3 });
+        assert_eq!(
+            dictating_in_meeting,
+            Dictating {
+                trigger: Trigger::Hotkey,
+                session: 3,
+                meeting_session: Some(2),
+            }
+        );
+        let (resumed_meeting, t) =
+            transition(dictating_in_meeting, StopDictation(Trigger::Hotkey), 4);
+        assert_eq!(t, Transition::StoppedDictation { session: 3 });
+        assert_eq!(resumed_meeting, Meeting { session: 2 });
+
+        // Discarding dictation during a meeting also resumes the meeting.
+        let (after_discard, t) = transition(dictating_in_meeting, DiscardDictation, 4);
+        assert_eq!(t, Transition::DiscardedDictation { session: 3 });
+        assert_eq!(after_discard, Meeting { session: 2 });
+
         let dictating = Dictating {
             trigger: Trigger::Hotkey,
             session: 1,
+            meeting_session: None,
         };
         let (state, t) = transition(dictating, StartMeeting, 2);
         assert_eq!(state, dictating);
@@ -357,6 +454,33 @@ mod tests {
             transition(Idle, StopMeeting, 1).1,
             Transition::Rejected(_)
         ));
+    }
+
+    #[test]
+    fn both_meeting_and_dictation_sessions_report_active_during_coexistence() {
+        let c = CaptureController::new();
+        let Transition::StartedMeeting {
+            session: meeting_id,
+        } = c.request(StartMeeting)
+        else {
+            panic!("expected meeting start");
+        };
+        assert!(c.is_session_active(meeting_id));
+
+        let Transition::StartedDictation { session: ptt_id } =
+            c.request(StartDictation(Trigger::Hotkey))
+        else {
+            panic!("expected dictation start during meeting");
+        };
+        assert!(
+            c.is_session_active(meeting_id),
+            "meeting session must remain active while push-to-talk dictation runs"
+        );
+        assert!(c.is_session_active(ptt_id));
+
+        c.request(StopDictation(Trigger::Hotkey));
+        assert!(c.is_session_active(meeting_id));
+        assert!(!c.is_session_active(ptt_id));
     }
 
     #[test]

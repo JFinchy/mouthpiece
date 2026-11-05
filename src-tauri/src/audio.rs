@@ -428,10 +428,14 @@ struct Sinks {
 
 impl Sinks {
     fn deliver(&self, data: &[f32], channels: u16, sample_rate: u32) {
-        let paused = self.paused.load(Ordering::Relaxed);
+        let is_buffering = self.buffering.load(Ordering::Relaxed);
+        // Paused dictation: record nothing and read as silence. The meeting
+        // (if any) hears the user again, since nothing is being dictated.
+        let paused = is_buffering && self.paused.load(Ordering::Relaxed);
         let level = if paused { 0.0 } else { rms(data) };
         self.level.store(level.to_bits(), Ordering::Relaxed);
-        if self.buffering.load(Ordering::Relaxed) && !paused {
+        let dictating = is_buffering && !paused;
+        if dictating {
             let mut conform = self.conform.lock().unwrap();
             match conform.as_mut() {
                 Some(conformer) => {
@@ -445,14 +449,28 @@ impl Sinks {
                 }
             }
         }
-        for tap in [&self.tap, &self.meeting] {
-            if let Some(tap) = tap.lock().unwrap().as_ref() {
-                let _ = tap.send(AudioChunk {
-                    samples: data.to_vec(),
-                    channels,
-                    sample_rate,
-                });
-            }
+        if let Some(tap) = self.tap.lock().unwrap().as_ref() {
+            let _ = tap.send(AudioChunk {
+                samples: data.to_vec(),
+                channels,
+                sample_rate,
+            });
+        }
+        if let Some(meeting_tap) = self.meeting.lock().unwrap().as_ref() {
+            // While push-to-talk dictation owns the mic, feed zeroed frames of
+            // the exact same length to the meeting tap so the meeting recording
+            // stays sample-aligned with system audio without transcribing the
+            // user's private dictation into the meeting notes.
+            let samples = if dictating {
+                vec![0.0; data.len()]
+            } else {
+                data.to_vec()
+            };
+            let _ = meeting_tap.send(AudioChunk {
+                samples,
+                channels,
+                sample_rate,
+            });
         }
     }
 
@@ -1265,24 +1283,64 @@ mod tests {
     }
 
     #[test]
-    fn paused_dictation_records_nothing_and_reads_silent() {
+    fn paused_dictation_records_nothing_and_the_meeting_hears_it() {
+        let (meeting_tx, meeting_rx) = mpsc::channel();
         let sinks = Sinks {
             samples: Arc::new(Mutex::new(Vec::new())),
             buffering: Arc::new(AtomicBool::new(true)),
             paused: Arc::new(AtomicBool::new(false)),
             format: Arc::new(AtomicU64::new(0)),
             tap: Arc::new(Mutex::new(None)),
-            meeting: Arc::new(Mutex::new(None)),
+            meeting: Arc::new(Mutex::new(Some(meeting_tx))),
             level: Arc::new(AtomicU32::new(0)),
             conform: Arc::new(Mutex::new(None)),
         };
         sinks.deliver(&[0.5, -0.5], 1, 16_000);
+        assert_eq!(meeting_rx.recv().unwrap().samples, vec![0.0, 0.0]);
         sinks.paused.store(true, Ordering::SeqCst);
         sinks.deliver(&[0.9, -0.9], 1, 16_000);
         assert_eq!(*sinks.samples.lock().unwrap(), vec![0.5, -0.5]);
         assert_eq!(f32::from_bits(sinks.level.load(Ordering::Relaxed)), 0.0);
+        // Paused, so the meeting gets the real audio again.
+        assert_eq!(meeting_rx.recv().unwrap().samples, vec![0.9, -0.9]);
         sinks.paused.store(false, Ordering::SeqCst);
         sinks.deliver(&[0.3], 1, 16_000);
         assert_eq!(*sinks.samples.lock().unwrap(), vec![0.5, -0.5, 0.3]);
+        assert_eq!(meeting_rx.recv().unwrap().samples, vec![0.0]);
+    }
+
+    #[test]
+    fn meeting_tap_is_zeroed_while_push_to_talk_dictation_buffers() {
+        let (meeting_tx, meeting_rx) = mpsc::channel();
+        let sinks = Sinks {
+            samples: Arc::new(Mutex::new(Vec::new())),
+            buffering: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+            format: Arc::new(AtomicU64::new(0)),
+            tap: Arc::new(Mutex::new(None)),
+            meeting: Arc::new(Mutex::new(Some(meeting_tx))),
+            level: Arc::new(AtomicU32::new(0)),
+            conform: Arc::new(Mutex::new(None)),
+        };
+
+        // Normal meeting audio when dictation is idle.
+        sinks.deliver(&[0.4, -0.4], 1, 16_000);
+        let first = meeting_rx.recv().unwrap();
+        assert_eq!(first.samples, vec![0.4, -0.4]);
+        assert!(sinks.samples.lock().unwrap().is_empty());
+
+        // Start push-to-talk dictation during the meeting: dictation buffer gets
+        // the real audio while the meeting tap gets zeroed samples of the same length.
+        sinks.buffering.store(true, Ordering::SeqCst);
+        sinks.deliver(&[0.8, -0.8, 0.5], 1, 16_000);
+        let during_ptt = meeting_rx.recv().unwrap();
+        assert_eq!(during_ptt.samples, vec![0.0, 0.0, 0.0]);
+        assert_eq!(*sinks.samples.lock().unwrap(), vec![0.8, -0.8, 0.5]);
+
+        // Stop push-to-talk dictation: meeting tap immediately resumes real audio.
+        sinks.buffering.store(false, Ordering::SeqCst);
+        sinks.deliver(&[0.25, -0.25], 1, 16_000);
+        let after_ptt = meeting_rx.recv().unwrap();
+        assert_eq!(after_ptt.samples, vec![0.25, -0.25]);
     }
 }

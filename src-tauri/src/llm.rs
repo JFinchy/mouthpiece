@@ -5,6 +5,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
+/// The local Ollama. Other local servers (LM Studio, llama.cpp, Jan) are in
+/// `local_llm.rs`; their model names contain `::`.
+pub const OLLAMA_BASE: &str = "http://localhost:11434";
 const OLLAMA_GENERATE_URL: &str = "http://localhost:11434/api/generate";
 const OLLAMA_TAGS_URL: &str = "http://localhost:11434/api/tags";
 const OLLAMA_PULL_URL: &str = "http://localhost:11434/api/pull";
@@ -44,6 +47,10 @@ pub fn prewarm(model: &str) {
         last.insert(model.to_string(), now);
     }
     if require_local(model).is_err() {
+        return;
+    }
+    if let Some((server, id)) = crate::local_llm::parse(model) {
+        crate::local_llm::prewarm(server, id.to_string());
         return;
     }
     let model = model.to_string();
@@ -161,6 +168,8 @@ pub struct LlmModelStatus {
     pub size_gb: f32,
     pub downloaded: bool,
     pub last_latency_ms: Option<u64>,
+    /// What runs it: "Ollama", "LM Studio", "llama.cpp server", "Jan".
+    pub source: String,
 }
 
 /// Catalog entries plus any already-pulled models not in the catalog
@@ -178,6 +187,7 @@ pub fn list_llm_catalog() -> Vec<LlmModelStatus> {
             size_gb: m.size_gb,
             downloaded: pulled.iter().any(|p| p == m.id),
             last_latency_ms: last_latency_ms(m.id),
+            source: "Ollama".to_string(),
         })
         .collect();
 
@@ -189,6 +199,23 @@ pub fn list_llm_catalog() -> Vec<LlmModelStatus> {
                 size_gb: 0.0,
                 downloaded: true,
                 last_latency_ms: last_latency_ms(p),
+                source: "Ollama".to_string(),
+            });
+        }
+    }
+
+    // Models a running local server (LM Studio, llama.cpp, Jan) offers:
+    // for Macs where Ollama can't download but a model is already here.
+    for found in crate::local_llm::reachable() {
+        for model in &found.models {
+            let id = crate::local_llm::model_id(found.server, model);
+            result.push(LlmModelStatus {
+                label: model.clone(),
+                size_gb: 0.0,
+                downloaded: true,
+                last_latency_ms: last_latency_ms(&id),
+                source: found.server.name.to_string(),
+                id,
             });
         }
     }
@@ -418,9 +445,12 @@ fn refine_streaming_at(
     use std::sync::atomic::Ordering;
     require_local(req.model)?;
 
+    let prompt = prompt_for_mode(req.mode, req.text, req.custom_instructions, req.vocabulary);
+    // A model on another local server (LM Studio, llama.cpp, Jan).
+    let local = crate::local_llm::parse(req.model).map(|(server, id)| (server, id.to_string()));
     let body = serde_json::json!({
         "model": req.model,
-        "prompt": prompt_for_mode(req.mode, req.text, req.custom_instructions, req.vocabulary),
+        "prompt": prompt,
         "stream": true,
         "keep_alive": KEEP_ALIVE,
         // Dictation cleanup needs to be fast, not deliberate — reasoning
@@ -437,6 +467,21 @@ fn refine_streaming_at(
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader_stop = stop.clone();
     std::thread::spawn(move || {
+        if let Some((server, model)) = local {
+            crate::local_llm::stream(server, &model, &prompt, &mut |piece| {
+                if reader_stop.load(Ordering::Relaxed) {
+                    return false;
+                }
+                let event = match piece {
+                    crate::local_llm::Piece::Text(text) => StreamEvent::Text(text),
+                    crate::local_llm::Piece::Done => StreamEvent::Done,
+                    crate::local_llm::Piece::Failed(err) => StreamEvent::Failed(err),
+                };
+                let finished = !matches!(event, StreamEvent::Text(_));
+                tx.send(event).is_ok() && !finished
+            });
+            return;
+        }
         let resp = match ureq::post(url)
             .timeout(std::time::Duration::from_secs(30))
             .send_json(body)
@@ -522,9 +567,9 @@ fn refine_streaming_at(
     // though none of the prompts ask for code (observed via the eval
     // suite: "make directory for the new service" came back as
     // "```bash\nmkdir -p\n```").
-    let cleaned = strip_markdown_fences(output.trim());
+    let cleaned = strip_markdown_fences(&crate::local_llm::strip_think(&output));
     if cleaned.is_empty() {
-        Err("Ollama returned an empty response".to_string())
+        Err("the model returned an empty response".to_string())
     } else {
         Ok(cleaned)
     }
@@ -605,9 +650,24 @@ pub fn summarize_for_journal(text: &str, model: &str) -> Option<Result<String, S
     if let Err(err) = require_local(model) {
         return Some(Err(err));
     }
+    let prompt = format!("{instruction}\n\nDictated text: {text}");
+    if let Some((server, id)) = crate::local_llm::parse(model) {
+        let started = Instant::now();
+        let answer =
+            crate::local_llm::complete(server, id, &prompt, std::time::Duration::from_secs(30));
+        return Some(answer.and_then(|answer| {
+            record_latency(model, started.elapsed().as_millis() as u64);
+            let summary = strip_markdown_fences(&answer).trim_matches('"').to_string();
+            if summary.is_empty() {
+                Err("the model returned an empty response".to_string())
+            } else {
+                Ok(summary)
+            }
+        }));
+    }
     let body = serde_json::json!({
         "model": model,
-        "prompt": format!("{instruction}\n\nDictated text: {text}"),
+        "prompt": prompt,
         "stream": false,
         "keep_alive": KEEP_ALIVE,
         "think": false,
@@ -670,9 +730,22 @@ pub fn generate_boilerplate(request: &str, model: &str) -> Result<String, String
                         request doesn't specify a language, infer the most likely one from \
                         context.";
     require_local(model)?;
+    let prompt = format!("{instruction}\n\nRequest: {request}");
+    if let Some((server, id)) = crate::local_llm::parse(model) {
+        let started = Instant::now();
+        let answer =
+            crate::local_llm::complete(server, id, &prompt, std::time::Duration::from_secs(60))?;
+        record_latency(model, started.elapsed().as_millis() as u64);
+        let code = strip_markdown_fences(&answer);
+        return if code.is_empty() {
+            Err("the model returned an empty response".to_string())
+        } else {
+            Ok(code)
+        };
+    }
     let body = serde_json::json!({
         "model": model,
-        "prompt": format!("{instruction}\n\nRequest: {request}"),
+        "prompt": prompt,
         "stream": false,
         "keep_alive": KEEP_ALIVE,
         "think": false,
