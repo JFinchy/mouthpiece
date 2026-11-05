@@ -366,6 +366,11 @@ built yet.
   it, the undo offer is up, or it's asking to allow pasting. The menu
   bar's Show/Hide Widget still brings it up by hand, and it stays until
   the next dictation ends.
+- **Dictation sounds** (Settings > Dictation > General, off by default) —
+  a short macOS system sound when recording starts (Pop), when it stops
+  or is discarded with Esc (Bottle), when the text is pasted or copied
+  (Glass), and when the dictation fails, e.g. no speech (Basso). Played
+  at half volume; turning it on plays the start sound as a preview.
 - **Warm model pre-load on startup**, so the first real recording doesn't
   pay for Metal shader compilation during the user's first
   "transcribing…".

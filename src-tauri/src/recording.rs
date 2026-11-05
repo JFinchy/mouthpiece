@@ -90,6 +90,7 @@ fn stop_dictation(app: &AppHandle, state: &RecordingState) {
     match state.audio.stop() {
         Ok(path) => {
             let _ = app.emit("recording-stopped", path.to_string_lossy().to_string());
+            crate::sounds::play(app, crate::sounds::Cue::Stop);
             let app = app.clone();
             std::thread::spawn(move || {
                 crate::discard::set_processing(&app, true);
@@ -122,6 +123,7 @@ fn discard_dictation(app: &AppHandle, state: &RecordingState) {
     match state.audio.stop() {
         Ok(path) => {
             crate::applog!("recording: discarded");
+            crate::sounds::play(app, crate::sounds::Cue::Stop);
             let _ = app.emit("dictation-discarded", "recording");
             crate::discard::hold(app, crate::discard::Held::Recording { path, reply });
         }
@@ -266,6 +268,7 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
     });
 
     let _ = app.emit("recording-started", ());
+    crate::sounds::play(app, crate::sounds::Cue::Start);
 }
 
 /// The mode a dictation resolves to, and the speech model it implies.
@@ -398,6 +401,7 @@ fn transcribe_and_paste(
                 let _ = app.emit("mic-dead", ());
             }
             let _ = app.emit("transcript-error", message);
+            crate::sounds::play(app, crate::sounds::Cue::Error);
             return;
         }
         Ok(samples) => {
@@ -439,6 +443,7 @@ fn transcribe_and_paste(
                     "whisper: transcript was only non-speech annotations, nothing to paste"
                 );
                 let _ = app.emit("transcript-error", "no speech detected".to_string());
+                crate::sounds::play(app, crate::sounds::Cue::Error);
                 return;
             }
 
@@ -465,9 +470,11 @@ fn transcribe_and_paste(
         }
         Ok(_) => {
             let _ = app.emit("transcript-error", "no speech detected".to_string());
+            crate::sounds::play(app, crate::sounds::Cue::Error);
         }
         Err(err) => {
             let _ = app.emit("transcript-error", err);
+            crate::sounds::play(app, crate::sounds::Cue::Error);
         }
     }
 }
@@ -823,6 +830,7 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
                 });
             }
 
+            crate::sounds::play(app, crate::sounds::Cue::Done);
             if let Some(reply) = &reply {
                 let _ = app.emit("transcript-copied", reply.notice.clone());
             } else if needs_access {
@@ -844,6 +852,7 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
         }
         Err(err) => {
             let _ = app.emit("transcript-error", err);
+            crate::sounds::play(app, crate::sounds::Cue::Error);
         }
     }
 }

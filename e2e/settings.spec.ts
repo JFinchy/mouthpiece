@@ -187,4 +187,12 @@ test.describe("settings", () => {
     await toggle.check();
     await expect.poll(() => calls(page, "set_widget_only_while_dictating")).toEqual([{ enabled: true }]);
   });
+
+  test("dictation sounds can be turned on", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    const toggle = page.getByRole("checkbox", { name: "Play sounds while dictating" });
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect.poll(() => calls(page, "set_dictation_sounds")).toEqual([{ enabled: true }]);
+  });
 });

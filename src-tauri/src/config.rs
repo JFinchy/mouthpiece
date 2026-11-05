@@ -79,6 +79,10 @@ pub struct AppConfig {
     /// it stays on screen.
     #[serde(default)]
     pub widget_only_while_dictating: bool,
+    /// Play a short sound when dictation starts, stops, and finishes
+    /// pasting (see `sounds.rs`). Off by default.
+    #[serde(default)]
+    pub dictation_sounds: bool,
     /// When true, each pasted dictation gets a one-line LLM-generated
     /// summary attached in History (see `llm::summarize_for_journal`),
     /// turning the raw transcript log into a scannable work journal. Off
@@ -209,6 +213,7 @@ impl Default for AppConfig {
             copy_only: false,
             widget_mode: crate::widget::WidgetMode::default(),
             widget_only_while_dictating: false,
+            dictation_sounds: false,
             journal_enabled: false,
             meeting_speakers: 0,
             isolated_voice_enabled: false,

@@ -277,6 +277,7 @@ export function GeneralSection() {
   const [autostart, setAutostart] = useState(false);
   const [widgetMode, setWidgetModeState] = useState<WidgetMode>("compact");
   const [onlyWhileDictating, setOnlyWhileDictating] = useState(false);
+  const [sounds, setSounds] = useState(false);
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
@@ -284,11 +285,13 @@ export function GeneralSection() {
       invoke<boolean>("get_autostart_enabled"),
       invoke<WidgetMode>("get_widget_mode"),
       invoke<boolean>("get_widget_only_while_dictating"),
+      invoke<boolean>("get_dictation_sounds"),
     ])
-      .then(([autostartValue, widgetModeValue, onlyWhileDictatingValue]) => {
+      .then(([autostartValue, widgetModeValue, onlyWhileDictatingValue, soundsValue]) => {
         setAutostart(autostartValue);
         setWidgetModeState(widgetModeValue);
         setOnlyWhileDictating(onlyWhileDictatingValue);
+        setSounds(soundsValue);
       })
       .catch((err) => notifyError("Couldn't load general settings", err))
       .finally(() => setChecked(true));
@@ -312,6 +315,14 @@ export function GeneralSection() {
     invoke("set_widget_only_while_dictating", { enabled }).catch((err) => {
       notifyError("set_widget_only_while_dictating", err);
       setOnlyWhileDictating(!enabled);
+    });
+  }
+
+  function toggleSounds(enabled: boolean) {
+    setSounds(enabled);
+    invoke("set_dictation_sounds", { enabled }).catch((err) => {
+      notifyError("set_dictation_sounds", err);
+      setSounds(!enabled);
     });
   }
 
@@ -352,6 +363,21 @@ export function GeneralSection() {
               <span className="text-[11px] opacity-60">
                 It appears when you press the shortcut and hides once your words are pasted. Show it any
                 time from the menu bar icon.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="checkbox checkbox-xs mt-0.5"
+              checked={sounds}
+              onChange={(e) => toggleSounds(e.target.checked)}
+            />
+            <span className="flex flex-col gap-0.5">
+              Play sounds while dictating
+              <span className="text-[11px] opacity-60">
+                A short sound when recording starts, when it stops, and when your words are pasted (or
+                something went wrong).
               </span>
             </span>
           </label>

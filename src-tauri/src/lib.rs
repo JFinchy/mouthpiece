@@ -39,6 +39,7 @@ mod recording;
 mod rename;
 mod shortcut;
 mod snippets;
+mod sounds;
 mod stt;
 mod syntax;
 mod theme;
@@ -440,6 +441,8 @@ pub fn run() {
             get_widget_mode,
             set_widget_mode,
             get_widget_only_while_dictating,
+            sounds::get_dictation_sounds,
+            sounds::set_dictation_sounds,
             set_widget_only_while_dictating,
             hide_idle_widget,
             set_widget_size,

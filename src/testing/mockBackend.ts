@@ -65,6 +65,7 @@ function initialState(scenario: Scenario) {
     deviceStatus: scenario.deviceStatus ?? { kind: "system_default", using: devices[0] },
     widgetMode: scenario.widgetMode ?? "compact",
     onlyWhileDictating: scenario.onlyWhileDictating ?? false,
+    dictationSounds: false,
     layout: scenario.layout ?? "sidebar",
     theme: "terminal",
     shortcut: { meta: true, ctrl: false, alt: false, shift: true, code: "Space" },
@@ -192,6 +193,8 @@ export function installMockBackend() {
       return null;
     },
     set_widget_size: () => null,
+    get_dictation_sounds: () => state.dictationSounds,
+    set_dictation_sounds: setter("dictationSounds", "enabled"),
     get_widget_only_while_dictating: () => state.onlyWhileDictating,
     set_widget_only_while_dictating: (args) => {
       state.onlyWhileDictating = args.enabled as boolean;
