@@ -221,11 +221,39 @@ built yet.
   (in the default text editor) and Delete, behind the History lock.
 - **Crash-safe recording** — audio streams to a 16 kHz WAV, flushed every
   5 seconds, so a quit or crash leaves a recording the list offers to
-  Transcribe. The WAV is deleted once the transcript is saved. A
-  forgotten meeting stops itself after 4 hours.
-- Mic only: meetings in the room and calls on speakers. Calls on
-  headphones only include your side (system audio is phase 2, see
-  `ROADMAP.md`).
+  Transcribe. The WAV is deleted once the transcript is saved. Meetings
+  stop themselves at 2.5 hours (bounding disk and transcription memory);
+  the widget counts down for the last 10 minutes and says to start a new
+  meeting to keep recording.
+- **Dual-channel system + mic audio (Phase 2, 2026-11-05)** — on macOS 14.4+,
+  captures remote call audio directly via a CoreAudio Process Tap
+  (`CATapDescription` / `AudioHardwareCreateProcessTap`) alongside your
+  microphone into a 2-channel 16 kHz stereo WAV (`Left = Mic / "You"`,
+  `Right = System / Remote`), so calls on headphones work out of the box
+  without Screen Recording permission or a virtual audio driver. On speakers,
+  a sliding cross-correlation **Conference-Room Echo Gate** suppresses remote
+  bleed from the mic channel while preserving double-talk. Falls back to
+  single-channel mic recording if unavailable or for in-person room meetings.
+- **Push-to-talk coexistence during meetings (Phase 2, 2026-11-05)** — you can
+  still use push-to-talk dictation into Slack, Notion, or your editor while a
+  meeting records; the meeting's mic channel is zeroed for the duration of the
+  dictation utterance so private dictation stays out of the meeting transcript
+  while keeping stereo sample alignment intact.
+- **Local call auto-detection & auto-stop prompt (Phase 2, 2026-11-05)** —
+  inspects CoreAudio per-process input/output holders (`kAudioProcessPropertyBundleID`)
+  and browser window titles/URLs via Accessibility (`AXUIElement`) to offer a
+  one-click `"Record <App>?"` prompt in the widget when a Zoom, Google Meet,
+  Microsoft Teams, Slack Huddle, Webex, FaceTime, or Discord call starts, and
+  a `"Call ended · Stop?"` prompt when the call ends. Toggle: "Offer to record
+  when a call starts" (on by default).
+- **Offline active-speaker naming via Accessibility (Phase 2, 2026-11-05)** —
+  polls participant tiles in the active conferencing window (`AXDOMClassList`
+  for Google Meet `"oZRSLe"`/`"kssMZb"` and Slack Huddles
+  `"p-huddle_peer_tile"`/`"p-huddle_peer_tile__overlay--active_speaker"`, plus
+  Teams and Zoom tile trees) every 300 ms and fuses active-speaker overlap and
+  muted-tile negative evidence with `group_voices` speaker clusters after the
+  call (promoting clusters after `>= 3` corroborated turns or a `>= 4s`
+  monologue).
 
 ## Widget & Settings UI
 

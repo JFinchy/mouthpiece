@@ -48,11 +48,16 @@ test.describe("meetings page", () => {
     await expect(rows).toHaveCount(1);
   });
 
-  test("the number of people is saved", async ({ page, consoleErrors: _ }) => {
+  test("the number of people and auto-detect setting are saved", async ({ page, consoleErrors: _ }) => {
     await open(page, "settings");
     await goTo(page, "Meetings");
     await page.getByTestId("meeting-speakers").selectOption("3");
     expect(await calls(page, "set_meeting_speakers")).toEqual([{ speakers: 3 }]);
+
+    const autoDetect = page.getByTestId("meeting-auto-detect");
+    await expect(autoDetect).toBeChecked();
+    await autoDetect.uncheck();
+    expect(await calls(page, "set_meeting_auto_detect")).toEqual([{ enabled: false }]);
   });
 
   test("transcripts stay hidden behind the History lock", async ({ page, consoleErrors: _ }) => {
@@ -86,6 +91,46 @@ test.describe("meeting in the widget", () => {
     await expect(page.getByText("Ready")).toBeVisible();
   });
 
+  test("counts down to the 2.5-hour limit in the last 10 minutes", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    const limit = 150 * 60_000;
+    await emit(page, "meeting-changed", {
+      recording: { id: "2026-10-26-174005", started_ms: Date.now() - (limit - 5 * 60_000), limit_ms: limit },
+      processing: null,
+      queued: [],
+    });
+    await expect(page.getByTestId("recording-elapsed")).toContainText("Ends in 4:5");
+    await expect(page.getByTestId("recording-elapsed")).toHaveClass(/text-warning/);
+    // The backend stops the meeting, then says why.
+    await emit(page, "meeting-stopped");
+    await emit(page, "meeting-changed", {
+      recording: null,
+      processing: { id: "2026-10-26-174005", step: "Finding who spoke", percent: null },
+      queued: ["2026-10-26-174005"],
+    });
+    await emit(page, "meeting-limit-reached");
+    await expect(page.getByText("Meeting stopped at the 2.5-hour limit")).toBeVisible();
+  });
+
+  test("the main button stops a push-to-talk dictation, not the meeting", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "meeting-changed", {
+      recording: { id: "2026-10-26-174005", started_ms: Date.now() },
+      processing: null,
+      queued: [],
+    });
+    await emit(page, "recording-started", "meeting");
+    await emit(page, "recording-started"); // push-to-talk inside the meeting
+    await page.locator("main").hover();
+    await page.getByRole("button", { name: "Stop recording" }).click();
+    expect(await calls(page, "toggle_recording_command")).toHaveLength(1);
+    expect(await calls(page, "stop_meeting")).toHaveLength(0);
+    // The meeting stopping mid-dictation leaves the dictation recording.
+    await emit(page, "meeting-stopped");
+    await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
+    await expect(page.getByRole("button", { name: "Stop recording" })).toBeVisible();
+  });
+
   test("shows the meeting, stops it, then reports the transcript", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget");
     await page.evaluate(() => {
@@ -97,7 +142,7 @@ test.describe("meeting in the widget", () => {
       window.__dw!.state.meetingStatus = status;
       return window.__dw!.emit("meeting-changed", status);
     });
-    await emit(page, "recording-started");
+    await emit(page, "recording-started", "meeting");
     await expect(page.getByTestId("recording-elapsed")).toContainText("Meeting 1:0");
     await expect(page.getByTestId("discard")).toHaveCount(0);
 
@@ -120,5 +165,46 @@ test.describe("meeting in the widget", () => {
     await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
     await emit(page, "meeting-saved", "Meeting, Mon 26 Oct 2026, 17:40");
     await expect(page.getByText("Meeting transcript saved")).toBeVisible();
+  });
+
+  test("prompts to record a detected call, allows dismissal, and prompts when the call ends", async ({
+    page,
+    consoleErrors: _,
+  }) => {
+    await open(page, "widget");
+    const call = {
+      platform: "google_meet",
+      app_name: "Google Meet",
+      bundle_id: "com.google.Chrome",
+      pid: 4242,
+    };
+    await emit(page, "meeting-detected", call);
+    await expect(page.getByTestId("meeting-detect-start")).toHaveText("Record Google Meet?");
+
+    await page.getByTestId("meeting-detect-dismiss").click();
+    expect(await calls(page, "dismiss_meeting_prompt")).toHaveLength(1);
+    await expect(page.getByTestId("meeting-detect-prompt")).toHaveCount(0);
+
+    // Re-emit a new call and click "Record Zoom?" to start recording.
+    await emit(page, "meeting-detected", {
+      platform: "zoom",
+      app_name: "Zoom",
+      bundle_id: "us.zoom.xos",
+      pid: 5151,
+    });
+    await page.getByTestId("meeting-detect-start").click();
+    expect(await calls(page, "start_meeting")).toHaveLength(1);
+    await expect(page.getByTestId("recording-elapsed")).toContainText("Meeting 0:0");
+
+    // When the call ends, the widget offers a one-click stop prompt.
+    await emit(page, "meeting-ended-detected", {
+      platform: "zoom",
+      app_name: "Zoom",
+      bundle_id: "us.zoom.xos",
+      pid: 5151,
+    });
+    await expect(page.getByTestId("meeting-ended-prompt")).toHaveText("Call ended · Stop?");
+    await page.getByTestId("meeting-ended-prompt").click();
+    expect(await calls(page, "stop_meeting")).toHaveLength(1);
   });
 });

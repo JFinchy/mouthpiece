@@ -64,18 +64,10 @@ pub fn request_dictation(app: &AppHandle, request: Request) {
         | Transition::StoppedEnrollment { .. }
         | Transition::StartedMeeting { .. }
         | Transition::StoppedMeeting { .. } => {}
-        Transition::Rejected(_) => {
-            // The hotkey seemingly doing nothing would look broken.
-            if matches!(
-                state.capture.state(),
-                crate::capture::CaptureState::Meeting { .. }
-            ) {
-                let _ = app.emit(
-                    "meeting-blocked",
-                    "Dictation is paused while a meeting records".to_string(),
-                );
-            }
-        }
+        // Push-to-talk works during a meeting, so a rejection here is only a
+        // stale stop/discard (e.g. a key-up after Esc already discarded):
+        // nothing to tell the user.
+        Transition::Rejected(_) => {}
     }
 }
 
@@ -267,6 +259,7 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
         crate::widget::show(&main_thread_app);
     });
 
+    let _ = app.emit("dictation-started", ());
     let _ = app.emit("recording-started", ());
     crate::sounds::play(app, crate::sounds::Cue::Start);
 }

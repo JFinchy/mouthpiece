@@ -75,8 +75,10 @@ function initialState(scenario: Scenario) {
     agentSound: true,
     historyLockEnabled: scenario.historyLock ?? false,
     meetingSpeakers: 0,
+    meetingAutoDetect: true,
+    detectedMeeting: null as { platform: string; app_name: string; bundle_id: string; pid: number } | null,
     meetingStatus: {
-      recording: null as { id: string; started_ms: number } | null,
+      recording: null as { id: string; started_ms: number; limit_ms?: number } | null,
       processing: null as { id: string; step: string; percent: number | null } | null,
       queued: [] as string[],
     },
@@ -354,8 +356,8 @@ export function installMockBackend() {
     open_microphone_settings: () => null,
     get_meeting_status: () => state.meetingStatus,
     start_meeting: () => {
-      state.meetingStatus = { ...state.meetingStatus, recording: { id: "2026-10-26-174005", started_ms: Date.now() } };
-      void emit("recording-started");
+      state.meetingStatus = { ...state.meetingStatus, recording: { id: "2026-10-26-174005", started_ms: Date.now(), limit_ms: 150 * 60_000 } };
+      void emit("recording-started", "meeting");
       void emit("meeting-changed", state.meetingStatus);
       return null;
     },
@@ -394,6 +396,21 @@ export function installMockBackend() {
       state.meetingSpeakers = Number(args.speakers);
       return null;
     },
+    get_meeting_auto_detect: () => state.meetingAutoDetect,
+    set_meeting_auto_detect: (args) => {
+      state.meetingAutoDetect = Boolean(args.enabled);
+      if (!state.meetingAutoDetect) {
+        state.detectedMeeting = null;
+        void emit("meeting-detect-cleared");
+      }
+      return null;
+    },
+    dismiss_meeting_prompt: () => {
+      state.detectedMeeting = null;
+      void emit("meeting-detect-cleared");
+      return null;
+    },
+    get_detected_meeting: () => state.detectedMeeting,
     get_history_lock: () => lockStatus(),
     set_history_lock_enabled: (args) => {
       state.historyLockEnabled = Boolean(args.enabled);

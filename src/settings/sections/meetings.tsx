@@ -6,7 +6,8 @@ import { LockedHistory, useHistoryLock } from "./privacy";
 
 export type MeetingProgress = { id: string; step: string; percent: number | null };
 export type MeetingStatus = {
-  recording: { id: string; started_ms: number } | null;
+  // `limit_ms`: the meeting stops itself this long after it started.
+  recording: { id: string; started_ms: number; limit_ms?: number } | null;
   processing: MeetingProgress | null;
   queued: string[];
 };
@@ -15,6 +16,12 @@ export type MeetingSummary = {
   title: string;
   detail: string | null;
   state: "ready" | "not_transcribed" | "recording" | "processing";
+};
+export type DetectedCall = {
+  platform: string;
+  app_name: string;
+  bundle_id: string;
+  pid: number;
 };
 
 const SPEAKER_OPTIONS = [0, 2, 3, 4, 5, 6, 7, 8];
@@ -94,14 +101,52 @@ function RecordControl({ status }: { status: MeetingStatus | null }) {
         )}
       </div>
       <p className="mt-2.5 text-xs opacity-70">
-        Records everything your mic hears until you stop, then writes a transcript split by speaker. Audio and
-        transcript stay on this Mac. Dictation is paused while a meeting records.
+        Records your mic and system audio until you stop, then writes a transcript split by speaker. Audio and
+        transcript stay on this Mac. Push-to-talk dictation still works while a meeting records.
       </p>
       <p className="mt-1.5 text-xs opacity-60">
-        Works for meetings in the room and calls on your speakers. On headphones, only your side is heard. Let people
-        know you're recording.
+        Works on headphones, calls on your speakers, and meetings in the room. Let people know you're recording.
       </p>
     </div>
+  );
+}
+
+function AutoDetectToggle() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    invoke<boolean>("get_meeting_auto_detect")
+      .then(setEnabled)
+      .catch((err) => notifyError("Couldn't read the meeting settings", err));
+  }, []);
+
+  function toggle(next: boolean) {
+    const before = enabled;
+    setEnabled(next);
+    invoke("set_meeting_auto_detect", { enabled: next }).catch((err) => {
+      setEnabled(before);
+      notifyError("Couldn't save meeting auto-detection", err);
+    });
+  }
+
+  return (
+    <label className="mb-4 flex cursor-pointer items-start justify-between gap-3">
+      <span className="text-xs">
+        Offer to record when a call starts
+        <span className="block opacity-60">
+          Notices active Zoom, Google Meet, Microsoft Teams, Slack Huddle, Webex, FaceTime, and Discord calls locally
+          and prompts in the widget when a call starts or ends.
+        </span>
+      </span>
+      <input
+        type="checkbox"
+        className="toggle toggle-xs mt-0.5"
+        checked={enabled ?? true}
+        disabled={enabled === null}
+        onChange={(e) => toggle(e.target.checked)}
+        aria-label="Offer to record when a call starts"
+        data-testid="meeting-auto-detect"
+      />
+    </label>
   );
 }
 
@@ -277,6 +322,7 @@ export function MeetingsSection() {
   return (
     <>
       <RecordControl status={status} />
+      <AutoDetectToggle />
       <SpeakerCount />
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Transcripts</h3>
       {lock.status === null ? (

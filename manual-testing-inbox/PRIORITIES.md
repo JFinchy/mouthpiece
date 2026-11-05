@@ -38,6 +38,7 @@ place with a one-line note.
 - [ ] Privacy: History lock (Touch ID), transcript-free logs, no Ollama cloud models - see `privacy-lock.md`
 - [ ] Discard with Esc (and ⇧Esc undo), seven widget styles incl. Notch - see `discard-and-styles.md`
 - [ ] Meeting mode: record a meeting, transcript split by speaker - see `meeting-mode.md`
+- [ ] Meeting mode Phase 2: dual-channel system audio (`CATapDescription`), speakerphone echo gate, push-to-talk coexistence, local call auto-detect/auto-stop, and offline active-speaker naming via Accessibility - see `meeting-phase2.md`
 
 ## Minor
 

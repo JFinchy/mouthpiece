@@ -95,6 +95,11 @@ pub struct AppConfig {
     /// (see `meeting.rs`).
     #[serde(default)]
     pub meeting_speakers: u32,
+    /// Automatically detect when Zoom, Google Meet, Microsoft Teams, Slack
+    /// Huddles, Webex, FaceTime, or Discord start/stop an active call and
+    /// offer a non-intrusive Record / Stop prompt in the widget.
+    #[serde(default = "default_true")]
+    pub meeting_auto_detect: bool,
     /// When true, recordings are filtered to the primary user's voice before
     /// transcription — see `isolate.rs`. Auto-selects between an enrolled
     /// speaker-embedding check and a weaker energy-based fallback depending
@@ -216,6 +221,7 @@ impl Default for AppConfig {
             dictation_sounds: false,
             journal_enabled: false,
             meeting_speakers: 0,
+            meeting_auto_detect: true,
             isolated_voice_enabled: false,
             live_transcribe_enabled: true,
             voice_enrolled: false,

@@ -25,6 +25,7 @@ mod llm;
 mod local_llm;
 mod logging;
 mod meeting;
+mod meeting_detect;
 mod mic_permission;
 mod mic_usage;
 mod models;
@@ -41,8 +42,10 @@ mod rename;
 mod shortcut;
 mod snippets;
 mod sounds;
+mod speaker_poller;
 mod stt;
 mod syntax;
+mod system_audio;
 mod theme;
 mod undo;
 mod voice_isolation;
@@ -490,6 +493,10 @@ pub fn run() {
             meeting::transcribe_meeting,
             meeting::get_meeting_speakers,
             meeting::set_meeting_speakers,
+            meeting::get_meeting_auto_detect,
+            meeting::set_meeting_auto_detect,
+            meeting::dismiss_meeting_prompt,
+            meeting::get_detected_meeting,
             agents::get_agent_sound_enabled,
             agents::set_agent_sound_enabled,
             agents::get_agent_hook_config,
@@ -525,6 +532,7 @@ pub fn run() {
             app.manage(privacy::PrivacyState::default());
             app.manage(discard::DiscardState::default());
             app.manage(meeting::MeetingState::default());
+            meeting::spawn_auto_detect(app.handle().clone());
             history::make_private(app.handle());
 
             let shortcut_cfg = saved_config.shortcut.clone().unwrap_or_default();
