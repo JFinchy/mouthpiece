@@ -596,6 +596,19 @@ pub fn run() {
                         }
                     };
                     recording::request_dictation(&deep_link_app, request);
+                    // Dictation links need this install's token too (see
+                    // agents::link_is_authorized): a web page could
+                    // otherwise start the mic.
+                    if matches!(
+                        action,
+                        "toggle-recording" | "start-recording" | "stop-recording"
+                    ) && !agents::link_is_authorized(&deep_link_app, &url)
+                    {
+                        crate::applog!(
+                            "deep-link: ignoring {action:?} without this install's token"
+                        );
+                        continue;
+                    }
                 }
             });
 

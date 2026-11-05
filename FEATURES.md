@@ -284,7 +284,11 @@ built yet.
 - **Deep-link/CLI automation hooks** — `open mouthpiece://start-recording`
   / `stop-recording` / `toggle-recording` for Raycast, Hammerspoon,
   Alfred, or plain shell scripts. Start/stop are idempotent, so a script
-  doesn't need to track recording state itself.
+  doesn't need to track recording state itself. Each link must carry
+  `?token=` with this install's token (the file
+  `~/Library/Application Support/dev.mouthpiece/agent-hook-token`), the
+  same one the agent hook uses, because any web page can open a
+  `mouthpiece://` link; links without it are ignored and logged.
 - **Output webhook** — a configurable URL gets a JSON `POST`
   (`timestamp_ms`, `text`, `summary`, `app_name`, `mode`) after every
   delivered dictation, covering Notion/Slack/n8n/Zapier/Make.com/
