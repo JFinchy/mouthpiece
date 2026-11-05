@@ -99,7 +99,7 @@ test.describe("meeting in the widget", () => {
     });
     await emit(page, "recording-started");
     await expect(page.getByTestId("recording-elapsed")).toContainText("Meeting 1:0");
-    await expect(page.getByTestId("discard")).toHaveCount(0);
+    await expect(page.getByTestId("pause-dictation")).toHaveCount(0);
 
     await page.locator("main").hover();
     await page.getByRole("button", { name: "Stop the meeting" }).click();

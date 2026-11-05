@@ -17,6 +17,7 @@ place with a one-line note.
 
 ## Important
 
+- [ ] Esc pauses a dictation (Resume / Transcribe / Delete) and passes Esc on to other apps - see `esc-pause.md`
 - [ ] Show the widget only while dictating (appears on the shortcut, hides after the paste) - see `widget-only-while-dictating.md`
 - [ ] Dictation sounds (start, stop, pasted, failed) - see `dictation-sounds.md`
 - [ ] Mic fallback skips Bluetooth, dead mic swapped mid-recording, Switch mic menu, decibel level meter, widget menu in every style - see `mic-fallback-and-switch.md`

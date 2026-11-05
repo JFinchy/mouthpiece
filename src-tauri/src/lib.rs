@@ -326,15 +326,9 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, triggered, event| {
-                    // Esc / ⇧Esc are only registered while they mean something
-                    // (see discard.rs).
+                    // Esc is only registered while recording (see discard.rs).
                     if event.state == PressState::Pressed && *triggered == discard::escape() {
                         discard::on_escape(app);
-                        return;
-                    }
-                    if event.state == PressState::Pressed && *triggered == discard::undo_shortcut()
-                    {
-                        discard::undo(app);
                         return;
                     }
                     if event.state == PressState::Pressed
@@ -463,8 +457,10 @@ pub fn run() {
             agents::get_agent_reply_shortcut,
             agents::get_agent_reply_shortcut_error,
             agents::set_agent_reply_shortcut,
-            discard::discard_recording,
-            discard::undo_discard,
+            discard::pause_dictation,
+            discard::resume_dictation,
+            discard::delete_dictation,
+            discard::cancel_paste_command,
             mic_permission::request_microphone_access,
             mic_permission::open_microphone_settings,
             privacy::get_history_lock,

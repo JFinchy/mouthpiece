@@ -216,13 +216,17 @@ built yet.
 
 ## Widget & Settings UI
 
-- **Discard and undo** — Esc while recording (or the widget's ✕) throws
-  the recording away without transcribing; Esc while transcribing or
-  refining cancels the paste. Either way it's held for 8 seconds:
-  "Discarded · Undo" in the widget, or ⇧Esc, transcribes and pastes it
-  after all (a cancelled paste pastes the text that was ready). Esc and
-  ⇧Esc are registered only while they mean something, so other apps keep
-  them, and not at all if the dictation hotkey itself uses Esc
+- **Pause, then resume, transcribe or delete** — Esc while recording (or
+  the widget's ⏸) pauses it: the mic stops recording and the widget shows
+  Resume, Transcribe and Delete. The dictation shortcut transcribes what
+  was said, Esc again deletes it, Resume keeps recording. Detailed and
+  Live caption spell the keys out; Pill and Notch use icons with the keys
+  in their tooltips; Minimal's dot turns amber and clicking it transcribes.
+  Esc is a global hotkey only while recording (not while transcribing),
+  and every press is passed on to the app in front, so Mouthpiece never
+  takes Esc away from another app. Not registered at all if the dictation
+  hotkey itself uses Esc. The widget's ✕ while transcribing or refining
+  cancels the paste and copies the text to the clipboard instead
   (`discard.rs`).
 - **Live drafts** — while a phrase is still being spoken, its audio is
   re-transcribed about every 0.7 s with a quick pass (Whisper's encoder
@@ -368,7 +372,7 @@ built yet.
   the next dictation ends.
 - **Dictation sounds** (Settings > Dictation > General, off by default) —
   a short macOS system sound when recording starts (Pop), when it stops
-  or is discarded with Esc (Bottle), when the text is pasted or copied
+  or is deleted (Bottle), when the text is pasted or copied
   (Glass), and when the dictation fails, e.g. no speech (Basso). Played
   at half volume; turning it on plays the start sound as a preview.
 - **Warm model pre-load on startup**, so the first real recording doesn't

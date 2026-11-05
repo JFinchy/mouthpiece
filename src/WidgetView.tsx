@@ -385,9 +385,9 @@ function WidgetView() {
   const [onlyWhileDictating, setOnlyWhileDictating] = useState(false);
   const hideWhenDone = useRef(false);
   const [pointerInside, setPointerInside] = useState(false);
-  // A discarded recording (or cancelled paste) can be brought back for a
-  // few seconds; see discard.rs.
-  const [undoOffer, setUndoOffer] = useState(false);
+  // Esc paused the recording: the widget asks whether to resume,
+  // transcribe or delete it (see discard.rs).
+  const [paused, setPaused] = useState(false);
   // What was pasted last, for the Live caption style.
   const [lastPasted, setLastPasted] = useState<string | null>(null);
   const compactMessageRef = useRef<HTMLSpanElement | null>(null);
@@ -598,13 +598,14 @@ function WidgetView() {
     const unlistenModeChanged = listen<WidgetMode>("widget-mode-changed", (e) => setMode(e.payload));
     const unlistenLive = listen<string>("live-transcript", (e) => setLiveText(e.payload));
     const unlistenStart = listen("recording-started", () => {
-      setUndoOffer(false);
+      setPaused(false);
       setLiveText("");
       setMicSilent(null);
       setMicDead(false);
       setPhase("recording");
     });
     const unlistenStop = listen("recording-stopped", () => {
+      setPaused(false);
       setLiveText("");
       setMicSilent(null);
       setPhase("transcribing");
@@ -669,8 +670,8 @@ function WidgetView() {
       setPhase("idle");
       setLiveText("");
       setMicSilent(null);
-      setUndoOffer(true);
-      announce(event.payload === "cancelled" ? "Paste cancelled" : "Recording discarded", false);
+      setPaused(false);
+      announce(event.payload === "cancelled" ? "Paste cancelled" : "Recording deleted", false);
     });
     const unlistenMeetingStopped = listen("meeting-stopped", () => {
       setMicSilent(null);
@@ -680,8 +681,11 @@ function WidgetView() {
       announce("Meeting transcript saved", false),
     );
     const unlistenMeetingFailed = listen<string>("meeting-failed", (event) => announce(event.payload, true));
-    const unlistenDiscardOver = listen("discard-expired", () => setUndoOffer(false));
-    const unlistenDiscardUndone = listen("discard-undone", () => setUndoOffer(false));
+    const unlistenPaused = listen("dictation-paused", () => {
+      setPaused(true);
+      setMicSilent(null);
+    });
+    const unlistenResumed = listen("dictation-resumed", () => setPaused(false));
     const unlistenUpdateAvailable = listen<string>("update-available", (event) => {
       setUpdateAvailable(event.payload);
     });
@@ -712,17 +716,17 @@ function WidgetView() {
       unlistenAmbient.then((f) => f());
       unlistenCopied.then((f) => f());
       unlistenDiscarded.then((f) => f());
-      unlistenDiscardOver.then((f) => f());
+      unlistenPaused.then((f) => f());
       unlistenMeetingStopped.then((f) => f());
       unlistenMeetingSaved.then((f) => f());
       unlistenMeetingFailed.then((f) => f());
-      unlistenDiscardUndone.then((f) => f());
+      unlistenResumed.then((f) => f());
     };
   }, []);
 
   // Notch grows from the middle while it has something to show (the
   // backend re-centers it on every resize).
-  const notchActive = phase !== "idle" || (flashVisible && message !== null) || undoOffer || needsAccess;
+  const notchActive = phase !== "idle" || (flashVisible && message !== null) || needsAccess;
   useEffect(() => {
     if (mode !== "notch") return;
     invoke("set_widget_size", notchActive ? NOTCH_ACTIVE : NOTCH_IDLE).catch((err) =>
@@ -872,11 +876,11 @@ function WidgetView() {
     if (phase !== "idle") hideWhenDone.current = true;
   }, [phase]);
   // A paste hides the widget almost at once; an error or note stays up
-  // until it's had its time, as do the undo offer, "Allow pasting", and
+  // until it's had its time, as do "Allow pasting" and
   // anything the pointer is resting on.
   const justPasted = flashing && !isError && message === "Pasted";
   const dictationOver =
-    phase === "idle" && (!flashing || justPasted) && !undoOffer && !needsAccess && !pointerInside;
+    phase === "idle" && (!flashing || justPasted) && !needsAccess && !pointerInside;
   useEffect(() => {
     if (!onlyWhileDictating || !dictationOver || !hideWhenDone.current) return;
     const timer = setTimeout(
@@ -982,38 +986,100 @@ function WidgetView() {
       </button>
     ) : null;
 
-  // ✕ while recording or preparing the paste: same as pressing Esc.
+  const isPaused = paused && phase === "recording";
+  // ⏸ while recording (same as Esc); ✕ while the paste is being prepared,
+  // which copies the text instead of pasting it.
   const discardButton =
-    phase !== "idle" && !meetingRecording ? (
+    phase === "idle" || meetingRecording || isPaused ? null : phase === "recording" ? (
       <button
         type="button"
         className="dw-icon-btn"
-        onClick={() => invoke("discard_recording").catch(actionFailed("discard the recording"))}
-        aria-label={phase === "recording" ? "Discard recording (Esc)" : "Cancel paste (Esc)"}
-        title={phase === "recording" ? "Discard recording (Esc)" : "Cancel paste (Esc)"}
-        data-testid="discard"
+        onClick={() => invoke("pause_dictation").catch(actionFailed("pause the recording"))}
+        aria-label="Pause recording (Esc)"
+        title="Pause recording (Esc)"
+        data-testid="pause-dictation"
+      >
+        <svg aria-hidden="true" viewBox="0 0 12 12" width="10" height="10">
+          <path d="M4 2.5v7m4-7v7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </button>
+    ) : (
+      <button
+        type="button"
+        className="dw-icon-btn"
+        onClick={() => invoke("cancel_paste_command").catch(actionFailed("cancel the paste"))}
+        aria-label="Cancel paste (copies the text instead)"
+        title="Cancel paste (copies the text instead)"
+        data-testid="cancel-paste"
       >
         <svg aria-hidden="true" viewBox="0 0 12 12" width="10" height="10">
           <path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       </button>
-    ) : null;
+    );
 
-  const undoButton =
-    phase === "idle" && undoOffer ? (
+  // Paused with Esc: what happens next. The narrow styles get icons, with
+  // the keys in each tooltip; the roomier ones spell the keys out below.
+  const transcribeKey = hotkey ?? "the hotkey";
+  const pausedControls = isPaused ? (
+    <span
+      className="flex min-w-0 flex-1 items-center justify-end gap-1"
+      onMouseDown={(e) => e.stopPropagation()}
+      role="group"
+      aria-label="Recording paused"
+      data-testid="paused-controls"
+    >
       <button
         type="button"
-        className="dw-undo-btn"
-        onClick={() => {
-          setUndoOffer(false);
-          invoke("undo_discard").catch(actionFailed("undo"));
-        }}
-        title="Bring it back (⇧Esc)"
-        data-testid="undo-discard"
+        className="dw-choice-btn"
+        onClick={() => invoke("resume_dictation").catch(actionFailed("resume the recording"))}
+        title="Keep recording"
+        aria-label="Resume"
+        data-testid="paused-resume"
       >
-        Undo <kbd>⇧⎋</kbd>
+        {narrow ? (
+          <svg aria-hidden="true" viewBox="0 0 12 12" width="9" height="9">
+            <path d="M3.5 2.2v7.6L9.6 6z" fill="currentColor" />
+          </svg>
+        ) : (
+          "Resume"
+        )}
       </button>
-    ) : null;
+      <button
+        type="button"
+        className="dw-choice-btn dw-choice-primary"
+        onClick={toggleRecording}
+        title={`Transcribe and paste what you said (${transcribeKey})`}
+        aria-label="Transcribe"
+        data-testid="paused-transcribe"
+      >
+        {narrow ? (
+          <svg aria-hidden="true" viewBox="0 0 12 12" width="10" height="10">
+            <path d="M2.5 6.3l2.4 2.4 4.6-5" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          "Transcribe"
+        )}
+      </button>
+      <button
+        type="button"
+        className="dw-choice-btn dw-choice-danger"
+        onClick={() => invoke("delete_dictation").catch(actionFailed("delete the recording"))}
+        title="Delete this recording (Esc)"
+        aria-label="Delete"
+        data-testid="paused-delete"
+      >
+        {narrow ? (
+          <svg aria-hidden="true" viewBox="0 0 12 12" width="10" height="10">
+            <path d="M2.5 3.5h7M5 3.5V2.4h2v1.1M3.5 3.5l.5 6.1h4l.5-6.1" stroke="currentColor" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          "Delete"
+        )}
+      </button>
+    </span>
+  ) : null;
+  const pausedHint = `Paused, nothing is being recorded. Press ${transcribeKey} to transcribe what you said, Esc to delete it, or Resume to keep going.`;
 
   const recordButton = (
     <button
@@ -1030,8 +1096,17 @@ function WidgetView() {
       }`}
       onClick={toggleRecording}
       disabled={busy}
-      aria-label={meetingRecording ? "Stop the meeting" : phase === "idle" ? "Start recording" : "Stop recording"}
+      aria-label={
+        meetingRecording
+          ? "Stop the meeting"
+          : phase === "idle"
+            ? "Start recording"
+            : isPaused
+              ? "Transcribe"
+              : "Stop recording"
+      }
       title={
+        (isPaused ? pausedHint : null) ??
         micSilent ??
         message ??
         (showSetup ? (setupTitle ?? null) : null) ??
@@ -1046,7 +1121,13 @@ function WidgetView() {
         <span
           className={`rounded-full transition-transform duration-100 ${
             mode === "minimal" ? "h-3.5 w-3.5" : "h-2.5 w-2.5"
-          } ${phase === "recording" ? "bg-error shadow-[0_0_8px] shadow-error" : "bg-neutral-content/40"}`}
+          } ${
+            isPaused
+              ? "bg-warning"
+              : phase === "recording"
+                ? "bg-error shadow-[0_0_8px] shadow-error"
+                : "bg-neutral-content/40"
+          }`}
           // Minimal mode has no room for a multi-bar meter, so instead the
           // dot itself pulses with the latest input level — same "is audio
           // actually coming through" signal, scaled to fit a 46x46 icon.
@@ -1063,7 +1144,9 @@ function WidgetView() {
   // One short status for the small styles.
   const shortStatus =
     phase === "recording"
-      ? micSilent
+      ? isPaused
+        ? "Paused"
+        : micSilent
         ? "No sound from mic"
         : elapsedText
       : phase === "transcribing"
@@ -1093,7 +1176,12 @@ function WidgetView() {
       >
         <span className="dw-small-record">{recordButton}</span>
         <div className="flex h-6 min-w-0 flex-1 items-center">
-          {showProgress ? (
+          {isPaused ? (
+            <>
+              <span className="shrink-0 text-xs text-warning">Paused</span>
+              {pausedControls}
+            </>
+          ) : showProgress ? (
             <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
           ) : showSetup ? (
             setupButton
@@ -1112,7 +1200,6 @@ function WidgetView() {
           )}
         </div>
         {discardButton}
-        {undoButton}
         {menuButton("hidden group-hover:inline-flex")}
       </main>
     );
@@ -1129,13 +1216,17 @@ function WidgetView() {
         {notchActive ? (
           <>
             <span className="dw-small-record">{recordButton}</span>
-            {showSetup ? (
+            {isPaused ? (
+              <span className="shrink-0 text-xs text-warning">Paused</span>
+            ) : showSetup ? (
               setupButton
             ) : (
               <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
             )}
             <div className="flex h-6 min-w-0 flex-1 items-center">
-              {showProgress ? (
+              {isPaused ? (
+                pausedControls
+              ) : showProgress ? (
                 <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
               ) : phase === "recording" ? (
                 <LevelMeter levels={levels} className="flex-1" />
@@ -1143,7 +1234,6 @@ function WidgetView() {
             </div>
             {showSwitchMic && switchMicButton}
             {discardButton}
-            {undoButton}
             {menuButton("opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
           </>
         ) : (
@@ -1158,7 +1248,11 @@ function WidgetView() {
 
   if (mode === "caption") {
     const body =
-      phase === "recording" ? (
+      isPaused ? (
+        <span className="opacity-70" data-testid="paused-hint">
+          {pausedHint}
+        </span>
+      ) : phase === "recording" ? (
         micSilent ? (
           <span className="text-warning">{micSilent}</span>
         ) : liveText ? (
@@ -1186,7 +1280,12 @@ function WidgetView() {
         <div className="flex items-center gap-2">
           {recordButton}
           <div className="flex h-6 min-w-0 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
-            {phase === "recording" && !micSilent ? (
+            {isPaused ? (
+              <>
+                <span className="shrink-0 text-xs text-warning">Paused</span>
+                {pausedControls}
+              </>
+            ) : phase === "recording" && !micSilent ? (
               <>
                 <LevelMeter levels={levels} className="flex-1" />
                 <span className="shrink-0 text-xs tabular-nums opacity-60">{shortStatus}</span>
@@ -1206,7 +1305,6 @@ function WidgetView() {
           </div>
           {showSwitchMic && switchMicButton}
           {discardButton}
-          {undoButton}
           {menuButton()}
           <button
             className="btn btn-ghost btn-circle relative h-7 w-7 min-h-0"
@@ -1241,7 +1339,9 @@ function WidgetView() {
       <main onContextMenu={openMenu} className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
         <div className="flex items-center gap-2">
           {recordButton}
-          {phase === "recording" && micSilent ? (
+          {isPaused ? (
+            pausedControls
+          ) : phase === "recording" && micSilent ? (
             <span
               className="flex-1 cursor-grab truncate text-sm text-warning active:cursor-grabbing"
               onMouseDown={startDrag}
@@ -1278,7 +1378,6 @@ function WidgetView() {
           )}
           {showSwitchMic && switchMicButton}
           {discardButton}
-          {undoButton}
           {menuButton()}
           <button
             className="btn btn-ghost btn-circle relative h-7 w-7 min-h-0"
@@ -1292,7 +1391,11 @@ function WidgetView() {
             )}
           </button>
         </div>
-        {phase === "recording" && liveText && !micSilent ? (
+        {isPaused ? (
+          <p className="flex-1 text-xs text-warning" data-testid="paused-hint">
+            {pausedHint}
+          </p>
+        ) : phase === "recording" && liveText && !micSilent ? (
           <p className="dw-caption-text flex-1 overflow-hidden text-sm leading-snug" data-testid="live-transcript">
             <span className="line-clamp-5">{liveTail(liveText)}</span>
           </p>
@@ -1328,7 +1431,9 @@ function WidgetView() {
     >
       <div className="flex items-center gap-2">
         {recordButton}
-        {phase === "recording" && micSilent ? (
+        {isPaused ? (
+          pausedControls
+        ) : phase === "recording" && micSilent ? (
           <span
             className="flex-1 cursor-grab truncate text-sm text-warning active:cursor-grabbing"
             onMouseDown={startDrag}
@@ -1369,7 +1474,6 @@ function WidgetView() {
         )}
         {showSwitchMic && switchMicButton}
         {discardButton}
-        {undoButton}
         <button
           className="btn btn-ghost btn-circle relative h-7 w-7 min-h-0"
           onClick={openSettings}

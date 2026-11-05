@@ -81,6 +81,8 @@ pub fn request_dictation(app: &AppHandle, request: Request) {
 
 fn stop_dictation(app: &AppHandle, state: &RecordingState) {
     let stopped_at = std::time::Instant::now();
+    // Esc only means something while recording; give it back now.
+    crate::discard::release_escape(app);
     crate::refresh_tray_indicator(app);
     let live = state.live.lock().unwrap().take();
     // Taken even if stopping fails, so it can't leak into the next recording.
@@ -104,48 +106,35 @@ fn stop_dictation(app: &AppHandle, state: &RecordingState) {
             });
         }
         Err(err) => {
-            crate::discard::release_escape(app);
             let _ = app.emit("recording-error", err);
         }
     }
 }
 
-/// Esc while recording: stop without transcribing, and hold the audio so
-/// Undo can still use it (see `discard.rs`).
+/// Delete (Esc on a paused recording, or the widget's Delete): stop
+/// without transcribing and throw the audio away (see `discard.rs`).
 fn discard_dictation(app: &AppHandle, state: &RecordingState) {
     crate::refresh_tray_indicator(app);
     // Dropping the live session stops its background transcription.
     drop(state.live.lock().unwrap().take());
-    let reply = app
+    // Taken so a pending agent reply can't leak into the next recording.
+    let _ = app
         .state::<crate::agents::AgentState>()
         .take_pending_reply();
     crate::discard::release_escape(app);
     match state.audio.stop() {
         Ok(path) => {
-            crate::applog!("recording: discarded");
+            crate::applog!("recording: deleted");
             crate::sounds::play(app, crate::sounds::Cue::Stop);
             let _ = app.emit("dictation-discarded", "recording");
-            crate::discard::hold(app, crate::discard::Held::Recording { path, reply });
+            if let Err(err) = std::fs::remove_file(&path) {
+                crate::applog!("recording: could not delete {}: {err}", path.display());
+            }
         }
         Err(err) => {
             let _ = app.emit("recording-error", err);
         }
     }
-}
-
-/// Undo of a discarded recording: transcribe and paste it as if it had
-/// been stopped normally (the target app and mode were captured when it
-/// started, and nothing has replaced them since).
-pub fn transcribe_held_recording(
-    app: &AppHandle,
-    path: &std::path::Path,
-    reply: Option<crate::agents::WaitingAgent>,
-) {
-    let _ = app.emit("recording-stopped", path.to_string_lossy().to_string());
-    crate::discard::set_processing(app, true);
-    crate::discard::grab_escape(app);
-    transcribe_and_paste(app, path, std::time::Instant::now(), None, reply);
-    crate::discard::set_processing(app, false);
 }
 
 /// Payload of `mic-switched`: a mic sent nothing mid-recording and another
@@ -168,8 +157,6 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
     state
         .skip_refine
         .store(false, std::sync::atomic::Ordering::Relaxed);
-    // A new recording ends the chance to undo the last discard.
-    crate::discard::clear(app);
     crate::discard::grab_escape(app);
     crate::refresh_tray_indicator(app);
     state.audio.start();
@@ -193,6 +180,13 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
         let mut silence = crate::audio::SilenceWatch::default();
         let mut switched = false;
         while state.capture.is_session_active(session) {
+            if state.audio.is_paused() {
+                // Paused on purpose: silence here isn't a mic problem.
+                let _ = level_app.emit("audio-level", 0.0f32);
+                silence = crate::audio::SilenceWatch::default();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
             let level = state.audio.current_level();
             let _ = level_app.emit("audio-level", crate::audio::meter_level(level));
             match silence.observe(level, std::time::Instant::now()) {
@@ -680,12 +674,17 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
             false
         }
     });
-    // Esc while this was being prepared: keep the text for Undo instead.
+    // The paste was cancelled while this was being prepared: copy the text
+    // instead, so the words aren't lost.
     if app
         .state::<crate::discard::DiscardState>()
         .cancel_requested()
     {
-        crate::discard::hold(app, crate::discard::Held::Text(formatted));
+        let notice = match crate::paste::copy_text(&formatted) {
+            Ok(()) if !formatted.is_empty() => "Paste cancelled · copied to clipboard",
+            _ => "Paste cancelled",
+        };
+        let _ = app.emit("transcript-copied", notice.to_string());
         return;
     }
 

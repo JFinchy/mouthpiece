@@ -302,30 +302,52 @@ test.describe("widget", () => {
     await expect.poll(() => calls(page, "paste_as_is_command")).toHaveLength(1);
   });
 
-  test("a recording can be discarded and brought back", async ({ page, consoleErrors: _ }) => {
+  test("Esc pauses, then the widget offers resume, transcribe and delete", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget");
     await emit(page, "recording-started");
     // Entering the widget opens its hover menu, which moves the row.
-    await page.getByTestId("discard").hover();
-    await page.getByTestId("discard").click();
-    await expect.poll(() => calls(page, "discard_recording")).toHaveLength(1);
+    await page.getByTestId("pause-dictation").hover();
+    await page.getByTestId("pause-dictation").click();
+    await expect.poll(() => calls(page, "pause_dictation")).toHaveLength(1);
+    const controls = page.getByRole("group", { name: "Recording paused" });
+    await expect(controls).toBeVisible();
+    await expect(page.getByTestId("pause-dictation")).toHaveCount(0);
 
-    await emit(page, "dictation-discarded", "recording");
-    await expect(page.getByText("Recording discarded")).toBeVisible();
-    await expect(page.getByTestId("discard")).toHaveCount(0);
-    await page.getByTestId("undo-discard").hover();
-    await page.getByTestId("undo-discard").click();
-    await expect.poll(() => calls(page, "undo_discard")).toHaveLength(1);
-    await expect(page.getByTestId("undo-discard")).toHaveCount(0);
+    await controls.getByRole("button", { name: "Resume" }).click();
+    await expect.poll(() => calls(page, "resume_dictation")).toHaveLength(1);
+    await expect(controls).toHaveCount(0);
+    await expect(page.getByTestId("pause-dictation")).toBeVisible();
+
+    // The backend pauses on Esc and tells the widget.
+    await emit(page, "dictation-paused");
+    await controls.getByRole("button", { name: "Transcribe" }).click();
+    await expect.poll(() => calls(page, "toggle_recording_command")).toHaveLength(1);
+
+    await emit(page, "dictation-paused");
+    await controls.getByRole("button", { name: "Delete" }).click();
+    await expect.poll(() => calls(page, "delete_dictation")).toHaveLength(1);
+    await expect(page.getByText("Recording deleted")).toBeVisible();
+    await expect(controls).toHaveCount(0);
   });
 
-  test("the undo offer goes away when it expires", async ({ page, consoleErrors: _ }) => {
+  test("the paused hint spells out the keys", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget", { widgetMode: "detailed" });
+    await emit(page, "recording-started");
+    await emit(page, "dictation-paused");
+    await expect(page.getByTestId("paused-hint")).toContainText("Esc to delete it");
+    await emit(page, "recording-stopped", "/tmp/x.wav");
+    await expect(page.getByTestId("paused-hint")).toHaveCount(0);
+  });
+
+  test("cancelling a paste is offered while it's prepared", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget");
+    await emit(page, "recording-started");
+    await emit(page, "recording-stopped", "/tmp/x.wav");
+    await page.getByTestId("cancel-paste").hover();
+    await page.getByTestId("cancel-paste").click();
+    await expect.poll(() => calls(page, "cancel_paste_command")).toHaveLength(1);
     await emit(page, "dictation-discarded", "cancelled");
     await expect(page.getByText("Paste cancelled")).toBeVisible();
-    await expect(page.getByTestId("undo-discard")).toBeVisible();
-    await emit(page, "discard-expired");
-    await expect(page.getByTestId("undo-discard")).toHaveCount(0);
   });
 
   test("the hover menu switches the widget style", async ({ page, consoleErrors: _ }) => {
@@ -338,15 +360,17 @@ test.describe("widget", () => {
   });
 
   for (const style of ["pill", "notch", "caption", "stacked"] as const) {
-    test(`the ${style} style records, shows progress and offers discard`, async ({ page, consoleErrors: _ }) => {
+    test(`the ${style} style records, shows progress and offers pause`, async ({ page, consoleErrors: _ }) => {
       await open(page, "widget", { widgetMode: style });
       await emit(page, "recording-started");
-      await expect(page.getByTestId("discard")).toBeVisible();
+      await expect(page.getByTestId("pause-dictation")).toBeVisible();
+      await emit(page, "dictation-paused");
+      await expect(page.getByRole("group", { name: "Recording paused" })).toBeVisible();
       await emit(page, "recording-stopped");
       await emit(page, "transcribe-progress", 40);
       await expect(page.getByTestId("transcribe-progress")).toBeVisible();
       await emit(page, "transcript-ready", "Look at @recording.rs");
-      await expect(page.getByTestId("discard")).toHaveCount(0);
+      await expect(page.getByTestId("cancel-paste")).toHaveCount(0);
     });
   }
 

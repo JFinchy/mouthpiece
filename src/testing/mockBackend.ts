@@ -323,8 +323,19 @@ export function installMockBackend() {
         ? Promise.reject("History is locked.")
         : state.history.filter((h) => h.text.toLowerCase().includes(String(args.query).toLowerCase())),
     // privacy (Touch ID always succeeds here)
-    discard_recording: () => null,
-    undo_discard: () => true,
+    pause_dictation: () => {
+      void emit("dictation-paused", null);
+      return null;
+    },
+    resume_dictation: () => {
+      void emit("dictation-resumed", null);
+      return null;
+    },
+    delete_dictation: () => {
+      void emit("dictation-discarded", "recording");
+      return null;
+    },
+    cancel_paste_command: () => null,
     request_microphone_access: () => "authorized",
     open_microphone_settings: () => null,
     get_meeting_status: () => state.meetingStatus,

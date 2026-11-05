@@ -50,6 +50,9 @@ pub struct AudioHandle {
     /// Bumped by each `start`, so a reader from an earlier recording can
     /// tell the buffer now holds a different one.
     generation: AtomicU64,
+    /// Dictation paused with Esc: the stream keeps running but nothing is
+    /// recorded and the level reads as silence. Cleared by `start`/`stop`.
+    paused: Arc<AtomicBool>,
 }
 
 /// Which microphone recording will actually use, as surfaced to the widget.
@@ -83,12 +86,15 @@ impl AudioHandle {
         let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         let format = Arc::new(AtomicU64::new(0));
         let (samples_thread, format_thread) = (samples.clone(), format.clone());
+        let paused = Arc::new(AtomicBool::new(false));
+        let paused_thread = paused.clone();
 
         std::thread::spawn(move || {
             let sinks = Sinks {
                 samples: samples_thread,
                 format: format_thread,
                 buffering: Arc::new(AtomicBool::new(false)),
+                paused: paused_thread,
                 tap: Arc::new(Mutex::new(None)),
                 meeting: Arc::new(Mutex::new(None)),
                 level: level_thread.clone(),
@@ -267,10 +273,21 @@ impl AudioHandle {
             samples,
             format,
             generation: AtomicU64::new(0),
+            paused,
         }
     }
 
+    /// Pause or resume the push-to-talk recording (see `paused`).
+    pub fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::SeqCst);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
     pub fn start(&self) {
+        self.paused.store(false, Ordering::SeqCst);
         // Cleared here as well as on the audio thread, so nothing from the
         // last recording is readable under the new generation. Callbacks
         // don't append until the thread handles `Start`.
@@ -300,6 +317,7 @@ impl AudioHandle {
     }
 
     pub fn stop(&self) -> Result<PathBuf, String> {
+        self.paused.store(false, Ordering::SeqCst);
         let (reply_tx, reply_rx) = mpsc::channel();
         self.tx
             .send(AudioCommand::Stop(reply_tx))
@@ -393,6 +411,8 @@ struct Sinks {
     /// Only while true do callbacks append to `samples` — the stream also
     /// runs for ambient listening, and idle audio mustn't accumulate there.
     buffering: Arc<AtomicBool>,
+    /// While true, push-to-talk audio is dropped (dictation paused).
+    paused: Arc<AtomicBool>,
     /// Sample rate and channel count of the latest callback, packed by
     /// `pack_format`.
     format: Arc<AtomicU64>,
@@ -408,8 +428,10 @@ struct Sinks {
 
 impl Sinks {
     fn deliver(&self, data: &[f32], channels: u16, sample_rate: u32) {
-        self.level.store(rms(data).to_bits(), Ordering::Relaxed);
-        if self.buffering.load(Ordering::Relaxed) {
+        let paused = self.paused.load(Ordering::Relaxed);
+        let level = if paused { 0.0 } else { rms(data) };
+        self.level.store(level.to_bits(), Ordering::Relaxed);
+        if self.buffering.load(Ordering::Relaxed) && !paused {
             let mut conform = self.conform.lock().unwrap();
             match conform.as_mut() {
                 Some(conformer) => {
@@ -1240,5 +1262,27 @@ mod tests {
             "quiet room noise is not dead air"
         );
         assert!(!is_dead_air(&[0.1; 16000]));
+    }
+
+    #[test]
+    fn paused_dictation_records_nothing_and_reads_silent() {
+        let sinks = Sinks {
+            samples: Arc::new(Mutex::new(Vec::new())),
+            buffering: Arc::new(AtomicBool::new(true)),
+            paused: Arc::new(AtomicBool::new(false)),
+            format: Arc::new(AtomicU64::new(0)),
+            tap: Arc::new(Mutex::new(None)),
+            meeting: Arc::new(Mutex::new(None)),
+            level: Arc::new(AtomicU32::new(0)),
+            conform: Arc::new(Mutex::new(None)),
+        };
+        sinks.deliver(&[0.5, -0.5], 1, 16_000);
+        sinks.paused.store(true, Ordering::SeqCst);
+        sinks.deliver(&[0.9, -0.9], 1, 16_000);
+        assert_eq!(*sinks.samples.lock().unwrap(), vec![0.5, -0.5]);
+        assert_eq!(f32::from_bits(sinks.level.load(Ordering::Relaxed)), 0.0);
+        sinks.paused.store(false, Ordering::SeqCst);
+        sinks.deliver(&[0.3], 1, 16_000);
+        assert_eq!(*sinks.samples.lock().unwrap(), vec![0.5, -0.5, 0.3]);
     }
 }

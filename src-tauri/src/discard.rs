@@ -1,26 +1,25 @@
-//! Throwing a dictation away, and getting it back.
+//! Pausing, deleting and cancelling a dictation.
 //!
-//! Esc while recording discards the recording (nothing is transcribed);
-//! Esc while it's being transcribed or refined cancels the paste. Either
-//! way the recording (or its finished text) is held for [`UNDO_WINDOW`],
-//! and Undo (the widget button, or ⇧Esc) delivers it after all.
+//! Esc while recording pauses it (nothing is lost) and the widget asks what
+//! to do: Resume, Transcribe (the dictation shortcut), or Delete (Esc
+//! again). The widget's ✕ while the text is being prepared cancels the
+//! paste; the text goes to the clipboard instead, so nothing is lost there
+//! either.
 //!
-//! Esc and ⇧Esc are only registered while they mean something here (a
-//! recording or a paste in progress, an undo on offer), so other apps keep
-//! them the rest of the time.
+//! Esc is a global hotkey only while recording, and every press is passed
+//! on to the app in front, so Mouthpiece reacts to Esc without taking it
+//! away from anything else.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-
-pub const UNDO_WINDOW: Duration = Duration::from_secs(8);
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
 
 enum KeyOp {
     Register(Shortcut),
     Unregister(Shortcut),
+    /// Hand an Esc press on to the frontmost app (see `forward_escape`).
+    ForwardEscape,
 }
 
 /// Registering a shortcut waits for the main thread. Callers here can hold
@@ -49,6 +48,19 @@ fn key_op(app: &AppHandle, op: KeyOp) {
                             let _ = shortcuts.unregister(key);
                         }
                     }
+                    KeyOp::ForwardEscape => {
+                        // Our own hotkey would catch the copy, so step aside
+                        // while it's sent. Ops run in order, so a later
+                        // Unregister still wins.
+                        let held = shortcuts.is_registered(escape());
+                        if held {
+                            let _ = shortcuts.unregister(escape());
+                        }
+                        forward_escape();
+                        if held {
+                            let _ = shortcuts.register(escape());
+                        }
+                    }
                 }
             }
         });
@@ -57,33 +69,29 @@ fn key_op(app: &AppHandle, op: KeyOp) {
     let _ = sender.lock().unwrap().send(op);
 }
 
+/// Sends a synthetic Esc press to whatever app is in front. Needs the
+/// Accessibility permission pasting already uses; without it macOS drops
+/// the event, which leaves things as they were before forwarding existed.
+fn forward_escape() {
+    use rdev::{simulate, EventType, Key};
+    // A beat for the hotkey to be gone before the copy arrives.
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    let _ = simulate(&EventType::KeyPress(Key::Escape));
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    let _ = simulate(&EventType::KeyRelease(Key::Escape));
+    std::thread::sleep(std::time::Duration::from_millis(15));
+}
+
 pub fn escape() -> Shortcut {
     Shortcut::new(None, Code::Escape)
-}
-
-pub fn undo_shortcut() -> Shortcut {
-    Shortcut::new(Some(Modifiers::SHIFT), Code::Escape)
-}
-
-/// What Undo would bring back.
-pub enum Held {
-    /// A recording stopped by Esc before it was transcribed.
-    Recording {
-        path: PathBuf,
-        reply: Option<crate::agents::WaitingAgent>,
-    },
-    /// Text that was ready to paste when Esc cancelled it.
-    Text(String),
 }
 
 #[derive(Default)]
 pub struct DiscardState {
     /// A paste is being prepared (transcribing or refining).
     processing: AtomicBool,
-    /// Esc was pressed while processing: deliver nothing.
+    /// The paste was cancelled while processing: copy instead of pasting.
     cancel_requested: AtomicBool,
-    held: Mutex<Option<(u64, Held)>>,
-    next_id: AtomicU64,
 }
 
 impl DiscardState {
@@ -92,8 +100,8 @@ impl DiscardState {
     }
 }
 
-/// Registers Esc for as long as a dictation is being recorded or turned
-/// into a paste. Skipped if the user's own hotkey is Esc.
+/// Registers Esc while a dictation is being recorded. Skipped if the
+/// user's own hotkey is Esc.
 pub fn grab_escape(app: &AppHandle) {
     if escape_is_users_hotkey(app) {
         return;
@@ -118,127 +126,138 @@ fn escape_is_users_hotkey(app: &AppHandle) -> bool {
     [current.clone(), crate::shortcut::skip_variant(&current)]
         .iter()
         .filter_map(|c| crate::shortcut::to_shortcut(c).ok())
-        .any(|s| s == escape() || s == undo_shortcut())
+        .any(|s| s == escape())
 }
 
 /// Called when a recording's processing starts and ends.
 pub fn set_processing(app: &AppHandle, processing: bool) {
     let state = discard_state(app);
     state.processing.store(processing, Ordering::SeqCst);
-    if processing {
-        state.cancel_requested.store(false, Ordering::SeqCst);
-    } else {
-        state.cancel_requested.store(false, Ordering::SeqCst);
-        release_escape(app);
-    }
+    state.cancel_requested.store(false, Ordering::SeqCst);
 }
 
 fn discard_state(app: &AppHandle) -> tauri::State<'_, DiscardState> {
     app.state::<DiscardState>()
 }
 
-/// Esc: discard the recording, or cancel the paste being prepared.
-pub fn on_escape(app: &AppHandle) {
-    use crate::capture::{CaptureState, Request};
+/// What Esc does to a dictation, given whether one is recording and
+/// whether it's paused.
+#[derive(Debug, PartialEq, Eq)]
+enum EscapeAction {
+    Pause,
+    Delete,
+    Nothing,
+}
+
+fn escape_action(dictating: bool, paused: bool) -> EscapeAction {
+    match (dictating, paused) {
+        (true, false) => EscapeAction::Pause,
+        (true, true) => EscapeAction::Delete,
+        (false, _) => EscapeAction::Nothing,
+    }
+}
+
+fn is_dictating(app: &AppHandle) -> bool {
     let recording = app.state::<crate::recording::RecordingState>();
-    if matches!(recording.capture.state(), CaptureState::Dictating { .. }) {
-        crate::recording::request_dictation(app, Request::DiscardDictation);
+    matches!(
+        recording.capture.state(),
+        crate::capture::CaptureState::Dictating { .. }
+    )
+}
+
+/// Esc (the global hotkey): pause, or delete if already paused, then pass
+/// the key on to the app in front.
+pub fn on_escape(app: &AppHandle) {
+    let paused = app
+        .state::<crate::recording::RecordingState>()
+        .audio
+        .is_paused();
+    match escape_action(is_dictating(app), paused) {
+        EscapeAction::Pause => pause(app),
+        EscapeAction::Delete => delete(app),
+        EscapeAction::Nothing => {}
+    }
+    key_op(app, KeyOp::ForwardEscape);
+}
+
+/// Stop recording audio without ending the dictation.
+pub fn pause(app: &AppHandle) {
+    if !is_dictating(app) {
         return;
     }
+    let recording = app.state::<crate::recording::RecordingState>();
+    if recording.audio.is_paused() {
+        return;
+    }
+    recording.audio.set_paused(true);
+    crate::applog!("recording: paused");
+    let _ = app.emit("dictation-paused", ());
+}
+
+pub fn resume(app: &AppHandle) {
+    if !is_dictating(app) {
+        return;
+    }
+    let recording = app.state::<crate::recording::RecordingState>();
+    if !recording.audio.is_paused() {
+        return;
+    }
+    recording.audio.set_paused(false);
+    crate::applog!("recording: resumed");
+    let _ = app.emit("dictation-resumed", ());
+}
+
+/// End the dictation without transcribing it.
+pub fn delete(app: &AppHandle) {
+    crate::recording::request_dictation(app, crate::capture::Request::DiscardDictation);
+}
+
+/// The widget's ✕ while the text is being prepared: copy it rather than
+/// paste it.
+pub fn cancel_paste(app: &AppHandle) {
     let state = discard_state(app);
-    if state.processing.load(Ordering::SeqCst) {
-        crate::applog!("discard: paste cancelled while processing");
-        state.cancel_requested.store(true, Ordering::SeqCst);
-        // Stop the LLM now rather than waiting for it; Undo then pastes
-        // whatever text was ready.
-        recording
-            .skip_refine
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = app.emit("dictation-discarded", "cancelled");
+    if !state.processing.load(Ordering::SeqCst) {
+        return;
     }
-}
-
-/// Keeps what was discarded for the undo window, then forgets it.
-pub fn hold(app: &AppHandle, held: Held) {
-    let state = discard_state(app);
-    let id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Some((_, old)) = state.held.lock().unwrap().replace((id, held)) {
-        forget(old);
-    }
-    key_op(app, KeyOp::Register(undo_shortcut()));
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(UNDO_WINDOW);
-        let state = discard_state(&app);
-        let expired = {
-            let mut held = state.held.lock().unwrap();
-            match held.as_ref() {
-                Some((held_id, _)) if *held_id == id => held.take(),
-                _ => None,
-            }
-        };
-        if let Some((_, held)) = expired {
-            forget(held);
-            key_op(&app, KeyOp::Unregister(undo_shortcut()));
-            let _ = app.emit("discard-expired", ());
-        }
-    });
-}
-
-/// Drops anything on offer (a new recording started).
-pub fn clear(app: &AppHandle) {
-    if let Some((_, held)) = discard_state(app).held.lock().unwrap().take() {
-        forget(held);
-        key_op(app, KeyOp::Unregister(undo_shortcut()));
-        let _ = app.emit("discard-expired", ());
-    }
-}
-
-fn forget(held: Held) {
-    if let Held::Recording { path, .. } = held {
-        if let Err(err) = std::fs::remove_file(&path) {
-            crate::applog!("discard: could not delete {}: {err}", path.display());
-        }
-    }
-}
-
-/// Undo: transcribe and paste the discarded recording, or paste the text
-/// whose paste was cancelled.
-pub fn undo(app: &AppHandle) -> bool {
-    let Some((_, held)) = discard_state(app).held.lock().unwrap().take() else {
-        return false;
-    };
-    key_op(app, KeyOp::Unregister(undo_shortcut()));
-    crate::applog!("discard: undone");
-    let _ = app.emit("discard-undone", ());
-    match held {
-        Held::Recording { path, reply } => {
-            let app = app.clone();
-            std::thread::spawn(move || {
-                crate::recording::transcribe_held_recording(&app, &path, reply);
-                let _ = std::fs::remove_file(&path);
-            });
-        }
-        Held::Text(text) => {
-            let app = app.clone();
-            std::thread::spawn(move || {
-                if let Err(err) = crate::paste::paste_text(&text) {
-                    let _ = app.emit("transcript-error", err);
-                } else {
-                    let _ = app.emit("transcript-copied", "Pasted".to_string());
-                }
-            });
-        }
-    }
-    true
+    crate::applog!("discard: paste cancelled while processing");
+    state.cancel_requested.store(true, Ordering::SeqCst);
+    // Stop the LLM now rather than waiting for it; the text that was ready
+    // goes to the clipboard.
+    app.state::<crate::recording::RecordingState>()
+        .skip_refine
+        .store(true, Ordering::Relaxed);
+    let _ = app.emit("dictation-discarded", "cancelled");
 }
 
 #[tauri::command]
-pub fn discard_recording(app: AppHandle) {
-    on_escape(&app);
+pub fn pause_dictation(app: AppHandle) {
+    pause(&app);
 }
 
 #[tauri::command]
-pub fn undo_discard(app: AppHandle) -> bool {
-    undo(&app)
+pub fn resume_dictation(app: AppHandle) {
+    resume(&app);
+}
+
+#[tauri::command]
+pub fn delete_dictation(app: AppHandle) {
+    delete(&app);
+}
+
+#[tauri::command]
+pub fn cancel_paste_command(app: AppHandle) {
+    cancel_paste(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_escape_pauses_and_the_second_deletes() {
+        assert_eq!(escape_action(true, false), EscapeAction::Pause);
+        assert_eq!(escape_action(true, true), EscapeAction::Delete);
+        assert_eq!(escape_action(false, false), EscapeAction::Nothing);
+        assert_eq!(escape_action(false, true), EscapeAction::Nothing);
+    }
 }
