@@ -108,6 +108,16 @@ function initialState(scenario: Scenario) {
     webhookUrl: null as string | null,
     llmModel: "qwen3.5:4b",
     llmOnlyWhenNeeded: true,
+    modelFiles: [
+      {
+        path: "/Users/me/.lmstudio/models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf",
+        file_name: "gemma-3-4b-it-Q4_K_M.gguf",
+        size_gb: 3.3,
+        location: "LM Studio",
+        ollama_name: "gemma-3-4b-it-q4_k_m",
+        in_ollama: false,
+      },
+    ],
     nextModeOverride: null as string | null,
     vocabulary: ["kubectl", "JSON", "macOS", "Tauri"],
     projectNames: true,
@@ -304,9 +314,24 @@ export function installMockBackend() {
     },
     // LLM
     list_llm_catalog: () => [
-      { id: "gemma3:1b", label: "Gemma 3 (1B) — fastest", size_gb: 0.8, downloaded: false, last_latency_ms: null },
-      { id: "qwen3.5:4b", label: "qwen3.5:4b", size_gb: 0, downloaded: true, last_latency_ms: 820 },
+      { id: "gemma3:1b", label: "Gemma 3 (1B) — fastest", size_gb: 0.8, downloaded: false, last_latency_ms: null, source: "Ollama" },
+      { id: "qwen3.5:4b", label: "qwen3.5:4b", size_gb: 0, downloaded: true, last_latency_ms: 820, source: "Ollama" },
+      { id: "lmstudio::google/gemma-3-4b", label: "google/gemma-3-4b", size_gb: 0, downloaded: true, last_latency_ms: null, source: "LM Studio" },
     ],
+    // .gguf files already on the Mac (local_llm.rs)
+    find_local_model_files: () => state.modelFiles,
+    choose_model_file: () => null,
+    import_model_file: (args) => {
+      const path = args.path as string;
+      setTimeout(() => {
+        void emit("llm-import-progress", { path, stage: "Copying into Ollama", percent: 40 });
+        setTimeout(() => {
+          state.modelFiles = state.modelFiles.map((f) => (f.path === path ? { ...f, in_ollama: true } : f));
+          void emit("llm-import-complete", { path, model: "gemma-3-4b-it-q4_k_m" });
+        }, 50);
+      }, 50);
+      return null;
+    },
     get_llm_model: () => state.llmModel,
     get_llm_only_when_needed: () => state.llmOnlyWhenNeeded,
     set_llm_only_when_needed: setter("llmOnlyWhenNeeded", "enabled"),

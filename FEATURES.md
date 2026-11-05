@@ -88,6 +88,19 @@ built yet.
 - **In-app Ollama model catalog** (Gemma, Llama, Phi, Qwen, Mistral) with
   one-click pull and download progress, plus autodiscovery of any model
   you'd already pulled outside the app.
+- **Models from other local servers** — LM Studio (port 1234), llama.cpp's
+  `llama-server` (8080) and Jan (1337) are detected over their
+  OpenAI-compatible API, and their models are listed next to Ollama's,
+  tagged with their source, for refinement, the journal and boilerplate.
+  Loopback only, and redirects are never followed, so text can't be bounced
+  off the Mac. For Macs where Ollama's downloads are blocked but a model is
+  already here (`local_llm.rs`).
+- **Add a model file to Ollama** — `.gguf` files in LM Studio's, Jan's and
+  the Hugging Face folders and `~/models` are listed under "Model files on
+  this Mac" with an "Add to Ollama" button; anything else (Downloads, a
+  shared drive) is picked with "Choose a .gguf file…". The file is hashed,
+  copied into the local Ollama as a blob and turned into a model, with
+  progress; no network beyond localhost.
 - **Last-observed refinement latency** surfaced per model in the LLM
   picker, so you can judge which local models are actually fast enough
   before committing to one (a "thinking" reasoning model can take

@@ -22,6 +22,7 @@ mod isolate;
 mod lifecycle;
 mod live;
 mod llm;
+mod local_llm;
 mod logging;
 mod meeting;
 mod mic_permission;
@@ -321,6 +322,9 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_deep_link::init())
+        // Native file picker, used from Rust only (choosing a .gguf model
+        // file); the webview gets no dialog or file-system permissions.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
@@ -434,6 +438,9 @@ pub fn run() {
             list_ollama_models,
             list_llm_catalog,
             pull_llm_model,
+            local_llm::find_local_model_files,
+            local_llm::choose_model_file,
+            local_llm::import_model_file,
             get_llm_model,
             set_llm_model,
             get_logs,

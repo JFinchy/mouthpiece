@@ -31,6 +31,7 @@ place with a one-line note.
 - [ ] History search + reprocessing - see `history-search-reprocess.md`
 - [ ] History keeps the original + learning from corrections - see `history-original-and-corrections.md`
 - [ ] Output webhook - see `output-webhook.md`
+- [ ] LLMs from LM Studio / llama.cpp / Jan, and adding a .gguf file to Ollama - see `local-llm-servers-and-model-files.md`
 - [ ] Agent prompt voice commands (send it, attach the error, scratch that) - see `agent-prompt-voice-commands.md`
 - [ ] Transcribe while you talk (chunked transcription, silence skipping) - see `transcribe-while-talking.md`
 - [ ] Reply to a waiting coding agent by voice (hook, pill, reply shortcut, focus hop) - see `agent-reply.md`

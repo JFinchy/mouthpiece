@@ -7,7 +7,7 @@ const PAGES = [
   ["Voice", "Voice — Whisper model & isolation"],
   ["Vocabulary", "Vocabulary"],
   ["Modes", "Modes — app-aware formatting rules"],
-  ["LLM", "LLM — local refinement (Ollama)"],
+  ["LLM", "LLM — local refinement"],
   ["Insights", "Insights — usage & feature adoption"],
   ["History", "History"],
   ["Integrations", "Integrations — delivery & webhook"],
@@ -162,6 +162,25 @@ test.describe("settings", () => {
     await expect(toggle).toBeChecked();
     await toggle.uncheck();
     await expect.poll(() => calls(page, "set_llm_only_when_needed")).toEqual([{ enabled: false }]);
+  });
+
+  test("models from a local server are listed and a model file can be added to Ollama", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    await page.locator(".dw-sidebar").getByRole("button", { name: "LLM", exact: true }).click();
+    // An LM Studio model sits in the list next to Ollama's, tagged with its source.
+    const lmStudio = page.locator("li", { hasText: "google/gemma-3-4b" });
+    await expect(lmStudio.getByTestId("llm-source")).toHaveText("LM Studio");
+    await lmStudio.getByRole("button", { name: "Use" }).click();
+    await expect.poll(() => calls(page, "set_llm_model")).toEqual([{ model: "lmstudio::google/gemma-3-4b" }]);
+
+    // A .gguf already on disk is found and added to Ollama in one click.
+    const file = page.getByTestId("model-files").locator("li", { hasText: "gemma-3-4b-it-Q4_K_M.gguf" });
+    await expect(file).toContainText("LM Studio");
+    await file.getByRole("button", { name: "Add to Ollama" }).click();
+    await expect(file).toContainText("In Ollama ✓");
+    expect(await calls(page, "import_model_file")).toEqual([
+      { path: "/Users/me/.lmstudio/models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf" },
+    ]);
   });
 
   test("the paste-as-is shortcut is the hotkey plus Shift (or Option)", async ({ page, consoleErrors: _ }) => {

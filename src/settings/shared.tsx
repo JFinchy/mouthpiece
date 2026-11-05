@@ -20,6 +20,18 @@ export type LlmModelStatus = {
   size_gb: number;
   downloaded: boolean;
   last_latency_ms: number | null;
+  /** What runs it: "Ollama", "LM Studio", "llama.cpp server", "Jan". */
+  source: string;
+};
+
+/** A `.gguf` file on this Mac that can be added to Ollama (local_llm.rs). */
+export type ModelFile = {
+  path: string;
+  file_name: string;
+  size_gb: number;
+  location: string;
+  ollama_name: string;
+  in_ollama: boolean;
 };
 
 export type WidgetMode = "minimal" | "compact" | "detailed" | "pill" | "notch" | "caption" | "stacked";
