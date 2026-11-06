@@ -377,6 +377,61 @@ built yet.
   permission prompt in the terminal yourself doesn't clear the pill until
   the next prompt you submit, a Stop, or expiry.
 
+## Agent fleet (2026-11-06)
+
+- **Talk to an agent by name** — start any dictation with an agent's
+  folder name ("to esc pause, rerun the tests", "tell api to commit",
+  "hey web: what's left?") and it goes to that agent instead of the
+  cursor. The end of the folder name is enough when it's unique; "to" and
+  "hey" need a comma or colon after the name, so prose stays prose.
+  Agents stay addressable for 6 hours after their hook last fired,
+  waiting or not (`agents/address.rs`). Settings > Coding agents has the
+  toggle and the names you can say.
+- **Several agents waiting** — the pill names the agent ("Codex is
+  waiting · api +2"); with more than one, clicking it opens a menu of
+  them (reply by voice, go to it, dismiss), also in the widget menu.
+- **Exact delivery** — in Orca the hook passes `$ORCA_TERMINAL_HANDLE`
+  and replies are typed into that pane with `orca terminal send`, focus
+  never moving. In iTerm2 and Terminal the agent's own tab is selected
+  by its tty through AppleScript (Automation permission, asked once;
+  adds the apple-events entitlement). Elsewhere, window titles as before
+  (`agents/targets.rs`).
+- **More agents** — one hook script for Claude Code, Codex (`notify`),
+  Gemini CLI (hooks), OpenCode (a generated plugin) and Aider
+  (`--notifications-command`); Settings shows each one's snippet and
+  file.
+- **The `mouthpiece` command and MCP server** — the app binary doubles
+  as a CLI (`bin/mouthpiece` in the data folder): `listen [--prompt]
+  [--timeout]`, `status`, `vocab add/list`, `mcp`. It talks to the
+  running app over a user-only Unix socket. `listen` records one
+  dictation and returns the text instead of pasting it, with the question
+  shown in place of the waveform. `mouthpiece mcp` serves `ask_user`,
+  `add_vocabulary` and `mouthpiece_status` over stdio (`cli.rs`,
+  `cli_server.rs`).
+- **Point at things** — "attach the selection", "attach the diff" /
+  "attach my changes" / "attach the staged changes", "look at this" /
+  "attach a screenshot" (the window you're looking at, or the one
+  behind your terminal/editor; Screen Recording asked the first time;
+  saved under `$TMPDIR` and referenced as `@path`). They combine with
+  each other and with "attach the error" (`attachments.rs`).
+- **File and line references** — "line 42 of the paste file" and "the
+  paste file, line 7" become `@src-tauri/src/paste.rs:42` / `:7`;
+  "lines 10 to 20" gives `:10-20`.
+- **Structured prompts** — per-mode "Structure long prompts": 80+ word
+  dictations are reorganised into Goal / Context / Constraints / Done
+  when by the local LLM, used only if `structure::check` finds every
+  name, path and number kept and almost nothing dropped or added.
+- **Team settings in `.mouthpiece.json`** — vocabulary applies
+  automatically; replacements apply once you allow that exact file
+  (sha256) in Settings > Vocabulary. Personal settings win. Strictly
+  parsed; snippets aren't supported yet (`repo_config.rs`).
+- **Code symbols** — open/close bracket and brace, double colon,
+  fat/thin arrow, double/triple/not equals, greater/less or equal, double
+  ampersand/pipe, pipe symbol, dollar sign.
+- **Commit messages** — "commit message: fixed the race in paste" writes
+  a message from `git diff --cached` with the local LLM, steered by your
+  words.
+
 ## Reliability
 
 - **Microphone permission** — `src-tauri/Info.plist` carries

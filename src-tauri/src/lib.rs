@@ -1,11 +1,15 @@
 mod agents;
 mod ambient;
 mod app_detect;
+mod attachments;
 mod audio;
 mod backtrack;
 mod boilerplate;
 mod capture;
+pub mod cli;
+mod cli_server;
 mod clipboard;
+mod commit_message;
 mod config;
 mod corrections;
 mod discard;
@@ -39,11 +43,13 @@ mod project;
 mod punctuation;
 mod readiness;
 mod recording;
+mod repo_config;
 mod rename;
 mod shortcut;
 mod snippets;
 mod sounds;
 mod speaker_poller;
+mod structure;
 mod stt;
 mod syntax;
 mod system_audio;
@@ -382,6 +388,7 @@ pub fn run() {
             set_input_device,
             widget_menu::show_mic_menu,
             widget_menu::show_widget_menu,
+            widget_menu::show_agents_menu,
             get_shortcut,
             set_shortcut,
             get_double_tap_enabled,
@@ -463,6 +470,12 @@ pub fn run() {
             readiness::open_accessibility_settings,
             readiness::request_accessibility,
             agents::get_waiting_agents,
+            agents::get_known_agents,
+            project::set_repo_config_trusted,
+            agents::get_agent_hook_setups,
+            cli_server::get_cli_info,
+            agents::get_agent_addressing_enabled,
+            agents::set_agent_addressing_enabled,
             agents::dismiss_waiting_agent,
             agents::focus_waiting_agent,
             agents::get_agent_reply_shortcut,
@@ -574,6 +587,8 @@ pub fn run() {
             app.manage(voice_isolation);
 
             app.manage(ambient::AmbientState::new());
+            app.manage(cli_server::CliState::default());
+            cli_server::start(app.handle());
             if saved_config.ambient_enabled {
                 if let Err(err) = ambient::start(app.handle()) {
                     crate::applog!("ambient: enabled in config but couldn't start: {err}");

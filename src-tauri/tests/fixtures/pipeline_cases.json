@@ -163,6 +163,28 @@
     "expect_attach_error": false
   },
   {
+    "name": "look at this and attach the diff are stripped in spoken order",
+    "input": "Why is the header red, look at this, attach the diff.",
+    "mode": "plain",
+    "expect": "Why is the header red",
+    "expect_attachments": ["screenshot", "diff"]
+  },
+  {
+    "name": "attach the selection around attach the error",
+    "input": "Explain this, attach the selection, attach the error.",
+    "mode": "plain",
+    "expect": "Explain this",
+    "expect_attach_error": true,
+    "expect_attachments": ["selection"]
+  },
+  {
+    "name": "look at this in a sentence is ordinary text",
+    "input": "I will look at this tomorrow.",
+    "mode": "plain",
+    "expect": "I will look at this tomorrow.",
+    "expect_attachments": []
+  },
+  {
     "name": "standalone scratch that undoes the last paste",
     "input": "Scratch that.",
     "mode": "plain",
@@ -556,5 +578,65 @@
     "input": "git commit --amend",
     "mode": "plain",
     "expect": "git commit --amend"
+  },
+  {
+    "name": "a long ramble is structured when the mode asks for it",
+    "input": "Okay so I want you to add rate limiting to the upload endpoint in @src/api/upload.ts, basically right now people can hammer it and the server falls over. Use the existing redisClient we already have, don't pull in a new library. The limit should be 20 requests per minute per user, and anonymous users should get 5. When someone goes over, return a 429 with a Retry-After header. Oh and make sure the admin accounts skip the limit entirely. Write tests for it in the upload spec file, and it's done when the existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "expect_llm_called": true
+  },
+  {
+    "name": "a structured version that drops a requirement is not used",
+    "input": "Okay so I want you to add rate limiting to the upload endpoint in @src/api/upload.ts, basically right now people can hammer it and the server falls over. Use the existing redisClient we already have, don't pull in a new library. The limit should be 20 requests per minute per user, and anonymous users should get 5. When someone goes over, return a 429 with a Retry-After header. Oh and make sure the admin accounts skip the limit entirely. Write tests for it in the upload spec file, and it's done when the existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect_prefix": "Okay so I want you to add rate limiting",
+    "expect_llm_called": true
+  },
+  {
+    "name": "short dictations are never structured",
+    "input": "Add rate limiting to the upload endpoint.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect": "Add rate limiting to the upload endpoint",
+    "expect_llm_called": false
+  },
+  {
+    "name": "code symbols, with no space between a glued symbol and an opening paren",
+    "input": "const add equals open paren a comma b close paren fat arrow a plus b",
+    "mode": "plain",
+    "expect": "const add=(a, b) => a+b"
+  },
+  {
+    "name": "commit message is written by the LLM",
+    "input": "Commit message: fixed the race in paste.",
+    "mode": "cli",
+    "llm": {
+      "returns": "Fix the race between copy and Cmd+V in paste"
+    },
+    "expect": "Fix the race between copy and Cmd+V in paste",
+    "expect_label": "commit message",
+    "expect_llm_called": true
+  },
+  {
+    "name": "commit message falls back to the words when the LLM fails",
+    "input": "Commit message: fixed the race in paste.",
+    "mode": "plain",
+    "llm": {
+      "error": "nothing is staged"
+    },
+    "expect": "Commit message: fixed the race in paste.",
+    "expect_llm_called": true
   }
 ]

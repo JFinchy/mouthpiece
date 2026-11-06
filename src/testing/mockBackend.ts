@@ -25,7 +25,7 @@ export type Scenario = {
   layout?: "sidebar" | "chain";
   insights?: Json;
   /// The project Settings reports as last detected.
-  projectStatus?: { name: string; names: number } | null;
+  projectStatus?: { name: string; names: number; repo_file?: Json | null } | null;
   /// Correction suggestions Settings > Vocabulary shows (already past the threshold).
   corrections?: { from: string; to: string; source: "edit" | "original"; count: number }[];
   /// Coding agents already waiting when the page loads.
@@ -73,6 +73,7 @@ function initialState(scenario: Scenario) {
     agents: (scenario.agents ?? []) as { session_id: string }[],
     agentShortcut: { meta: false, ctrl: true, alt: true, shift: false, code: "KeyR" },
     agentSound: true,
+    agentAddressing: true,
     historyLockEnabled: scenario.historyLock ?? false,
     meetingSpeakers: 0,
     meetingAutoDetect: true,
@@ -251,7 +252,7 @@ export function installMockBackend() {
     set_vocabulary: setter("vocabulary", "terms"),
     get_project_names_enabled: () => state.projectNames,
     set_project_names_enabled: setter("projectNames", "enabled"),
-    get_project_status: () => state.projectStatus,
+    get_project_status: () => structuredClone(state.projectStatus),
     get_snippets: () => state.snippets,
     set_snippets: setter("snippets", "snippets"),
     get_modes: () => state.modes,
@@ -262,6 +263,40 @@ export function installMockBackend() {
     ],
     // coding agents
     get_waiting_agents: () => state.agents,
+    get_known_agents: () => state.agents,
+    set_repo_config_trusted: (args) => {
+      const repo = (state.projectStatus as { repo_file?: { trusted: boolean } } | null)?.repo_file;
+      if (repo) repo.trusted = Boolean(args.trusted);
+    },
+    get_agent_hook_setups: () => {
+      const path = "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook";
+      const entry = [{ hooks: [{ type: "command", command: `'${path}'` }] }];
+      return [
+        {
+          id: "claude",
+          name: "Claude Code",
+          file: "~/.claude/settings.json",
+          how: "Merge this into the hooks you already have.",
+          snippet: JSON.stringify({ hooks: { Notification: entry, Stop: entry, UserPromptSubmit: entry } }, null, 2),
+        },
+        {
+          id: "codex",
+          name: "Codex",
+          file: "~/.codex/config.toml",
+          how: "Add this line near the top, outside any [section].",
+          snippet: `notify = ["${path}"]`,
+        },
+      ];
+    },
+    get_cli_info: () => ({
+      command_path: "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece",
+      running: true,
+    }),
+    get_agent_addressing_enabled: () => state.agentAddressing,
+    set_agent_addressing_enabled: (args) => {
+      state.agentAddressing = Boolean(args.enabled);
+    },
+    show_agents_menu: () => null,
     dismiss_waiting_agent: (args) => {
       state.agents = state.agents.filter((a) => a.session_id !== args.sessionId);
       void emit("agents-changed", state.agents);

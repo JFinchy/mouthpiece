@@ -215,3 +215,46 @@ test.describe("settings", () => {
     await expect.poll(() => calls(page, "set_dictation_sounds")).toEqual([{ enabled: true }]);
   });
 });
+
+test("a mode can structure long prompts", async ({ page, consoleErrors: _ }) => {
+  await open(page, "settings");
+  await page.locator(".dw-sidebar").getByRole("button", { name: "Modes", exact: true }).click();
+  const toggle = page.getByLabel("Structure long prompts in Terminal");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect
+    .poll(async () => {
+      const saved = (await calls(page, "set_modes")).at(-1) as { modes: { name: string; structure_long_prompts?: boolean }[] };
+      return saved?.modes.find((m) => m.name === "Terminal")?.structure_long_prompts;
+    })
+    .toBe(true);
+});
+
+test("a repo's .mouthpiece.json shows its terms and asks before using its replacements", async ({
+  page,
+  consoleErrors: _,
+}) => {
+  await open(page, "settings", {
+    projectStatus: {
+      name: "api",
+      names: 300,
+      repo_file: {
+        root: "/work/api",
+        hash: "abc",
+        vocabulary: ["Tauri", "sqlx"],
+        replacements: [{ from: "post gress", to: "Postgres" }],
+        trusted: false,
+        error: null,
+      },
+    },
+  });
+  await page.locator(".dw-sidebar").getByRole("button", { name: "Vocabulary", exact: true }).click();
+  const card = page.getByTestId("repo-file");
+  await expect(card).toContainText("2 vocabulary terms, used automatically. 1 replacements, off until you allow them");
+  await expect(page.getByTestId("repo-replacements")).toContainText("“post gress” → Postgres");
+  await page.getByTestId("allow-repo-replacements").click();
+  await expect
+    .poll(() => calls(page, "set_repo_config_trusted"))
+    .toEqual([{ root: "/work/api", hash: "abc", trusted: true }]);
+  await expect(card).toContainText("1 replacements, allowed.");
+});

@@ -36,6 +36,26 @@ Website: **[jfinchy.github.io/mouthpiece](https://jfinchy.github.io/mouthpiece/)
   submit (turn it on in Settings), and "append clipboard" to paste a log or URL after your words.
 - Snippets: a short spoken cue expands into a saved block of text.
 
+**Talks to your coding agents**
+- Claude Code, Codex, Gemini CLI, OpenCode and Aider tell Mouthpiece when
+  they're waiting; the widget shows who, and a reply shortcut sends your
+  answer to that agent's terminal (in Orca it's typed straight into the
+  pane, without switching windows).
+- Start any dictation with an agent's folder name ("to esc pause, rerun
+  the tests, send it") to send it there from any app.
+- Point at things: "attach the selection", "attach the diff", "look at
+  this" (a screenshot of the window you're looking at), "attach the
+  error", and "line 42 of the paste file" → `@src/paste.rs:42`.
+- Agents can ask *you*: `mouthpiece mcp` is an MCP server with an
+  `ask_user` tool that shows the question in the widget and returns your
+  spoken answer. The `mouthpiece` command does the same from scripts
+  (`mouthpiece listen --prompt "Which branch?"`).
+- A `.mouthpiece.json` committed to a repo shares vocabulary (and, once
+  you allow them, spoken replacements) with your team.
+- Optional per mode: long rambles become a structured prompt (Goal,
+  Context, Constraints, Done when), and only if nothing you said was
+  lost.
+
 **Local and private**
 - Speech recognition runs on your Mac (whisper.cpp on Metal). LLM cleanup
   is optional and runs in Ollama, also on your Mac.

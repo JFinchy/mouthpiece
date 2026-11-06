@@ -1,7 +1,13 @@
 #!/bin/sh
-# mouthpiece-hook: tells Mouthpiece that a Claude Code agent is waiting for
-# you (or has stopped waiting). Run it from Claude Code's Notification, Stop
-# and UserPromptSubmit hooks; Claude Code passes the event as JSON on stdin.
+# mouthpiece-hook: tells Mouthpiece that a coding agent is waiting for you
+# (or has stopped waiting). One script for every agent Settings > Coding
+# agents lists:
+#
+#   Claude Code   Notification / Stop / UserPromptSubmit hooks, JSON on stdin
+#   Gemini CLI    Notification / AfterAgent / BeforeAgent hooks, JSON on stdin
+#   Codex         `notify`, JSON as the last argument (agent-turn-complete)
+#   OpenCode      the Mouthpiece plugin, JSON on stdin
+#   Aider         --notifications-command, no JSON at all
 #
 # It only opens a mouthpiece:// link (in the background, so focus doesn't
 # move) and always exits 0, so it can never block or fail an agent.
@@ -11,9 +17,18 @@ OPEN="${DEV_WHISPER_OPEN:-/usr/bin/open}"
 # Filled in when Mouthpiece installs this copy; links without it are
 # ignored, so a web page can't pretend to be a waiting agent.
 TOKEN="__DEV_WHISPER_TOKEN__"
-json=$(cat)
+
+# The event: the last argument if it's JSON (Codex), else stdin, but never
+# a terminal (Aider runs this with the terminal still attached).
+json=""
+for last in "$@"; do :; done
+case "${last:-}" in
+  "{"*) json=$last ;;
+  *) [ -t 0 ] || json=$(cat) ;;
+esac
 
 field() {
+  [ -n "$json" ] || return 0
   printf '%s' "$json" | plutil -extract "$1" raw -o - - 2>/dev/null
 }
 
@@ -23,24 +38,45 @@ encode() {
 }
 
 event=$(field hook_event_name)
+[ -n "$event" ] || event=$(field type)
 session=$(field session_id)
+[ -n "$session" ] || session=$(field thread-id)
 cwd=$(field cwd)
 [ -n "$cwd" ] || cwd=$PWD
 
-if [ "$event" = UserPromptSubmit ]; then
-  "$OPEN" -g "mouthpiece://agent-resumed?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")" >/dev/null 2>&1
-  exit 0
+# Which agent this is, for the widget. MOUTHPIECE_AGENT names it; otherwise
+# it's worked out from the event.
+agent="${MOUTHPIECE_AGENT:-}"
+if [ -z "$agent" ]; then
+  case "$event" in
+    agent-turn-complete) agent=codex ;;
+    BeforeAgent|AfterAgent) agent=gemini ;;
+    *) agent=claude ;;
+  esac
 fi
+# Gemini CLI reads a hook's output as JSON.
+[ "$agent" = gemini ] && printf '{}\n'
 
-if [ "$event" = Stop ]; then
-  kind=done
-  message="Finished"
-else
-  kind=needs_input
-  message=$(field message)
-fi
+case "$event" in
+  UserPromptSubmit|BeforeAgent)
+    "$OPEN" -g "mouthpiece://agent-resumed?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")" >/dev/null 2>&1
+    exit 0
+    ;;
+  Stop|AfterAgent|agent-turn-complete)
+    kind=done
+    message="Finished"
+    ;;
+  "")
+    kind=needs_input
+    message="Waiting for you"
+    ;;
+  *)
+    kind=needs_input
+    message=$(field message)
+    ;;
+esac
 # Keep the link short; Mouthpiece trims again.
 message=$(printf '%s' "$message" | tr '\n\r\t' '   ' | LC_ALL=C cut -c1-300)
 
-"$OPEN" -g "mouthpiece://agent-waiting?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")&message=$(encode "$message")&kind=$kind&pid=$PPID&bundle=$(encode "$__CFBundleIdentifier")&term=$(encode "$TERM_PROGRAM")" >/dev/null 2>&1
+"$OPEN" -g "mouthpiece://agent-waiting?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")&message=$(encode "$message")&kind=$kind&pid=$PPID&bundle=$(encode "$__CFBundleIdentifier")&term=$(encode "$TERM_PROGRAM")&orca=$(encode "$ORCA_TERMINAL_HANDLE")&agent=$(encode "$agent")" >/dev/null 2>&1
 exit 0

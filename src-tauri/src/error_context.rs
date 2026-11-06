@@ -294,7 +294,7 @@ fn strip_ansi(text: &str) -> String {
 /// Where the visible text of the frontmost terminal came from, for tests
 /// and logs.
 #[cfg(target_os = "macos")]
-pub use ax::read_terminal_text;
+pub use ax::{read_selected_text, read_terminal_text};
 
 #[cfg(not(target_os = "macos"))]
 pub fn read_terminal_text(_pid: i32) -> Option<String> {
@@ -423,6 +423,23 @@ mod ax {
                 }
             }
             best
+        }
+    }
+
+    /// The text selected in the app's focused element, if any. Works in
+    /// most native and Electron text views; never reads anything else.
+    pub fn read_selected_text(pid: i32) -> Option<String> {
+        unsafe {
+            let app = AXUIElementCreateApplication(pid);
+            if app.is_null() {
+                return None;
+            }
+            let app = Owned(app);
+            AXUIElementSetMessagingTimeout(app.0, 1.0);
+            let focused = copy_attr(app.0, "AXFocusedUIElement")?;
+            copy_attr(focused.0, "AXSelectedText")
+                .and_then(|v| as_string(&v))
+                .filter(|s| !s.trim().is_empty())
         }
     }
 

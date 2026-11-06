@@ -729,19 +729,54 @@ pub fn generate_boilerplate(request: &str, model: &str) -> Result<String, String
                         explanation, no markdown code fences, no surrounding commentary. If the \
                         request doesn't specify a language, infer the most likely one from \
                         context.";
-    require_local(model)?;
     let prompt = format!("{instruction}\n\nRequest: {request}");
+    // Code generation is a heavier task than dictation cleanup and can
+    // legitimately take longer than refine()'s 30s budget.
+    let code = strip_markdown_fences(&complete(&prompt, model, 60)?);
+    if code.is_empty() {
+        Err("the model returned an empty response".to_string())
+    } else {
+        Ok(code)
+    }
+}
+
+/// Reorganises a long dictation into Goal / Context / Constraints / Done
+/// when (see `structure.rs`, which checks the answer).
+pub fn structure_prompt(text: &str, model: &str) -> Result<String, String> {
+    let prompt = format!("{}\n\nRequest:\n{text}", crate::structure::INSTRUCTION);
+    let answer = strip_markdown_fences(&complete(&prompt, model, 45)?);
+    if answer.trim().is_empty() {
+        Err("the model returned an empty response".to_string())
+    } else {
+        Ok(answer.trim().to_string())
+    }
+}
+
+/// A commit message for `diff`, steered by the spoken `notes`.
+pub fn commit_message(notes: &str, diff: &str, model: &str) -> Result<String, String> {
+    let notes = if notes.is_empty() { "(none)" } else { notes };
+    let prompt = format!(
+        "{}\n\nDeveloper's notes: {notes}\n\nStaged changes:\n{diff}",
+        crate::commit_message::INSTRUCTION
+    );
+    let message = crate::commit_message::clean(&complete(&prompt, model, 45)?);
+    if message.is_empty() {
+        Err("the model returned an empty message".to_string())
+    } else {
+        Ok(message)
+    }
+}
+
+/// One non-streamed answer from a local model (Ollama, or LM Studio /
+/// llama.cpp / Jan through `local_llm`).
+fn complete(prompt: &str, model: &str, timeout_secs: u64) -> Result<String, String> {
+    require_local(model)?;
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let started = Instant::now();
     if let Some((server, id)) = crate::local_llm::parse(model) {
-        let started = Instant::now();
-        let answer =
-            crate::local_llm::complete(server, id, &prompt, std::time::Duration::from_secs(60))?;
+        let answer = crate::local_llm::complete(server, id, prompt, timeout)?;
         record_latency(model, started.elapsed().as_millis() as u64);
-        let code = strip_markdown_fences(&answer);
-        return if code.is_empty() {
-            Err("the model returned an empty response".to_string())
-        } else {
-            Ok(code)
-        };
+        return Ok(answer);
     }
     let body = serde_json::json!({
         "model": model,
@@ -750,27 +785,15 @@ pub fn generate_boilerplate(request: &str, model: &str) -> Result<String, String
         "keep_alive": KEEP_ALIVE,
         "think": false,
     });
-
-    let started = Instant::now();
     let resp = ureq::post(OLLAMA_GENERATE_URL)
-        // Code generation is a heavier task than dictation cleanup and can
-        // legitimately take longer than refine()'s 30s budget.
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(timeout)
         .send_json(body)
         .map_err(|e| format!("Ollama request failed (is `ollama serve` running?): {e}"))?;
-
     let parsed: GenerateResponse = resp
         .into_json()
         .map_err(|e| format!("failed to parse Ollama response: {e}"))?;
-
     record_latency(model, started.elapsed().as_millis() as u64);
-
-    let code = strip_markdown_fences(&parsed.response);
-    if code.is_empty() {
-        Err("Ollama returned an empty response".to_string())
-    } else {
-        Ok(code)
-    }
+    Ok(parsed.response)
 }
 
 /// Names of locally-pulled Ollama models, for the Settings picker. Empty

@@ -12,5 +12,7 @@
   <string>Mouthpiece uses the microphone when you dictate, and for hands-free listening if you turn it on, to turn your speech into text on this Mac. Audio never leaves your computer.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>Mouthpiece captures system audio during meetings so remote participants can be transcribed on this Mac alongside your microphone, even when you wear headphones. Audio never leaves your computer.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Mouthpiece selects a coding agent's tab in iTerm or Terminal when you reply to it by voice, so your words land in the right tab.</string>
 </dict>
 </plist>

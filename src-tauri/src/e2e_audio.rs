@@ -161,6 +161,7 @@ fn dictation_from_real_audio() {
             stt_model: None,
             llm_refinement: LlmRefinement::Off,
             custom_instructions: None,
+            structure_long_prompts: false,
         };
         let out = pipeline::format(cleaned, &cfg, &settings, &NoLlm, &mut |_| {});
 

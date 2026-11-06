@@ -49,7 +49,27 @@ Still open, in order:
 3. Opt-out for deep links starting a recording
 4. Microphone permission in the setup checklist
 
-## Now — the voice interface for coding agents (agreed 2026-10-20)
+## Now — the voice layer for a fleet of agents (agreed 2026-11-06)
+
+Built on branch `agent-fleet` on 2026-11-06, each with a
+manual-testing-inbox file awaiting a real-Mac check:
+
+1. **Several agents at once** — address an agent by folder name, a menu
+   of waiting agents, Orca replies through `orca terminal send`,
+   iTerm2/Terminal tabs by tty.
+2. **`mouthpiece` CLI + MCP server** — `listen`, `vocab`, `status`;
+   MCP `ask_user`, `add_vocabulary`.
+3. **Context you can point at** — selection, diff, screenshot,
+   file:line references.
+4. **Hooks for more agents** — Codex, Gemini CLI, OpenCode, Aider.
+5. **Structured prompts from long rambles** (per mode, guarded).
+6. **Per-repo `.mouthpiece.json`** — vocabulary, allowed replacements.
+7. **Smaller** — spoken code symbols, commit messages from the staged
+   diff. Not done: "attach the error" from Ghostty/Warp/VS Code's
+   terminal, which mostly don't expose their text through Accessibility;
+   needs testing in those apps before choosing an approach.
+
+## Earlier — the voice interface for coding agents (agreed 2026-10-20)
 
 Positioning: Mouthpiece is the voice interface for coding agents. It
 knows your codebase and runs on your Mac. Fast, accurate dictation is

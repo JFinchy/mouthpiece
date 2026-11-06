@@ -20,6 +20,12 @@ place with a one-line note.
 
 ## Important
 
+- [ ] Several agents at once: address by name, agent menu, Orca/iTerm/Terminal delivery - see `agent-fleet-addressing.md`
+- [ ] The mouthpiece command and MCP server (ask_user) - see `agent-cli-mcp.md`
+- [ ] Per-repo .mouthpiece.json (replacements only after you allow the file) - see `repo-config.md`
+- [ ] Point at things: selection, diff, screenshot, file:line - see `point-at-context.md`
+- [ ] Hooks for Codex, Gemini CLI, OpenCode and Aider - see `more-agent-hooks.md`
+
 - [ ] Esc pauses a dictation (Resume / Transcribe / Delete) and passes Esc on to other apps - see `esc-pause.md`
 - [ ] Show the widget only while dictating (appears on the shortcut, hides after the paste) - see `widget-only-while-dictating.md`
 - [ ] Dictation sounds (start, stop, pasted, failed) - see `dictation-sounds.md`
@@ -45,6 +51,8 @@ place with a one-line note.
 
 ## Minor
 
+- [ ] Structure long prompts (Goal / Context / Constraints / Done when) - see `structured-prompts.md`
+- [ ] Spoken code symbols and commit messages - see `code-symbols-commit-messages.md`
 - [ ] Compact widget: 280px, contained flyout with thin scroll bar, full error text - see `compact-widget-polish.md`
 - [ ] New app icon and menu bar icon (incl. recording dot on dark menu bars) - see `new-icons.md`
 - [ ] Live input level meter - see `live-level-meter.md`

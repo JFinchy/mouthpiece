@@ -38,7 +38,71 @@ export function VocabularyBooksSection({ terms, onAdopt }: { terms: string[]; on
   );
 }
 
-type ProjectStatus = { name: string; names: number } | null;
+type RepoFileStatus = {
+  root: string;
+  hash: string | null;
+  vocabulary: string[];
+  replacements: { from: string; to: string }[];
+  trusted: boolean;
+  error: string | null;
+};
+type ProjectStatus = { name: string; names: number; repo_file: RepoFileStatus | null } | null;
+
+const REPO_FILE_EXAMPLE = `{
+  "version": 1,
+  "vocabulary": ["Tauri", "whisper.cpp"],
+  "replacements": [{ "from": "post gress", "to": "Postgres" }]
+}`;
+
+// The repo's committed .mouthpiece.json: team vocabulary applies on its
+// own; replacements change what's pasted, so they wait until you allow
+// this exact version of the file.
+function RepoFile({ status, onChange }: { status: RepoFileStatus; onChange: () => void }) {
+  function setTrusted(trusted: boolean) {
+    invoke("set_repo_config_trusted", { root: status.root, hash: status.hash ?? "", trusted })
+      .then(onChange)
+      .catch((err) => notifyError("Couldn't change the repo file setting", err));
+  }
+  if (status.error) {
+    return (
+      <p className="mt-1 text-xs text-warning" data-testid="repo-file">
+        {status.error}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-2 rounded border border-base-content/10 p-2 text-xs" data-testid="repo-file">
+      <p className="font-medium">Team settings from .mouthpiece.json</p>
+      <p className="opacity-60">
+        {status.vocabulary.length} vocabulary {status.vocabulary.length === 1 ? "term" : "terms"}, used automatically.
+        {status.replacements.length > 0 &&
+          (status.trusted
+            ? ` ${status.replacements.length} replacements, allowed.`
+            : ` ${status.replacements.length} replacements, off until you allow them:`)}
+      </p>
+      {status.replacements.length > 0 && !status.trusted && (
+        <ul className="my-1 list-disc pl-4 font-mono text-[11px]" data-testid="repo-replacements">
+          {status.replacements.map((r) => (
+            <li key={r.from}>
+              “{r.from}” → {r.to}
+            </li>
+          ))}
+        </ul>
+      )}
+      {status.replacements.length > 0 &&
+        (status.trusted ? (
+          <button className="btn btn-ghost btn-xs mt-1" onClick={() => setTrusted(false)}>
+            Turn off its replacements
+          </button>
+        ) : (
+          <button className="btn btn-xs mt-1" onClick={() => setTrusted(true)} data-testid="allow-repo-replacements">
+            Allow these replacements
+          </button>
+        ))}
+      <p className="mt-1 opacity-50">Your own vocabulary and replacements win over the repo's.</p>
+    </div>
+  );
+}
 
 // Names from the repo open in the frontmost terminal or editor. Found and
 // read on this Mac when you start dictating; kept in memory only.
@@ -50,10 +114,14 @@ function ProjectNamesToggle() {
     invoke<boolean>("get_project_names_enabled")
       .then(setEnabled)
       .catch((err) => notifyError("get_project_names_enabled", err));
+    loadStatus();
+  }, []);
+
+  function loadStatus() {
     invoke<ProjectStatus>("get_project_status")
       .then(setStatus)
       .catch((err) => notifyError("get_project_status", err));
-  }, []);
+  }
 
   function toggle(next: boolean) {
     setEnabled(next);
@@ -86,6 +154,16 @@ function ProjectNamesToggle() {
             ? `Last project: ${status.name} · ${status.names.toLocaleString("en-US")} names`
             : "No project yet. It's picked up the next time you dictate in a terminal or editor inside a project."}
         </p>
+      )}
+      {enabled && status?.repo_file && <RepoFile status={status.repo_file} onChange={loadStatus} />}
+      {enabled && status && !status.repo_file && (
+        <details className="mt-1 text-xs opacity-60">
+          <summary className="cursor-pointer">Share vocabulary with your team</summary>
+          <p className="mt-1">
+            Commit a <code>.mouthpiece.json</code> to the repo's root and everyone using Mouthpiece there gets it:
+          </p>
+          <pre className="mt-1 overflow-auto rounded bg-base-300/50 p-2 text-[11px]">{REPO_FILE_EXAMPLE}</pre>
+        </details>
       )}
     </div>
   );
@@ -130,8 +208,11 @@ export function VocabularySection() {
       .catch((err) => notifyError("get_learn_corrections", err));
     refreshLearning();
     const unlisten = listen("corrections-updated", refreshLearning);
+    // `mouthpiece vocab add` / MCP add_vocabulary change it from outside.
+    const unlistenVocab = listen<string[]>("vocabulary-changed", (e) => setTerms(e.payload));
     return () => {
       unlisten.then((f) => f());
+      unlistenVocab.then((f) => f());
     };
   }, []);
 

@@ -21,6 +21,15 @@ pub trait Refiner {
         vocabulary: &[String],
     ) -> Result<String, String>;
     fn boilerplate(&self, request: &str, model: &str) -> Result<String, String>;
+    /// A commit message from the staged changes in `root` (see
+    /// `commit_message.rs`).
+    fn commit_message(&self, _notes: &str, _root: Option<&std::path::Path>, _model: &str) -> Result<String, String> {
+        Err("commit messages aren't available here".to_string())
+    }
+    /// Reorganises a long dictation (see `structure.rs`).
+    fn structure(&self, _text: &str, _model: &str) -> Result<String, String> {
+        Err("structuring isn't available here".to_string())
+    }
     /// The user asked to paste as-is before refinement started.
     fn skipped(&self) -> bool {
         false
@@ -62,8 +71,64 @@ impl Refiner for OllamaRefiner<'_> {
         crate::llm::generate_boilerplate(request, model)
     }
 
+    fn structure(&self, text: &str, model: &str) -> Result<String, String> {
+        crate::llm::structure_prompt(text, model)
+    }
+
+    fn commit_message(&self, notes: &str, root: Option<&std::path::Path>, model: &str) -> Result<String, String> {
+        let root = root.ok_or("no project found")?;
+        let diff = crate::attachments::read_diff(root, true)?.ok_or("nothing is staged")?;
+        crate::llm::commit_message(notes, &diff, model)
+    }
+
     fn skipped(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// "Structure long prompts": a long dictation is reorganised by the LLM,
+/// and the result is used only if `structure::check` finds nothing lost or
+/// added.
+fn structure_if_long(
+    text: String,
+    cfg: &AppConfig,
+    settings: &crate::modes::ResolvedSettings,
+    refiner: &dyn Refiner,
+    on_refining: &mut dyn FnMut(&str),
+    unrefined: &mut Option<String>,
+    llm_ms: &mut Option<u64>,
+    features_used: &mut Vec<String>,
+) -> String {
+    if !settings.structure_long_prompts || !crate::structure::long_enough(&text) || refiner.skipped() {
+        return text;
+    }
+    let model = match &settings.llm_refinement {
+        crate::modes::LlmRefinement::Model(id) => id.clone(),
+        _ => cfg.llm_model.clone(),
+    };
+    on_refining(&model);
+    let started = Instant::now();
+    let result = refiner.structure(&text, &model);
+    *llm_ms = Some(llm_ms.unwrap_or(0) + started.elapsed().as_millis() as u64);
+    match result {
+        Ok(structured) => match crate::structure::check(&text, &structured) {
+            Ok(()) => {
+                crate::applog!("structure: {model} structured {} words", text.split_whitespace().count());
+                features_used.push("structured".to_string());
+                if unrefined.is_none() {
+                    *unrefined = Some(text);
+                }
+                structured
+            }
+            Err(why) => {
+                crate::applog!("structure: rejected {model}'s version ({why}), pasting as spoken");
+                text
+            }
+        },
+        Err(err) => {
+            crate::applog!("structure: {model} failed ({err}), pasting as spoken");
+            text
+        }
     }
 }
 
@@ -119,6 +184,9 @@ pub struct Formatted {
     /// "Attach the error" was spoken; the caller appends the most recent
     /// error output as a fenced block (reading it is a side effect).
     pub attach_error: bool,
+    /// "Attach the selection / the diff", "look at this": what else the
+    /// caller appends (see `attachments.rs`), in spoken order.
+    pub attachments: Vec<crate::attachments::Kind>,
     /// The whole dictation was "scratch that" / "undo that": no text, the
     /// caller undoes the last paste instead.
     pub undo_last: bool,
@@ -173,6 +241,12 @@ pub fn format_in_project(
     // The user's learned replacements (see `corrections.rs`) fix known
     // mis-hearings first, so every later pass sees the corrected word.
     let text = crate::corrections::apply_replacements(&text, &cfg.replacements);
+    // Then the repo's team replacements (`.mouthpiece.json`), if the user
+    // allowed that file: personal ones went first, so they win.
+    let text = match project.map(|p| p.trusted_replacements(&cfg.trusted_repo_configs)) {
+        Some(repo) if !repo.is_empty() => crate::corrections::apply_replacements(&text, repo),
+        _ => text,
+    };
 
     // A standalone "scratch that" undoes the last paste. Checked first, on
     // the raw transcript: backtrack (below) only handles the mid-sentence
@@ -184,6 +258,7 @@ pub fn format_in_project(
             press_enter: false,
             append_clipboard: false,
             attach_error: false,
+            attachments: Vec::new(),
             undo_last: true,
             features_used: vec!["undo".to_string()],
             spoken_words: Some(0),
@@ -251,9 +326,21 @@ pub fn format_in_project(
     // "Attach the error": stripped the same way, after "press enter" (the
     // later-spoken phrase goes first). Always on: the phrases are
     // deliberate, and nothing happens beyond appending a block.
+    // Other attachments ("look at this, attach the diff") can sit on
+    // either side of "attach the error", so strip them before and after.
+    let (text, mut attachments) = crate::attachments::extract(&text);
     let (text, should_attach_error) = crate::error_context::try_extract_trigger(&text);
+    let (text, earlier) = crate::attachments::extract(&text);
+    let earlier: Vec<_> = earlier.into_iter().filter(|k| !attachments.contains(k)).collect();
+    attachments.splice(0..0, earlier);
     if should_attach_error {
         features_used.push("attach_error".to_string());
+    }
+    for kind in &attachments {
+        let feature = kind.feature().to_string();
+        if !features_used.contains(&feature) {
+            features_used.push(feature);
+        }
     }
 
     // Word count of what was actually spoken, captured here (post
@@ -316,6 +403,22 @@ pub fn format_in_project(
                     crate::applog!(
                         "boilerplate: generation failed, falling back to plain formatting: {err}"
                     );
+                    let formatted = crate::modes::apply_mode(settings.mode, &text);
+                    (formatted, format!("{:?}", settings.mode))
+                }
+            }
+        } else if let Some(notes) = crate::commit_message::try_extract(&text) {
+            on_refining(&cfg.llm_model);
+            let started = Instant::now();
+            let result = refiner.commit_message(&notes, project.map(|p| p.root.as_path()), &cfg.llm_model);
+            llm_ms = Some(started.elapsed().as_millis() as u64);
+            match result {
+                Ok(message) => {
+                    crate::applog!("commit message: written from the staged changes");
+                    (message, "commit message".to_string())
+                }
+                Err(err) => {
+                    crate::applog!("commit message: {err}, pasting as spoken");
                     let formatted = crate::modes::apply_mode(settings.mode, &text);
                     (formatted, format!("{:?}", settings.mode))
                 }
@@ -445,6 +548,16 @@ pub fn format_in_project(
             } else {
                 formatted
             };
+            let formatted = structure_if_long(
+                formatted,
+                cfg,
+                settings,
+                refiner,
+                on_refining,
+                &mut unrefined,
+                &mut llm_ms,
+                &mut features_used,
+            );
             (formatted, format!("{:?}", settings.mode))
         };
 
@@ -454,6 +567,7 @@ pub fn format_in_project(
         press_enter: should_press_enter,
         append_clipboard: should_append_clipboard,
         attach_error: should_attach_error,
+        attachments,
         undo_last: false,
         features_used,
         spoken_words,
@@ -482,6 +596,9 @@ mod golden {
         /// LLM returns rather than whether it runs.
         #[serde(default)]
         always_refine: bool,
+        /// Turns on "Structure long prompts" for the case's mode.
+        #[serde(default)]
+        structure: bool,
         llm: Option<ScriptedLlm>,
         expect: Option<String>,
         expect_prefix: Option<String>,
@@ -489,6 +606,8 @@ mod golden {
         expect_press_enter: Option<bool>,
         expect_append_clipboard: Option<bool>,
         expect_attach_error: Option<bool>,
+        /// e.g. ["screenshot", "diff"], in spoken order.
+        expect_attachments: Option<Vec<String>>,
         expect_undo_last: Option<bool>,
         expect_llm_called: Option<bool>,
         /// Names in the dictated-into project, as `"file:src/paste.rs"` /
@@ -541,6 +660,8 @@ mod golden {
             name: "fake".into(),
             index,
             terms,
+            root: "/fake".into(),
+            repo: None,
         })
     }
 
@@ -581,6 +702,12 @@ mod golden {
             self.answer()
         }
         fn boilerplate(&self, _: &str, _: &str) -> Result<String, String> {
+            self.answer()
+        }
+        fn structure(&self, _: &str, _: &str) -> Result<String, String> {
+            self.answer()
+        }
+        fn commit_message(&self, _: &str, _: Option<&std::path::Path>, _: &str) -> Result<String, String> {
             self.answer()
         }
     }
@@ -624,6 +751,7 @@ mod golden {
                     LlmRefinement::Off
                 },
                 custom_instructions: None,
+                structure_long_prompts: case.structure,
             };
             let refiner = FakeRefiner {
                 script: case.llm.clone(),
@@ -668,6 +796,16 @@ mod golden {
                         "append_clipboard {}, expected {append}",
                         out.append_clipboard
                     ));
+                }
+            }
+            if let Some(expected) = &case.expect_attachments {
+                let got: Vec<String> = out
+                    .attachments
+                    .iter()
+                    .map(|k| format!("{k:?}").to_lowercase())
+                    .collect();
+                if &got != expected {
+                    failures.push(format!("{}: attachments {got:?}, expected {expected:?}", case.name));
                 }
             }
             if let Some(attach) = case.expect_attach_error {
@@ -771,6 +909,7 @@ mod golden {
             stt_model: None,
             llm_refinement: LlmRefinement::Off,
             custom_instructions: None,
+            structure_long_prompts: false,
         };
         let refiner = FakeRefiner {
             script: Some(ScriptedLlm::Returns("Ship it.".into())),
