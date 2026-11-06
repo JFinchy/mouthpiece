@@ -467,6 +467,7 @@ pub fn run() {
             readiness::request_accessibility,
             agents::get_waiting_agents,
             agents::get_known_agents,
+            agents::get_agent_hook_setups,
             cli_server::get_cli_info,
             agents::get_agent_addressing_enabled,
             agents::set_agent_addressing_enabled,

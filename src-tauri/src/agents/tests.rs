@@ -393,6 +393,15 @@ fn hook_links_carry_the_install_token() {
 }
 
 fn run_hook(name: &str, stdin: &str, extra_env: &[(&str, &str)]) -> Option<String> {
+    run_hook_with_args(name, stdin, &[], extra_env)
+}
+
+fn run_hook_with_args(
+    name: &str,
+    stdin: &str,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+) -> Option<String> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("dw-hook-test-{}-{name}", std::process::id()));
@@ -411,6 +420,7 @@ fn run_hook(name: &str, stdin: &str, extra_env: &[(&str, &str)]) -> Option<Strin
     std::fs::write(&script, hook_script_with_token(TEST_TOKEN)).unwrap();
     let mut cmd = std::process::Command::new("/bin/sh");
     cmd.arg(script)
+        .args(args)
         .env("DEV_WHISPER_OPEN", &fake)
         .stdin(std::process::Stdio::piped());
     for (k, v) in extra_env {
@@ -502,3 +512,66 @@ fn hook_script_survives_odd_input() {
     assert_eq!(r.message, "say \"hi\" & go next");
     assert!(run_hook("garbage", "not json at all", &[]).is_some());
 }
+
+#[test]
+fn hook_script_reads_codex_notify_from_its_last_argument() {
+    let json = r#"{"type":"agent-turn-complete","thread-id":"t-9","turn-id":"1","cwd":"/work/api","input-messages":["go"],"last-assistant-message":"Done."}"#;
+    let opened = run_hook_with_args("codex", "", &[json], &[]).unwrap();
+    let LinkEvent::Waiting(r) = link_of(&opened) else {
+        panic!("expected waiting: {opened}")
+    };
+    assert_eq!((r.session_id.as_str(), r.cwd.as_str()), ("t-9", "/work/api"));
+    assert_eq!((r.kind, r.agent.as_str()), (Kind::Done, "Codex"));
+}
+
+#[test]
+fn hook_script_understands_gemini_events() {
+    let after = r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"AfterAgent","prompt":"x","prompt_response":"y"}"#;
+    let LinkEvent::Waiting(r) = link_of(&run_hook("gemini-after", after, &[]).unwrap()) else {
+        panic!("expected waiting")
+    };
+    assert_eq!((r.kind, r.agent.as_str()), (Kind::Done, "Gemini"));
+
+    let before = r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"BeforeAgent","prompt":"x"}"#;
+    assert!(run_hook("gemini-before", before, &[]).unwrap().contains("agent-resumed"));
+
+    let note = r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"Notification","notification_type":"ToolPermission","message":"Allow shell?"}"#;
+    let opened = run_hook("gemini-note", note, &[("MOUTHPIECE_AGENT", "gemini")]).unwrap();
+    let LinkEvent::Waiting(r) = link_of(&opened) else {
+        panic!("expected waiting")
+    };
+    assert_eq!((r.kind, r.message.as_str(), r.agent.as_str()), (Kind::NeedsInput, "Allow shell?", "Gemini"));
+}
+
+#[test]
+fn hook_script_handles_a_bare_call_like_aider() {
+    let opened = run_hook("aider", "", &[("MOUTHPIECE_AGENT", "aider")]).unwrap();
+    let LinkEvent::Waiting(r) = link_of(&opened) else {
+        panic!("expected waiting")
+    };
+    assert_eq!((r.kind, r.message.as_str(), r.agent.as_str()), (Kind::NeedsInput, "Waiting for you", "Aider"));
+    assert!(r.session_id.starts_with("cwd:"));
+}
+
+#[test]
+fn setups_cover_every_agent_and_quote_the_path() {
+    let setups = hook_setups("/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook");
+    let ids: Vec<&str> = setups.iter().map(|s| s.id).collect();
+    assert_eq!(ids, ["claude", "codex", "gemini", "opencode", "aider"]);
+    let get = |id: &str| setups.iter().find(|s| s.id == id).unwrap().snippet.clone();
+    assert_eq!(
+        get("codex"),
+        r#"notify = ["/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook"]"#
+    );
+    let gemini: serde_json::Value = serde_json::from_str(&get("gemini")).unwrap();
+    for event in ["Notification", "AfterAgent", "BeforeAgent"] {
+        assert_eq!(
+            gemini["hooks"][event][0]["hooks"][0]["command"],
+            "MOUTHPIECE_AGENT=gemini '/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'"
+        );
+    }
+    assert!(get("opencode").contains(r#"const HOOK = "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook";"#));
+    assert!(get("aider").contains(r#"notifications-command: "MOUTHPIECE_AGENT=aider '/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'""#));
+    assert_eq!(toml_string(r#"a"b\c"#), r#""a\"b\\c""#);
+}
+

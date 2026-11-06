@@ -625,6 +625,103 @@ pub fn hook_config_json(script_path: &str) -> String {
     serde_json::to_string_pretty(&config).unwrap_or_default()
 }
 
+/// How to hook one agent up to Mouthpiece, for Settings.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct HookSetup {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// The file the snippet goes in.
+    pub file: &'static str,
+    /// One sentence on what to do with the snippet.
+    pub how: &'static str,
+    pub snippet: String,
+}
+
+fn shell_quote(path: &str) -> String {
+    format!("'{}'", path.replace('\'', r"'\''"))
+}
+
+fn toml_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Setup snippets for every supported agent, all running the same script.
+pub fn hook_setups(script_path: &str) -> Vec<HookSetup> {
+    let quoted = shell_quote(script_path);
+    let gemini_entry = serde_json::json!([{ "hooks": [{
+        "type": "command",
+        "command": format!("MOUTHPIECE_AGENT=gemini {quoted}"),
+    }] }]);
+    let gemini = serde_json::json!({ "hooks": {
+        "Notification": gemini_entry,
+        "AfterAgent": gemini_entry,
+        "BeforeAgent": gemini_entry,
+    } });
+    let opencode = format!(
+        r#"// Tells Mouthpiece when an OpenCode session is waiting for you.
+const HOOK = {path};
+export const Mouthpiece = async ({{ $, directory }}) => ({{
+  event: async ({{ event }}) => {{
+    const name =
+      event.type === "session.idle" ? "Stop" : event.type === "permission.asked" ? "Notification" : null;
+    if (!name) return;
+    const payload = JSON.stringify({{
+      hook_event_name: name,
+      session_id: event.properties?.sessionID ?? "",
+      cwd: directory,
+      message: name === "Notification" ? "OpenCode needs your permission" : "",
+    }});
+    await $`${{HOOK}} < ${{new Response(payload)}}`
+      .env({{ ...process.env, MOUTHPIECE_AGENT: "opencode" }})
+      .quiet()
+      .nothrow();
+  }},
+}});
+"#,
+        path = serde_json::to_string(script_path).unwrap_or_default()
+    );
+    vec![
+        HookSetup {
+            id: "claude",
+            name: "Claude Code",
+            file: "~/.claude/settings.json",
+            how: "Merge this into the hooks you already have.",
+            snippet: hook_config_json(script_path),
+        },
+        HookSetup {
+            id: "codex",
+            name: "Codex",
+            file: "~/.codex/config.toml",
+            how: "Add this line near the top, outside any [section]. Codex calls it when a turn finishes.",
+            snippet: format!("notify = [{}]", toml_string(script_path)),
+        },
+        HookSetup {
+            id: "gemini",
+            name: "Gemini CLI",
+            file: "~/.gemini/settings.json",
+            how: "Merge this into the hooks you already have.",
+            snippet: serde_json::to_string_pretty(&gemini).unwrap_or_default(),
+        },
+        HookSetup {
+            id: "opencode",
+            name: "OpenCode",
+            file: "~/.config/opencode/plugins/mouthpiece.js",
+            how: "Save this as a new plugin file, then restart OpenCode.",
+            snippet: opencode,
+        },
+        HookSetup {
+            id: "aider",
+            name: "Aider",
+            file: "~/.aider.conf.yml",
+            how: "Add these lines. Aider runs the command whenever it's waiting for you.",
+            snippet: format!(
+                "notifications: true\nnotifications-command: {}",
+                serde_json::to_string(&format!("MOUTHPIECE_AGENT=aider {quoted}")).unwrap_or_default()
+            ),
+        },
+    ]
+}
+
 // -------------------------------------------------------------- deep links
 
 fn emit_changed(app: &AppHandle) {
@@ -1141,6 +1238,12 @@ pub fn set_agent_addressing_enabled(app: AppHandle, enabled: bool) {
 pub struct HookConfig {
     pub script_path: String,
     pub json: String,
+}
+
+#[tauri::command]
+pub fn get_agent_hook_setups(app: AppHandle) -> Result<Vec<HookSetup>, String> {
+    let path = hook_script_path(&app)?.to_string_lossy().to_string();
+    Ok(hook_setups(&path))
 }
 
 #[tauri::command]

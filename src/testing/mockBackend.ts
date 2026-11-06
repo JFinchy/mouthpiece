@@ -264,6 +264,26 @@ export function installMockBackend() {
     // coding agents
     get_waiting_agents: () => state.agents,
     get_known_agents: () => state.agents,
+    get_agent_hook_setups: () => {
+      const path = "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook";
+      const entry = [{ hooks: [{ type: "command", command: `'${path}'` }] }];
+      return [
+        {
+          id: "claude",
+          name: "Claude Code",
+          file: "~/.claude/settings.json",
+          how: "Merge this into the hooks you already have.",
+          snippet: JSON.stringify({ hooks: { Notification: entry, Stop: entry, UserPromptSubmit: entry } }, null, 2),
+        },
+        {
+          id: "codex",
+          name: "Codex",
+          file: "~/.codex/config.toml",
+          how: "Add this line near the top, outside any [section].",
+          snippet: `notify = ["${path}"]`,
+        },
+      ];
+    },
     get_cli_info: () => ({
       command_path: "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece",
       running: true,

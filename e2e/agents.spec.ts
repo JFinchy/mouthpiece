@@ -141,6 +141,15 @@ test.describe("coding agents: settings", () => {
     await expect.poll(() => calls(page, "set_agent_addressing_enabled")).toEqual([{ enabled: false }]);
   });
 
+  test("shows setup for other agents", async ({ page, consoleErrors: _ }) => {
+    await openAgents(page);
+    await page.getByTestId("agent-setup-codex").click();
+    await expect(page.getByTestId("agent-hook-snippet")).toHaveText(
+      'notify = ["/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook"]',
+    );
+    await expect(page.getByText("~/.codex/config.toml")).toBeVisible();
+  });
+
   test("shows how to add the MCP server and the command", async ({ page, consoleErrors: _ }) => {
     await openAgents(page);
     await expect(page.getByTestId("agent-mcp-command")).toHaveText(

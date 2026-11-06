@@ -268,50 +268,60 @@ function CommandLine() {
   );
 }
 
+type HookSetup = { id: string; name: string; file: string; how: string; snippet: string };
+
 function HookSnippet() {
-  const [hook, setHook] = useState<HookConfig | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [setups, setSetups] = useState<HookSetup[] | null>(null);
+  const [scriptPath, setScriptPath] = useState<string | null>(null);
+  const [picked, setPicked] = useState("claude");
 
   useEffect(() => {
+    invoke<HookSetup[]>("get_agent_hook_setups")
+      .then(setSetups)
+      .catch((err) => notifyError("get_agent_hook_setups", err));
     invoke<HookConfig>("get_agent_hook_config")
-      .then(setHook)
+      .then((cfg) => setScriptPath(cfg.script_path))
       .catch((err) => notifyError("get_agent_hook_config", err));
   }, []);
 
-  function copy() {
-    if (!hook) return;
-    navigator.clipboard
-      .writeText(hook.json)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      .catch((err) => notifyError("Couldn't copy to the clipboard", err));
-  }
-
+  const setup = setups?.find((s) => s.id === picked) ?? setups?.[0];
   return (
     <div className="rounded-lg border border-base-content/10 bg-base-100 p-4">
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Claude Code hook</h3>
-      <p className="mb-2 text-xs opacity-60">
-        Add this to the <code>hooks</code> in <code>~/.claude/settings.json</code> (merge it with any hooks you already
-        have). Notification and Stop tell Mouthpiece an agent is waiting; UserPromptSubmit clears it when you answer in
-        the terminal yourself.
-      </p>
-      {hook ? (
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Connect an agent</h3>
+      {setups && setup ? (
         <>
+          <div className="mb-2 flex flex-wrap gap-1" role="tablist" aria-label="Coding agent">
+            {setups.map((s) => (
+              <button
+                key={s.id}
+                role="tab"
+                aria-selected={s.id === setup.id}
+                className={`btn btn-xs ${s.id === setup.id ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => setPicked(s.id)}
+                data-testid={`agent-setup-${s.id}`}
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+          <p className="mb-2 text-xs opacity-60">
+            In <code>{setup.file}</code>: {setup.how}
+            {setup.id === "claude" &&
+              " Notification and Stop tell Mouthpiece an agent is waiting; UserPromptSubmit clears it when you answer in the terminal yourself."}
+          </p>
           <pre
             className="max-h-56 overflow-auto rounded bg-base-300/50 p-2 text-[11px] leading-snug"
-            data-testid="agent-hook-json"
+            data-testid={setup.id === "claude" ? "agent-hook-json" : "agent-hook-snippet"}
           >
-            {hook.json}
+            {setup.snippet}
           </pre>
           <div className="mt-2 flex items-center gap-2">
-            <button className="btn btn-sm" onClick={copy}>
-              {copied ? "Copied" : "Copy hook config"}
-            </button>
-            <span className="truncate text-xs opacity-50" title={hook.script_path}>
-              Script: {hook.script_path}
-            </span>
+            <CopyButton text={setup.snippet} label={setup.id === "claude" ? "Copy hook config" : "Copy"} />
+            {scriptPath && (
+              <span className="truncate text-xs opacity-50" title={scriptPath}>
+                Script: {scriptPath}
+              </span>
+            )}
           </div>
         </>
       ) : (
