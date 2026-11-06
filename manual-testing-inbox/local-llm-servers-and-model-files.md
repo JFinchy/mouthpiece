@@ -50,3 +50,12 @@ Model file → Ollama (Ollama running, nothing pulled needed):
 Local-server models are listed, refine dictation and report readiness
 correctly; a `.gguf` becomes a working Ollama model without any download;
 failures show plain-language errors.
+
+## Automated checks done (2026-11-06)
+
+Against a real Ollama 0.40.13 with the `gemma3:1b` .gguf already on disk,
+the import's API calls (`HEAD /api/blobs/sha256:<digest>` → 200,
+`POST /api/create` with the `files` map → success) created a model that
+generated text, then was deleted. The blob already existed, so the upload
+step (`POST /api/blobs`) was covered only by the fake-server tests. LM Studio,
+llama.cpp and Jan weren't installed on this machine.

@@ -49,3 +49,11 @@ entitlement was added.
 All of 5–13 behave as on 0.5.3; step 3 shows the runtime flag and the
 entitlement. If the mic records silence or a model fails to load, check
 Console.app for `AMFI`/`Library Validation` lines and note them here.
+
+## Automated checks done (2026-11-06)
+
+On the published `Mouthpiece_aarch64.app.tar.gz` for 0.6.0: `codesign -dv`
+shows `flags=0x10000(runtime)`, the only entitlement is
+`com.apple.security.device.audio-input`, `codesign --verify --deep --strict`
+passes, and `otool -L` lists only `/System` and `/usr/lib` libraries. Still
+needs a human: mic, models, Fn taps and updater on the installed 0.6.0.
