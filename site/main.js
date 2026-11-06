@@ -20,21 +20,69 @@ if ("IntersectionObserver" in window) {
   revealed.forEach((el) => el.classList.add("in"));
 }
 
-// Copy buttons next to commands.
+// Phone-width menu in the shared header.
+const navToggle = document.querySelector(".nav-toggle");
+if (navToggle) {
+  const header = navToggle.closest(".nav");
+  const setOpen = (open) => {
+    header.classList.toggle("open", open);
+    navToggle.setAttribute("aria-expanded", String(open));
+  };
+  navToggle.addEventListener("click", () => setOpen(!header.classList.contains("open")));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && header.classList.contains("open")) {
+      setOpen(false);
+      navToggle.focus();
+    }
+  });
+  header.querySelectorAll("nav a").forEach((a) => a.addEventListener("click", () => setOpen(false)));
+}
+
+// Copy buttons next to commands and code blocks. The text to copy is the
+// [data-cmd] element inside the same .cmd or .codeblock.
+const copyStatus = document.createElement("span");
+copyStatus.className = "sr-only";
+copyStatus.setAttribute("role", "status");
+document.body.append(copyStatus);
+
 document.querySelectorAll("[data-copy]").forEach((button) => {
+  const label = button.textContent;
   button.addEventListener("click", () => {
-    const text = button.parentElement.querySelector("[data-cmd]")?.textContent?.trim();
+    const scope = button.closest(".cmd, .codeblock") || button.parentElement;
+    const text = scope.querySelector("[data-cmd]")?.textContent?.trim();
     if (!text || !navigator.clipboard) return;
     navigator.clipboard.writeText(text).then(() => {
       button.textContent = "Copied";
       button.dataset.copied = "";
+      copyStatus.textContent = "Copied to the clipboard";
       setTimeout(() => {
-        button.textContent = "Copy";
+        button.textContent = label;
         delete button.dataset.copied;
+        copyStatus.textContent = "";
       }, 1600);
     }, () => {});
   });
 });
+
+// Guides: highlight the section you're reading in the table of contents.
+const tocLinks = [...document.querySelectorAll(".toc a[href^='#']")];
+if (tocLinks.length && "IntersectionObserver" in window) {
+  const byId = new Map(tocLinks.map((a) => [a.getAttribute("href").slice(1), a]));
+  const tocIo = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        tocLinks.forEach((a) => a.removeAttribute("aria-current"));
+        byId.get(entry.target.id)?.setAttribute("aria-current", "true");
+      }
+    },
+    { rootMargin: "-20% 0px -70% 0px" },
+  );
+  byId.forEach((_, id) => {
+    const section = document.getElementById(id);
+    if (section) tocIo.observe(section);
+  });
+}
 
 // Fill in the latest release version, quietly keeping the fallback text
 // if GitHub's API is unreachable or rate-limited.

@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guides · Mouthpiece</title>
+  <meta name="description" content="Step-by-step Mouthpiece setup: permissions, speech models, local LLM cleanup, modes, vocabulary, the Claude Code reply hook, deep links, the webhook and meetings.">
+  <meta property="og:title" content="Mouthpiece guides">
+  <meta property="og:description" content="Set up Mouthpiece step by step, with the exact Settings labels.">
+  <meta property="og:image" content="icon.png">
+  <meta name="theme-color" content="#0f1113">
+  <link rel="icon" href="icon.png">
+  <link rel="preload" href="fonts/bricolage-grotesque-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/ibm-plex-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="nav-pill">
+      <a class="brand" href="index.html" aria-label="Mouthpiece home">
+        <img src="icon.png" alt="" width="26" height="26">
+        <span>Mouthpiece</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span class="nav-toggle-bars" aria-hidden="true"><i></i><i></i></span>Menu</button>
+      <nav id="site-nav" aria-label="Site">
+        <a href="index.html">Home</a>
+        <a href="features.html">Features</a>
+        <a href="guides.html" aria-current="page">Guides</a>
+        <a href="roadmap.html">Roadmap</a>
+        <a href="https://github.com/JFinchy/mouthpiece">GitHub</a>
+        <a class="nav-dl" href="index.html#download">Download</a>
+      </nav>
+      <a class="btn btn-small" href="index.html#download">Download</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="page-hero">
+      <div class="wrap">
+        <p class="eyebrow">Guides</p>
+        <h1>Set it up once, then just talk.</h1>
+        <p class="lede">Step-by-step how-tos with the exact labels you'll see in the app. Settings
+          opens from the menu bar icon or the gear on the widget; the page names below are the
+          ones in its sidebar.</p>
+      </div>
+    </section>
+
+    <div class="wrap guides-layout">
+      <details class="toc" open>
+        <summary>On this page</summary>
+        <nav aria-label="Guides">
+          <h2>Guides</h2>
+          <ol>
+            <li><a href="#first-run">First run and permissions</a></li>
+            <li><a href="#whisper-model">Choose a speech model</a></li>
+            <li><a href="#local-llm">Local LLM cleanup</a></li>
+            <li><a href="#modes">Modes and app rules</a></li>
+            <li><a href="#vocabulary">Vocabulary and snippets</a></li>
+            <li><a href="#claude-code">Reply to Claude Code</a></li>
+            <li><a href="#deep-links">Deep links</a></li>
+            <li><a href="#webhook">Output webhook</a></li>
+            <li><a href="#meetings">Meetings</a></li>
+          </ol>
+        </nav>
+      </details>
+
+      <div class="guides">
+        <!-- First run -->
+        <article class="guide" id="first-run" aria-labelledby="first-run-h">
+          <h2 id="first-run-h">First run and permissions</h2>
+          <p class="guide-meta"><span>About 5 minutes</span><span class="path"><span>Settings</span><i>›</i><span>Setup checklist</span></span></p>
+          <p>Until everything's in place, Settings opens with a setup checklist ("Finish setup to
+            start dictating"), and the widget shows "Finish setup". Each item has its own fix
+            button.</p>
+          <ol class="howto">
+            <li><span><strong>Install.</strong> Open the DMG and drag Mouthpiece into Applications.
+              It isn't notarized by Apple yet, so open it once, then go to
+              <span class="path"><span>System Settings</span><i>›</i><span>Privacy &amp; Security</span></span>
+              and click <span class="ui">Open Anyway</span>. Or skip that step with the one-line install:</span>
+              <div class="codeblock">
+                <div class="codeblock-head"><span>Terminal</span><button type="button" class="copy" data-copy aria-label="Copy the install command">Copy</button></div>
+                <pre data-cmd>curl -fsSL https://jfinchy.github.io/mouthpiece/install.sh | sh</pre>
+              </div>
+            </li>
+            <li><span><strong>Download a speech model.</strong> The checklist's
+              <span class="ui-btn">Choose a model</span> button takes you to
+              <span class="path"><span>Voice</span><i>›</i><span>Whisper model</span></span>.
+              Base (57 MB) is a good start; see <a href="#whisper-model">choosing a model</a>.</span></li>
+            <li><span><strong>Grant the permissions you need.</strong> Only the first two are needed
+              to dictate.</span></li>
+          </ol>
+          <div class="perm-grid">
+            <div class="perm">
+              <h3>Microphone <small>Required</small></h3>
+              <p>macOS asks on the first recording, or click <span class="ui-btn">Allow microphone</span>
+                in the checklist. If it was turned off, <span class="ui-btn">Open System Settings</span>
+                goes straight to Privacy &amp; Security › Microphone.</p>
+            </div>
+            <div class="perm">
+              <h3>Accessibility <small>To paste</small></h3>
+              <p>Lets Mouthpiece press ⌘V for you. Without it, your words are copied (and saved
+                to History) instead, and the widget offers "Allow pasting". Not needed if you turn
+                on <span class="ui">Copy only — don't auto-paste into the active app</span> under
+                Integrations › Delivery.</p>
+            </div>
+            <div class="perm">
+              <h3>Input Monitoring <small>Optional</small></h3>
+              <p>Only for double-tap Fn. Turn on <span class="ui">Double-tap Fn to start/stop recording</span>
+                under Dictation › Push-to-talk key, then allow Mouthpiece in Privacy &amp;
+                Security › Input Monitoring.</p>
+            </div>
+            <div class="perm">
+              <h3>System audio <small>Meetings</small></h3>
+              <p>On macOS 14.4 and later, macOS asks to let Mouthpiece record system audio the
+                first time a meeting captures it. That's what lets calls on headphones be
+                transcribed. Speaker names from the call window also need Accessibility.</p>
+            </div>
+          </div>
+          <div class="note"><strong>After an update, pasting stopped?</strong> If Accessibility
+            already shows Mouthpiece as on but pasting doesn't work, switch it off and on again in
+            System Settings. The checklist's tooltip says the same.</div>
+        </article>
+
+        <!-- Whisper model -->
+        <article class="guide" id="whisper-model" aria-labelledby="whisper-model-h">
+          <h2 id="whisper-model-h">Choose a speech model</h2>
+          <p class="guide-meta"><span class="path"><span>Settings</span><i>›</i><span>Voice</span><i>›</i><span>Whisper model</span></span></p>
+          <p>All three are English whisper.cpp models running on your Mac's GPU. Each row shows
+            Speed and Accuracy bars; click <span class="ui-btn">Download</span>, and the active one
+            is marked <span class="ui">Active</span>. Downloads are checked against known checksums.</p>
+          <div class="model-wrap">
+            <table class="model-table">
+              <thead><tr><th scope="col">Model</th><th scope="col">Size</th><th scope="col">Pick it when</th></tr></thead>
+              <tbody>
+                <tr><td>Tiny (English)</td><td>32 MB</td><td>Speed matters most, or an older M1 is busy</td></tr>
+                <tr><td>Base (English)</td><td>57 MB</td><td>The default. Balanced for everyday dictation</td></tr>
+                <tr><td>Small (English)</td><td>190 MB</td><td>You want fewer misheard words and can wait a little</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <ol class="howto">
+            <li><span>Download the model you want and select it. Every model a mode uses is warmed
+              at launch, so the first dictation isn't slow.</span></li>
+            <li><span>Leave <span class="ui">Transcribe while you talk</span> on (it's the default).
+              Each phrase is transcribed at the pause after it, so only the last few seconds are
+              left when you stop.</span></li>
+            <li><span>Optional: a mode can use a different model than the rest. In
+              <span class="path"><span>Modes</span></span>, change a mode's model from
+              <span class="ui">Global model</span> to the one you want.</span></li>
+          </ol>
+        </article>
+
+        <!-- Local LLM -->
+        <article class="guide" id="local-llm" aria-labelledby="local-llm-h">
+          <h2 id="local-llm-h">Local LLM cleanup</h2>
+          <p class="guide-meta"><span>Optional</span><span class="path"><span>Settings</span><i>›</i><span>LLM</span></span></p>
+          <p>Without an LLM you still get app formatting, casing, file tags, lists and snippets.
+            Cleanup adds a pass for rambling or casual speech, on this Mac.</p>
+          <ol class="howto">
+            <li><span><strong>Get a local model server.</strong> Install <a href="https://ollama.com">Ollama</a>,
+              or start the local server in LM Studio (port 1234), llama.cpp's
+              <code>llama-server</code> (8080) or Jan (1337). Mouthpiece finds them on their own.</span></li>
+            <li><span><strong>Pick a model</strong> under <span class="ui">LLM refinement</span>.
+              ✓ means it's ready; ⬇ means selecting it downloads it once (size shown). Models from
+              other servers are tagged with their source, and each shows its last round-trip time.
+              Small models are the quick ones; "thinking" models can take far too long.</span></li>
+            <li><span><strong>Keep it fast.</strong> Leave <span class="ui">Only refine when it's needed (faster)</span>
+              on: clean transcripts paste right away, and the LLM runs only for filler words,
+              repeats or long unpunctuated stretches (always in Casual mode or modes with custom
+              instructions).</span></li>
+            <li><span><strong>Already have a .gguf file?</strong> Under
+              <span class="ui">Model files on this Mac</span>, files from LM Studio's, Jan's and
+              the Hugging Face folders and <code>~/models</code> have an
+              <span class="ui-btn">Add to Ollama</span> button. For anything else, use
+              <span class="ui-btn">Choose a .gguf file…</span>. Ollama has to be running; nothing
+              is downloaded.</span></li>
+          </ol>
+          <div class="note">Ollama's cloud models are hidden and never used, so cleanup can't
+            leave your Mac. If one was already saved, Settings says so and asks you to pick a
+            local model.</div>
+        </article>
+
+        <!-- Modes -->
+        <article class="guide" id="modes" aria-labelledby="modes-h">
+          <h2 id="modes-h">Modes and app rules</h2>
+          <p class="guide-meta"><span class="path"><span>Settings</span><i>›</i><span>Modes</span></span></p>
+          <p>A mode decides how dictation is formatted for the app that was in front when you
+            started recording. It ships with <span class="ui">CLI</span> for terminals (Terminal,
+            iTerm, kitty, WezTerm, Warp), <span class="ui">Messaging</span> for Slack, Messages
+            and Discord, and <span class="ui">Default</span> for everything else. Edit those or add
+            your own.</p>
+          <ol class="howto">
+            <li><span>Click <span class="ui-btn">+ Add mode</span> and give it a name.</span></li>
+            <li><span>Pick its base behavior: <span class="ui">Plain</span> (sentences),
+              <span class="ui">Casual</span> (relaxed, always refined) or <span class="ui">CLI</span>
+              (shell-shaped output and file tags).</span></li>
+            <li><span>Use <span class="ui-btn">+ Add app</span> to assign apps. Running apps are
+              listed first, with common ones under <span class="ui">Other apps</span> so the app
+              doesn't have to be open. After you dictate somewhere new, a shortcut appears:
+              "Add <em>App</em> to: <span class="ui">Choose a mode…</span>".</span></li>
+            <li><span>Choose the speech model (<span class="ui">Global model</span> or a specific
+              one) and the LLM: <span class="ui">No LLM refinement</span>,
+              <span class="ui">Refine with global LLM</span>, or a specific local model.</span></li>
+            <li><span>Optional: add extra instructions for the LLM, e.g. "Always sign off with
+              'thanks, Jake'."</span></li>
+          </ol>
+          <div class="note">History can re-run a past dictation through a different mode: click
+            <span class="ui">Reprocess</span> on an entry, preview, then copy the result or replace
+            the entry.</div>
+        </article>
+
+        <!-- Vocabulary -->
+        <article class="guide" id="vocabulary" aria-labelledby="vocabulary-h">
+          <h2 id="vocabulary-h">Vocabulary and snippets</h2>
+          <p class="guide-meta"><span class="path"><span>Settings</span><i>›</i><span>Vocabulary</span></span></p>
+          <ol class="howto">
+            <li><span><strong>Add your terms.</strong> Type into
+              <span class="ui">Add a term (e.g. kubectl)</span> and press Return. Or adopt a bundle
+              from <span class="ui">Vocabulary books</span> and prune it afterwards. Your terms
+              bias Whisper and are passed to the LLM.</span></li>
+            <li><span><strong>Use names from your project.</strong> Leave
+              <span class="ui">Use names from your project</span> on. The page shows the project it
+              detected; it's picked up the next time you dictate in a terminal or editor inside a
+              repo. It stays in memory on this Mac.</span></li>
+            <li><span><strong>Learn from corrections.</strong> With
+              <span class="ui">Learn from my corrections</span> on, fixing the same word twice in
+              History (the pencil icon) shows a card here, like "You've corrected 'post gress' to
+              'Postgres' 2 times. Add it?". Adding it saves the term and a replacement rule, listed
+              under the vocabulary and removable.</span></li>
+            <li><span><strong>Snippets.</strong> Under <span class="ui">Snippets</span>, add a
+              <span class="ui">Trigger phrase (e.g. standup update)</span> and the
+              <span class="ui">Text to paste</span>. Say the trigger by itself to paste the text.</span></li>
+          </ol>
+        </article>
+
+        <!-- Claude Code -->
+        <article class="guide" id="claude-code" aria-labelledby="claude-code-h">
+          <h2 id="claude-code-h">Reply to a waiting Claude Code agent</h2>
+          <p class="guide-meta"><span>About 2 minutes</span><span class="path"><span>Settings</span><i>›</i><span>Coding agents</span></span></p>
+          <p>When an agent finishes or asks for permission, the widget shows
+            "Claude is waiting · <em>folder</em>". Press the reply shortcut, answer out loud, and
+            the text is pasted into that agent's window, then you're back where you were.</p>
+          <ol class="howto">
+            <li><span>Open <span class="path"><span>Coding agents</span><i>›</i><span>Claude Code hook</span></span>
+              and click <span class="ui-btn">Copy hook config</span>. The snippet points at a small
+              script Mouthpiece keeps in its app data folder, which carries this install's secret
+              token.</span></li>
+            <li><span>Merge it into the <code>hooks</code> in <code>~/.claude/settings.json</code>,
+              alongside any hooks you already have. Its shape (copy yours from Settings, it has
+              your home folder in the path):</span>
+              <div class="codeblock">
+                <div class="codeblock-head"><span>~/.claude/settings.json</span><button type="button" class="copy" data-copy aria-label="Copy the example hook config">Copy</button></div>
+                <pre data-cmd>{
+  "hooks": {
+    "Notification": [{ "hooks": [{ "type": "command", "command": "'/Users/you/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "'/Users/you/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "'/Users/you/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'" }] }]
+  }
+}</pre>
+              </div>
+              <span>Notification and Stop tell Mouthpiece an agent is waiting; UserPromptSubmit
+                clears it when you answer in the terminal yourself.</span></li>
+            <li><span>Check the <span class="ui">Reply shortcut</span> (<kbd>⌃⌥R</kbd> by default;
+              click it to record a new one). Optionally turn on
+              <span class="ui">Play a soft sound when an agent starts waiting</span>.</span></li>
+            <li><span>To submit replies by voice, turn on
+              <span class="ui">Say "press enter" to submit — presses Enter after pasting</span>
+              under <span class="path"><span>Integrations</span><i>›</i><span>Delivery</span></span>.
+              Then end a reply with "send it" or "press enter".</span></li>
+            <li><span>Start a Claude Code session and let it finish a task. The pill appears and
+              the agent shows under <span class="ui">Waiting now</span>. Press <kbd>⌃⌥R</kbd>, speak,
+              press it again.</span></li>
+          </ol>
+          <div class="note warn"><strong>Which terminals work best.</strong> Mouthpiece finds the
+            agent's window by its folder name in the window title. Terminal, VS Code and Cursor
+            usually show it; iTerm, Orca and Warp often don't. If it can't be sure, the reply is
+            copied to the clipboard instead, and it never pastes into a different app. Enter is
+            only pressed when the window title names the agent's terminal; otherwise the text is
+            pasted for you to check and press Return.</div>
+        </article>
+
+        <!-- Deep links -->
+        <article class="guide" id="deep-links" aria-labelledby="deep-links-h">
+          <h2 id="deep-links-h">Deep links for Raycast, Alfred and the shell</h2>
+          <p class="guide-meta"><span><code>mouthpiece://start-recording</code>, <code>stop-recording</code>, <code>toggle-recording</code></span></p>
+          <p>Any web page can open a <code>mouthpiece://</code> link, so each link must carry this
+            install's token, read from
+            <code>~/Library/Application Support/dev.mouthpiece/agent-hook-token</code>. Links
+            without it are ignored and logged. Start and stop are idempotent, so scripts don't need
+            to track whether it's recording.</p>
+          <h3>From a terminal</h3>
+          <div class="codeblock">
+            <div class="codeblock-head"><span>Terminal</span><button type="button" class="copy" data-copy aria-label="Copy the toggle-recording command">Copy</button></div>
+            <pre data-cmd>open "mouthpiece://toggle-recording?token=$(cat ~/Library/Application\ Support/dev.mouthpiece/agent-hook-token)"</pre>
+          </div>
+          <h3>A shell function</h3>
+          <p>Add to <code>~/.zshrc</code>, then run <code>mp</code>, <code>mp start</code> or <code>mp stop</code>.</p>
+          <div class="codeblock">
+            <div class="codeblock-head"><span>~/.zshrc</span><button type="button" class="copy" data-copy aria-label="Copy the shell function">Copy</button></div>
+            <pre data-cmd>mp() {
+  local token
+  token=$(cat ~/Library/Application\ Support/dev.mouthpiece/agent-hook-token)
+  open "mouthpiece://${1:-toggle}-recording?token=$token"
+}</pre>
+          </div>
+          <h3>Raycast script command</h3>
+          <p>Save as <code>mouthpiece-toggle.sh</code> in a folder Raycast loads script commands
+            from, and make it executable with <code>chmod +x</code>. Give it a hotkey in Raycast.</p>
+          <div class="codeblock">
+            <div class="codeblock-head"><span>mouthpiece-toggle.sh</span><button type="button" class="copy" data-copy aria-label="Copy the Raycast script">Copy</button></div>
+            <pre data-cmd>#!/bin/bash
+# @raycast.schemaVersion 1
+# @raycast.title Toggle dictation
+# @raycast.mode silent
+# @raycast.packageName Mouthpiece
+
+token=$(cat "$HOME/Library/Application Support/dev.mouthpiece/agent-hook-token")
+open "mouthpiece://toggle-recording?token=$token"</pre>
+          </div>
+          <h3>Alfred</h3>
+          <p>In a workflow, connect a Hotkey trigger to a <strong>Run Script</strong> action
+            (language <code>/bin/bash</code>) containing the last two lines of the Raycast script.</p>
+          <h3>Hammerspoon</h3>
+          <div class="codeblock">
+            <div class="codeblock-head"><span>~/.hammerspoon/init.lua</span><button type="button" class="copy" data-copy aria-label="Copy the Hammerspoon snippet">Copy</button></div>
+            <pre data-cmd>local f = io.open(os.getenv("HOME") .. "/Library/Application Support/dev.mouthpiece/agent-hook-token")
+local token = f:read("*l"); f:close()
+
+hs.hotkey.bind({ "ctrl", "alt" }, "M", function()
+  hs.urlevent.openURL("mouthpiece://toggle-recording?token=" .. token)
+end)</pre>
+          </div>
+          <div class="note">Keep the token out of shared dotfiles: read it from the file at run
+            time, as these do, rather than pasting the value.</div>
+        </article>
+
+        <!-- Webhook -->
+        <article class="guide" id="webhook" aria-labelledby="webhook-h">
+          <h2 id="webhook-h">Send every dictation to a webhook</h2>
+          <p class="guide-meta"><span class="path"><span>Settings</span><i>›</i><span>Integrations</span><i>›</i><span>Output webhook</span></span></p>
+          <p>Off by default: dictated text only leaves the Mac once you set a URL. Each delivered
+            dictation is sent as a JSON POST in the background, so a slow endpoint never delays the
+            paste; failures go to the log.</p>
+          <ol class="howto">
+            <li><span>Paste your URL into the field (n8n, Zapier, Make.com, or a Slack or Notion
+              incoming webhook).</span></li>
+            <li><span>Click <span class="ui-btn">Send test event</span>. You should see
+              <span class="ui">Test event delivered.</span></span></li>
+            <li><span>Handle this body:</span>
+              <div class="codeblock">
+                <div class="codeblock-head"><span>POST body · application/json</span></div>
+                <pre>{
+  <span class="v">"timestamp_ms"</span>: 1762425600000,
+  <span class="v">"text"</span>: <span class="s">"git commit -m \"update readme\""</span>,
+  <span class="v">"summary"</span>: <span class="k">null</span>,
+  <span class="v">"app_name"</span>: <span class="s">"Terminal"</span>,
+  <span class="v">"mode"</span>: <span class="s">"cli"</span>
+}</pre>
+              </div>
+              <span><code>summary</code> is the work-journal line when that's on; it's often
+                <code>null</code> because the summary is written after the webhook fires.</span></li>
+          </ol>
+          <h3>Try it locally first</h3>
+          <p>This prints each payload in your terminal, without sending your text anywhere. Use
+            <code>http://127.0.0.1:8787</code> as the webhook URL.</p>
+          <div class="codeblock">
+            <div class="codeblock-head"><span>Terminal</span><button type="button" class="copy" data-copy aria-label="Copy the local webhook listener">Copy</button></div>
+            <pre data-cmd>python3 -c '
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        print(self.rfile.read(int(self.headers["Content-Length"])).decode(), flush=True)
+        self.send_response(200); self.end_headers()
+HTTPServer(("127.0.0.1", 8787), H).serve_forever()'</pre>
+          </div>
+        </article>
+
+        <!-- Meetings -->
+        <article class="guide" id="meetings" aria-labelledby="meetings-h">
+          <h2 id="meetings-h">Record and transcribe a meeting</h2>
+          <p class="guide-meta"><span class="path"><span>Settings</span><i>›</i><span>Meetings</span></span><span class="tag tag-testing">Phase 2 in testing</span></p>
+          <ol class="howto">
+            <li><span><strong>Enroll your voice</strong> once, so your turns are labelled "You":
+              <span class="path"><span>Voice</span><i>›</i><span>Voice Isolation</span></span> ›
+              <span class="ui-btn">Enroll voice</span>, then speak naturally for a few seconds and
+              press Stop.</span></li>
+            <li><span>Set <span class="ui">People in the meeting</span> if you know it. Setting the
+              number gives the best split, especially when voices sound alike; leave it on
+              <span class="ui">Work it out</span> otherwise.</span></li>
+            <li><span>Click <span class="ui-btn">Start meeting</span>, or choose
+              <span class="ui">Start Meeting</span> from the menu bar icon. The widget shows a red
+              dot, level meter and timer. Let people know you're recording.</span></li>
+            <li><span>Or let it ask: with <span class="ui">Offer to record when a call starts</span>
+              on, joining a Zoom, Google Meet, Teams, Slack Huddle, Webex, FaceTime or Discord call
+              shows "Record <em>App</em>?" in the widget, and "Call ended · Stop?" afterwards.</span></li>
+            <li><span>You can keep dictating with push-to-talk while it records; those words are
+              kept out of the meeting.</span></li>
+            <li><span>Click <span class="ui-btn">Stop meeting</span>. When transcription finishes,
+              the meeting appears under <span class="ui">Transcripts</span> with View, Copy, Open
+              and Delete. Transcripts are Markdown files in the app's data folder, behind the
+              History lock if you use one.</span></li>
+          </ol>
+          <div class="note">On macOS 14.4 and later the call's own audio is recorded next to your
+            mic, so headphones work. On older macOS, or in a room, it records the mic only. Real
+            names for remote speakers need Accessibility and a call in Google Meet, Slack Huddles,
+            Teams or Zoom.</div>
+        </article>
+      </div>
+    </div>
+
+    <section class="cta-band">
+      <div class="wrap">
+        <h2>Stuck, or found a label that doesn't match?</h2>
+        <div class="cta-row">
+          <a class="btn-ghost" href="https://github.com/JFinchy/mouthpiece/issues">Open an issue</a>
+          <a class="btn-ghost" href="roadmap.html">See what's next</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Mouthpiece</span>
+        <p>The voice interface for coding agents. It knows your codebase and runs on your Mac.</p>
+      </div>
+      <div>
+        <h2>Product</h2>
+        <ul>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="roadmap.html">Roadmap</a></li>
+          <li><a href="index.html#download">Download</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/JFinchy/mouthpiece">GitHub</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/releases">Releases</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/issues">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="wrap footer-row">
+      <span>Open source under the <a href="https://github.com/JFinchy/mouthpiece/blob/main/LICENSE">MIT license</a></span>
+      <span>Apple Silicon · macOS 12+</span>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
