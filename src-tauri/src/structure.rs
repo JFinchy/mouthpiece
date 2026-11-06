@@ -28,20 +28,100 @@ const HEADINGS: &[&str] = &["goal", "context", "constraints", "done when"];
 
 /// Words too common to count as content.
 const STOPWORDS: &[&str] = &[
-    "about", "after", "again", "also", "because", "been", "before", "being", "could", "does",
-    "doing", "each", "from", "have", "having", "here", "into", "just", "like", "make", "more",
-    "most", "much", "need", "needs", "only", "other", "over", "really", "should", "some", "something",
-    "such", "than", "that", "their", "them", "then", "there", "these", "they", "thing", "things",
-    "this", "those", "through", "very", "want", "wanted", "well", "were", "what", "when", "where",
-    "which", "while", "will", "with", "would", "your", "yeah", "okay", "kind", "sort", "actually",
-    "basically", "maybe", "think", "know", "going", "gonna", "mean", "right", "it's", "that's",
-    "don't", "can't", "i'm", "we're", "you're", "let's", "goal", "context", "constraints", "done",
+    "about",
+    "after",
+    "again",
+    "also",
+    "because",
+    "been",
+    "before",
+    "being",
+    "could",
+    "does",
+    "doing",
+    "each",
+    "from",
+    "have",
+    "having",
+    "here",
+    "into",
+    "just",
+    "like",
+    "make",
+    "more",
+    "most",
+    "much",
+    "need",
+    "needs",
+    "only",
+    "other",
+    "over",
+    "really",
+    "should",
+    "some",
+    "something",
+    "such",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "thing",
+    "things",
+    "this",
+    "those",
+    "through",
+    "very",
+    "want",
+    "wanted",
+    "well",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "will",
+    "with",
+    "would",
+    "your",
+    "yeah",
+    "okay",
+    "kind",
+    "sort",
+    "actually",
+    "basically",
+    "maybe",
+    "think",
+    "know",
+    "going",
+    "gonna",
+    "mean",
+    "right",
+    "it's",
+    "that's",
+    "don't",
+    "can't",
+    "i'm",
+    "we're",
+    "you're",
+    "let's",
+    "goal",
+    "context",
+    "constraints",
+    "done",
 ];
 
 fn is_identifier_like(token: &str) -> bool {
-    token.chars().any(|c| c.is_ascii_digit() || matches!(c, '_' | '/' | '@' | '`' | '.' | ':'))
+    token
+        .chars()
+        .any(|c| c.is_ascii_digit() || matches!(c, '_' | '/' | '@' | '`' | '.' | ':'))
         && token.chars().any(|c| c.is_alphanumeric())
-        || token.chars().skip(1).any(|c| c.is_uppercase()) && token.chars().any(|c| c.is_lowercase())
+        || token.chars().skip(1).any(|c| c.is_uppercase())
+            && token.chars().any(|c| c.is_lowercase())
 }
 
 /// Splits into tokens, trimming sentence punctuation but keeping what
@@ -49,9 +129,14 @@ fn is_identifier_like(token: &str) -> bool {
 fn tokens(text: &str) -> Vec<String> {
     text.split_whitespace()
         .map(|w| {
-            w.trim_matches(|c: char| matches!(c, ',' | ';' | '!' | '?' | '(' | ')' | '"' | '\'' | '-' | '*'))
-                .trim_end_matches(['.', ':'])
-                .to_string()
+            w.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    ',' | ';' | '!' | '?' | '(' | ')' | '"' | '\'' | '-' | '*'
+                )
+            })
+            .trim_end_matches(['.', ':'])
+            .to_string()
         })
         .filter(|w| !w.is_empty())
         .collect()
@@ -86,7 +171,14 @@ pub fn check(original: &str, structured: &str) -> Result<(), String> {
     let lower = structured.to_lowercase();
     let headings = HEADINGS
         .iter()
-        .filter(|h| lower.lines().any(|l| l.trim_start().trim_start_matches('#').trim().starts_with(*h)))
+        .filter(|h| {
+            lower.lines().any(|l| {
+                l.trim_start()
+                    .trim_start_matches('#')
+                    .trim()
+                    .starts_with(*h)
+            })
+        })
         .count();
     if headings < 2 {
         return Err("no structure".to_string());
@@ -94,7 +186,10 @@ pub fn check(original: &str, structured: &str) -> Result<(), String> {
 
     // Names, paths and numbers must all come through exactly.
     let out_tokens: HashSet<String> = tokens(structured).into_iter().collect();
-    for name in tokens(original).into_iter().filter(|t| is_identifier_like(t)) {
+    for name in tokens(original)
+        .into_iter()
+        .filter(|t| is_identifier_like(t))
+    {
         let bare = name.trim_matches('`');
         if !out_tokens.iter().any(|t| t.trim_matches('`') == bare) && !structured.contains(bare) {
             return Err(format!("dropped a name ({} chars)", bare.chars().count()));

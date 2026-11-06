@@ -157,7 +157,9 @@ pub fn cap_selection(text: &str) -> String {
 /// `git diff` in the project folder. `Ok(None)` when there are no changes.
 pub fn read_diff(root: &Path, staged: bool) -> Result<Option<String>, String> {
     let mut cmd = Command::new("/usr/bin/git");
-    cmd.arg("-C").arg(root).args(["--no-pager", "diff", "--no-color", "--no-ext-diff"]);
+    cmd.arg("-C")
+        .arg(root)
+        .args(["--no-pager", "diff", "--no-color", "--no-ext-diff"]);
     if staged {
         cmd.arg("--cached");
     } else {
@@ -256,7 +258,10 @@ fn clean_old_screenshots(dir: &Path) {
 
 /// Captures the window you're looking at to a PNG and returns its path.
 #[cfg(target_os = "macos")]
-pub fn capture_window(front_pid: Option<i32>, front_bundle: Option<&str>) -> Result<PathBuf, String> {
+pub fn capture_window(
+    front_pid: Option<i32>,
+    front_bundle: Option<&str>,
+) -> Result<PathBuf, String> {
     if !unsafe { CGPreflightScreenCaptureAccess() } {
         unsafe { CGRequestScreenCaptureAccess() };
         return Err("Allow Screen Recording for Mouthpiece to attach screenshots".to_string());
@@ -297,7 +302,11 @@ pub fn capture_window(_: Option<i32>, _: Option<&str>) -> Result<PathBuf, String
 /// Code and others read an image from an @-path), the plain path elsewhere.
 pub fn screenshot_reference(text: &str, path: &Path, terminal: bool) -> String {
     let path = path.to_string_lossy();
-    let reference = if terminal { format!("@{path}") } else { path.to_string() };
+    let reference = if terminal {
+        format!("@{path}")
+    } else {
+        path.to_string()
+    };
     if text.is_empty() {
         reference
     } else {
@@ -311,19 +320,46 @@ mod tests {
 
     #[test]
     fn plain_triggers_are_stripped() {
-        assert_eq!(extract("Explain this function, attach the selection."), ("Explain this function".into(), vec![Kind::Selection]));
-        assert_eq!(extract("review it attach the diff"), ("review it".into(), vec![Kind::Diff]));
-        assert_eq!(extract("Write a commit message, attach the staged changes"), ("Write a commit message".into(), vec![Kind::StagedDiff]));
-        assert_eq!(extract("attach a screenshot"), (String::new(), vec![Kind::Screenshot]));
+        assert_eq!(
+            extract("Explain this function, attach the selection."),
+            ("Explain this function".into(), vec![Kind::Selection])
+        );
+        assert_eq!(
+            extract("review it attach the diff"),
+            ("review it".into(), vec![Kind::Diff])
+        );
+        assert_eq!(
+            extract("Write a commit message, attach the staged changes"),
+            ("Write a commit message".into(), vec![Kind::StagedDiff])
+        );
+        assert_eq!(
+            extract("attach a screenshot"),
+            (String::new(), vec![Kind::Screenshot])
+        );
     }
 
     #[test]
     fn guarded_triggers_need_a_clause_break() {
-        assert_eq!(extract("The header is misaligned, look at this"), ("The header is misaligned".into(), vec![Kind::Screenshot]));
-        assert_eq!(extract("Look at this."), (String::new(), vec![Kind::Screenshot]));
-        assert_eq!(extract("I'll look at this"), ("I'll look at this".into(), vec![]));
-        assert_eq!(extract("I'm happy with the diff"), ("I'm happy with the diff".into(), vec![]));
-        assert_eq!(extract("fix the test, with the diff"), ("fix the test".into(), vec![Kind::Diff]));
+        assert_eq!(
+            extract("The header is misaligned, look at this"),
+            ("The header is misaligned".into(), vec![Kind::Screenshot])
+        );
+        assert_eq!(
+            extract("Look at this."),
+            (String::new(), vec![Kind::Screenshot])
+        );
+        assert_eq!(
+            extract("I'll look at this"),
+            ("I'll look at this".into(), vec![])
+        );
+        assert_eq!(
+            extract("I'm happy with the diff"),
+            ("I'm happy with the diff".into(), vec![])
+        );
+        assert_eq!(
+            extract("fix the test, with the diff"),
+            ("fix the test".into(), vec![Kind::Diff])
+        );
     }
 
     #[test]
@@ -341,19 +377,28 @@ mod tests {
     #[test]
     fn words_ending_in_a_trigger_dont_count() {
         assert_eq!(extract("reattach diff"), ("reattach diff".into(), vec![]));
-        assert_eq!(extract("nothing to attach"), ("nothing to attach".into(), vec![]));
+        assert_eq!(
+            extract("nothing to attach"),
+            ("nothing to attach".into(), vec![])
+        );
     }
 
     #[test]
     fn fences_use_a_language_and_outlast_backticks() {
-        assert_eq!(fence("see", "+a\n-b\n", "diff"), "see\n\n```diff\n+a\n-b\n```");
+        assert_eq!(
+            fence("see", "+a\n-b\n", "diff"),
+            "see\n\n```diff\n+a\n-b\n```"
+        );
         assert_eq!(fence("", "x ```` y", ""), "`````\nx ```` y\n`````");
     }
 
     #[test]
     fn long_diffs_are_cut_with_a_note() {
         let diff: String = (0..10).map(|i| format!("line {i}\n")).collect();
-        assert_eq!(cap_lines(&diff, 3), "line 0\nline 1\nline 2\n... (7 more lines not shown)");
+        assert_eq!(
+            cap_lines(&diff, 3),
+            "line 0\nline 1\nline 2\n... (7 more lines not shown)"
+        );
         assert_eq!(cap_lines("a\nb\n", 3), "a\nb");
     }
 
@@ -369,8 +414,14 @@ mod tests {
     #[test]
     fn screenshots_are_at_paths_for_terminal_agents() {
         let p = Path::new("/tmp/mouthpiece-screenshots/s.png");
-        assert_eq!(screenshot_reference("why", p, true), "why\n\n@/tmp/mouthpiece-screenshots/s.png");
-        assert_eq!(screenshot_reference("", p, false), "/tmp/mouthpiece-screenshots/s.png");
+        assert_eq!(
+            screenshot_reference("why", p, true),
+            "why\n\n@/tmp/mouthpiece-screenshots/s.png"
+        );
+        assert_eq!(
+            screenshot_reference("", p, false),
+            "/tmp/mouthpiece-screenshots/s.png"
+        );
     }
 
     #[test]
@@ -379,15 +430,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
-            assert!(Command::new("/usr/bin/git").arg("-C").arg(&dir).args(args).output().unwrap().status.success());
+            assert!(Command::new("/usr/bin/git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success());
         };
         git(&["init", "-q"]);
-        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
         std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
         git(&["add", "a.txt"]);
         assert!(read_diff(&dir, true).unwrap().unwrap().contains("+hello"));
         assert!(read_diff(&dir, false).unwrap().unwrap().contains("+hello"));
-        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "a"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "a",
+        ]);
         assert_eq!(read_diff(&dir, false).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }

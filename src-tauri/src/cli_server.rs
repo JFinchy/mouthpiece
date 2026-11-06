@@ -68,7 +68,10 @@ struct Status {
 
 /// Where the `mouthpiece` command is kept (Settings shows it).
 pub fn command_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("bin").join("mouthpiece"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("bin").join("mouthpiece"))
 }
 
 pub fn socket_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -83,7 +86,9 @@ pub fn start(app: &AppHandle) {
     };
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
-            crate::applog!("cli: another Mouthpiece is answering on the socket, not taking it over");
+            crate::applog!(
+                "cli: another Mouthpiece is answering on the socket, not taking it over"
+            );
             return;
         }
         let _ = std::fs::remove_file(&path);
@@ -149,7 +154,11 @@ fn respond(app: &AppHandle, req: Request) -> Value {
 
 fn status(app: &AppHandle) -> Status {
     use crate::capture::CaptureState;
-    let state = match app.state::<crate::recording::RecordingState>().capture.state() {
+    let state = match app
+        .state::<crate::recording::RecordingState>()
+        .capture
+        .state()
+    {
         CaptureState::Idle => "idle",
         CaptureState::Dictating { .. } => "dictating",
         CaptureState::Meeting { .. } => "meeting",
@@ -176,7 +185,10 @@ fn clean_prompt(prompt: Option<String>) -> Option<String> {
         return None;
     }
     Some(if flat.chars().count() > MAX_PROMPT_CHARS {
-        format!("{}…", flat.chars().take(MAX_PROMPT_CHARS - 1).collect::<String>())
+        format!(
+            "{}…",
+            flat.chars().take(MAX_PROMPT_CHARS - 1).collect::<String>()
+        )
     } else {
         flat
     })
@@ -184,7 +196,11 @@ fn clean_prompt(prompt: Option<String>) -> Option<String> {
 
 /// Records one dictation and returns its text. Refuses while anything else
 /// is recording, so it never hijacks a dictation the user started.
-fn listen(app: &AppHandle, prompt: Option<String>, timeout_s: Option<u64>) -> Result<String, String> {
+fn listen(
+    app: &AppHandle,
+    prompt: Option<String>,
+    timeout_s: Option<u64>,
+) -> Result<String, String> {
     use crate::capture::{CaptureState, Request, Trigger};
     let recording = app.state::<crate::recording::RecordingState>();
     let cli = app.state::<CliState>();
@@ -194,7 +210,10 @@ fn listen(app: &AppHandle, prompt: Option<String>, timeout_s: Option<u64>) -> Re
     let prompt = clean_prompt(prompt);
     let (tx, rx) = mpsc::channel();
     *cli.pending.lock().unwrap() = Some(Capture { tx });
-    crate::applog!("cli: listening for an answer (prompt {} chars)", prompt.as_deref().map_or(0, |p| p.chars().count()));
+    crate::applog!(
+        "cli: listening for an answer (prompt {} chars)",
+        prompt.as_deref().map_or(0, |p| p.chars().count())
+    );
     let _ = app.emit("agent-question", prompt.clone().unwrap_or_default());
     crate::recording::request_dictation(app, Request::StartDictation(Trigger::DeepLink));
     if !matches!(recording.capture.state(), CaptureState::Dictating { .. }) {
@@ -235,7 +254,10 @@ fn vocab_add(app: &AppHandle, terms: &[String]) -> Result<Vec<String>, String> {
     let mut added = Vec::new();
     for term in terms {
         let term = term.trim();
-        if term.is_empty() || term.chars().count() > MAX_TERM_CHARS || term.chars().any(char::is_control) {
+        if term.is_empty()
+            || term.chars().count() > MAX_TERM_CHARS
+            || term.chars().any(char::is_control)
+        {
             continue;
         }
         let exists = cfg
@@ -277,7 +299,10 @@ mod tests {
 
     #[test]
     fn prompts_are_flattened_and_capped() {
-        assert_eq!(clean_prompt(Some("  Which\nbranch?\t".into())).as_deref(), Some("Which branch?"));
+        assert_eq!(
+            clean_prompt(Some("  Which\nbranch?\t".into())).as_deref(),
+            Some("Which branch?")
+        );
         assert_eq!(clean_prompt(Some("   ".into())), None);
         let long = clean_prompt(Some("x".repeat(500))).unwrap();
         assert_eq!(long.chars().count(), MAX_PROMPT_CHARS);

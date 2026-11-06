@@ -31,9 +31,9 @@ fn orca_cli() -> Option<std::path::PathBuf> {
 /// Orca handles look like `term_<uuid>`; anything else is ignored.
 pub fn valid_orca_handle(handle: &str) -> bool {
     handle.len() <= 80
-        && handle
-            .strip_prefix("term_")
-            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        && handle.strip_prefix("term_").is_some_and(|rest| {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
 }
 
 /// Text typed into a terminal without Enter must not contain line breaks
@@ -70,8 +70,16 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<String, Strin
                 return if status.success() {
                     Ok(out)
                 } else {
-                    let msg = err.lines().chain(out.lines()).find(|l| !l.trim().is_empty());
-                    Err(msg.unwrap_or("it failed").trim().chars().take(160).collect())
+                    let msg = err
+                        .lines()
+                        .chain(out.lines())
+                        .find(|l| !l.trim().is_empty());
+                    Err(msg
+                        .unwrap_or("it failed")
+                        .trim()
+                        .chars()
+                        .take(160)
+                        .collect())
                 };
             }
             None if started.elapsed() > timeout => {
@@ -196,7 +204,9 @@ mod tests {
 
     #[test]
     fn orca_handles_are_checked() {
-        assert!(valid_orca_handle("term_db0a3dca-a75a-4ed8-903d-79ad005922b6"));
+        assert!(valid_orca_handle(
+            "term_db0a3dca-a75a-4ed8-903d-79ad005922b6"
+        ));
         assert!(!valid_orca_handle("term_"));
         assert!(!valid_orca_handle("term_abc; rm -rf"));
         assert!(!valid_orca_handle("/bin/sh"));
@@ -221,6 +231,9 @@ mod tests {
 
     #[test]
     fn unsubmitted_text_is_one_line() {
-        assert_eq!(single_line("fix it\nand\tthen\x1b[A go"), "fix it and then [A go");
+        assert_eq!(
+            single_line("fix it\nand\tthen\x1b[A go"),
+            "fix it and then [A go"
+        );
     }
 }

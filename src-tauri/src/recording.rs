@@ -713,9 +713,15 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
                 },
             );
             crate::sounds::play(app, crate::sounds::Cue::Done);
-            let _ = app.emit("transcript-copied", "Sent to the agent that asked".to_string());
+            let _ = app.emit(
+                "transcript-copied",
+                "Sent to the agent that asked".to_string(),
+            );
         } else {
-            let _ = app.emit("transcript-error", "The agent stopped waiting for an answer".to_string());
+            let _ = app.emit(
+                "transcript-error",
+                "The agent stopped waiting for an answer".to_string(),
+            );
             crate::sounds::play(app, crate::sounds::Cue::Error);
         }
         return;
@@ -931,8 +937,8 @@ fn append_attachments(
     let front = crate::app_detect::frontmost_bundle_and_pid_blocking(app);
     let front_pid = front.as_ref().map(|(_, pid)| *pid);
     let front_bundle = front.as_ref().map(|(b, _)| b.as_str());
-    let to_terminal = ctx.reply_target.is_some()
-        || front_bundle.is_some_and(crate::project::is_terminal);
+    let to_terminal =
+        ctx.reply_target.is_some() || front_bundle.is_some_and(crate::project::is_terminal);
     let mut note = None;
     for kind in kinds {
         match kind {
@@ -945,7 +951,11 @@ fn append_attachments(
             },
             Kind::Diff | Kind::StagedDiff => {
                 let staged = *kind == Kind::StagedDiff;
-                match ctx.project.as_ref().map(|p| att::read_diff(&p.root, staged)) {
+                match ctx
+                    .project
+                    .as_ref()
+                    .map(|p| att::read_diff(&p.root, staged))
+                {
                     Some(Ok(Some(diff))) => {
                         crate::applog!("attach: diff, {} lines", diff.lines().count());
                         text = att::fence(&text, &diff, "diff");

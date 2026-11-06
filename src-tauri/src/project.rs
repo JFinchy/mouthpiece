@@ -44,7 +44,9 @@ impl Project {
         trusted: &[crate::repo_config::Trusted],
     ) -> &[crate::corrections::Replacement] {
         match &self.repo {
-            Some(Ok(loaded)) if crate::repo_config::is_trusted(trusted, &self.root, &loaded.hash) => {
+            Some(Ok(loaded))
+                if crate::repo_config::is_trusted(trusted, &self.root, &loaded.hash) =>
+            {
                 &loaded.config.replacements
             }
             _ => &[],
@@ -1023,7 +1025,10 @@ pub struct RepoFileStatus {
     pub error: Option<String>,
 }
 
-fn repo_file_status(project: &Project, trusted: &[crate::repo_config::Trusted]) -> Option<RepoFileStatus> {
+fn repo_file_status(
+    project: &Project,
+    trusted: &[crate::repo_config::Trusted],
+) -> Option<RepoFileStatus> {
     let root = project.root.to_string_lossy().to_string();
     Some(match project.repo.as_ref()? {
         Ok(loaded) => RepoFileStatus {
@@ -1055,7 +1060,11 @@ pub fn get_project_status(app: tauri::AppHandle) -> Option<ProjectStatus> {
         .last_project
         .as_ref()
         .and_then(|p| repo_file_status(p, &trusted));
-    Some(ProjectStatus { name, names, repo_file })
+    Some(ProjectStatus {
+        name,
+        names,
+        repo_file,
+    })
 }
 
 /// Allows (or stops allowing) the replacements in a repo's
@@ -1076,10 +1085,16 @@ pub fn set_repo_config_trusted(
         if current.hash != hash {
             return Err("The file changed since it was shown. Look it over again.".to_string());
         }
-        cfg.trusted_repo_configs.push(crate::repo_config::Trusted { root: root.clone(), hash });
+        cfg.trusted_repo_configs.push(crate::repo_config::Trusted {
+            root: root.clone(),
+            hash,
+        });
     }
     crate::config::save(&app, &cfg)?;
-    crate::applog!("project: repo file replacements {}", if trusted { "allowed" } else { "turned off" });
+    crate::applog!(
+        "project: repo file replacements {}",
+        if trusted { "allowed" } else { "turned off" }
+    );
     Ok(())
 }
 
@@ -1097,16 +1112,25 @@ mod tests {
             root: PathBuf::from("/w/app"),
             repo: Some(Ok(Loaded {
                 config: RepoConfig {
-                    replacements: vec![crate::corrections::Replacement { from: "post gress".into(), to: "Postgres".into() }],
+                    replacements: vec![crate::corrections::Replacement {
+                        from: "post gress".into(),
+                        to: "Postgres".into(),
+                    }],
                     ..RepoConfig::default()
                 },
                 hash: "h1".into(),
             })),
         };
         assert!(project.trusted_replacements(&[]).is_empty());
-        let stale = [Trusted { root: "/w/app".into(), hash: "h0".into() }];
+        let stale = [Trusted {
+            root: "/w/app".into(),
+            hash: "h0".into(),
+        }];
         assert!(project.trusted_replacements(&stale).is_empty());
-        let ok = [Trusted { root: "/w/app".into(), hash: "h1".into() }];
+        let ok = [Trusted {
+            root: "/w/app".into(),
+            hash: "h1".into(),
+        }];
         assert_eq!(project.trusted_replacements(&ok)[0].to, "Postgres");
     }
 

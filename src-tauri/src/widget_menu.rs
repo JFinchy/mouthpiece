@@ -71,7 +71,9 @@ fn mic_items(app: &AppHandle) -> Result<Vec<Box<dyn IsMenuItem<Wry>>>, String> {
 fn agent_label(agent: &crate::agents::WaitingAgent, now_ms: u64) -> String {
     let what = match agent.kind {
         crate::agents::Kind::Done => "Finished".to_string(),
-        crate::agents::Kind::NeedsInput if agent.message.is_empty() => "Needs your input".to_string(),
+        crate::agents::Kind::NeedsInput if agent.message.is_empty() => {
+            "Needs your input".to_string()
+        }
         crate::agents::Kind::NeedsInput => agent.message.chars().take(50).collect(),
     };
     let place = match (&agent.orca_terminal, &agent.app_name) {
@@ -80,7 +82,11 @@ fn agent_label(agent: &crate::agents::WaitingAgent, now_ms: u64) -> String {
         (None, None) => agent.agent.clone(),
     };
     let minutes = now_ms.saturating_sub(agent.received_ms) / 60_000;
-    let age = if minutes < 1 { "just now".to_string() } else { format!("{minutes} min ago") };
+    let age = if minutes < 1 {
+        "just now".to_string()
+    } else {
+        format!("{minutes} min ago")
+    };
     format!("{} · {what} · {place} · {age}", agent.folder)
 }
 
@@ -96,18 +102,36 @@ fn agent_submenus(app: &AppHandle) -> Result<Vec<Submenu<Wry>>, String> {
         let sub = Submenu::new(app, agent_label(&agent, now), true).map_err(err)?;
         let id = &agent.session_id;
         sub.append(
-            &MenuItem::with_id(app, format!("{AGENT_REPLY}{id}"), "Reply by voice", true, None::<&str>)
-                .map_err(err)?,
+            &MenuItem::with_id(
+                app,
+                format!("{AGENT_REPLY}{id}"),
+                "Reply by voice",
+                true,
+                None::<&str>,
+            )
+            .map_err(err)?,
         )
         .map_err(err)?;
         sub.append(
-            &MenuItem::with_id(app, format!("{AGENT_FOCUS}{id}"), "Go to it", true, None::<&str>)
-                .map_err(err)?,
+            &MenuItem::with_id(
+                app,
+                format!("{AGENT_FOCUS}{id}"),
+                "Go to it",
+                true,
+                None::<&str>,
+            )
+            .map_err(err)?,
         )
         .map_err(err)?;
         sub.append(
-            &MenuItem::with_id(app, format!("{AGENT_DISMISS}{id}"), "Dismiss", true, None::<&str>)
-                .map_err(err)?,
+            &MenuItem::with_id(
+                app,
+                format!("{AGENT_DISMISS}{id}"),
+                "Dismiss",
+                true,
+                None::<&str>,
+            )
+            .map_err(err)?,
         )
         .map_err(err)?;
         out.push(sub);

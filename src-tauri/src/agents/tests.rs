@@ -520,7 +520,10 @@ fn hook_script_reads_codex_notify_from_its_last_argument() {
     let LinkEvent::Waiting(r) = link_of(&opened) else {
         panic!("expected waiting: {opened}")
     };
-    assert_eq!((r.session_id.as_str(), r.cwd.as_str()), ("t-9", "/work/api"));
+    assert_eq!(
+        (r.session_id.as_str(), r.cwd.as_str()),
+        ("t-9", "/work/api")
+    );
     assert_eq!((r.kind, r.agent.as_str()), (Kind::Done, "Codex"));
 }
 
@@ -532,15 +535,21 @@ fn hook_script_understands_gemini_events() {
     };
     assert_eq!((r.kind, r.agent.as_str()), (Kind::Done, "Gemini"));
 
-    let before = r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"BeforeAgent","prompt":"x"}"#;
-    assert!(run_hook("gemini-before", before, &[]).unwrap().contains("agent-resumed"));
+    let before =
+        r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"BeforeAgent","prompt":"x"}"#;
+    assert!(run_hook("gemini-before", before, &[])
+        .unwrap()
+        .contains("agent-resumed"));
 
     let note = r#"{"session_id":"g1","cwd":"/work/web","hook_event_name":"Notification","notification_type":"ToolPermission","message":"Allow shell?"}"#;
     let opened = run_hook("gemini-note", note, &[("MOUTHPIECE_AGENT", "gemini")]).unwrap();
     let LinkEvent::Waiting(r) = link_of(&opened) else {
         panic!("expected waiting")
     };
-    assert_eq!((r.kind, r.message.as_str(), r.agent.as_str()), (Kind::NeedsInput, "Allow shell?", "Gemini"));
+    assert_eq!(
+        (r.kind, r.message.as_str(), r.agent.as_str()),
+        (Kind::NeedsInput, "Allow shell?", "Gemini")
+    );
 }
 
 #[test]
@@ -549,13 +558,17 @@ fn hook_script_handles_a_bare_call_like_aider() {
     let LinkEvent::Waiting(r) = link_of(&opened) else {
         panic!("expected waiting")
     };
-    assert_eq!((r.kind, r.message.as_str(), r.agent.as_str()), (Kind::NeedsInput, "Waiting for you", "Aider"));
+    assert_eq!(
+        (r.kind, r.message.as_str(), r.agent.as_str()),
+        (Kind::NeedsInput, "Waiting for you", "Aider")
+    );
     assert!(r.session_id.starts_with("cwd:"));
 }
 
 #[test]
 fn setups_cover_every_agent_and_quote_the_path() {
-    let setups = hook_setups("/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook");
+    let setups =
+        hook_setups("/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook");
     let ids: Vec<&str> = setups.iter().map(|s| s.id).collect();
     assert_eq!(ids, ["claude", "codex", "gemini", "opencode", "aider"]);
     let get = |id: &str| setups.iter().find(|s| s.id == id).unwrap().snippet.clone();
@@ -574,4 +587,3 @@ fn setups_cover_every_agent_and_quote_the_path() {
     assert!(get("aider").contains(r#"notifications-command: "MOUTHPIECE_AGENT=aider '/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'""#));
     assert_eq!(toml_string(r#"a"b\c"#), r#""a\"b\\c""#);
 }
-

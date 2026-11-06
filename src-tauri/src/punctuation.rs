@@ -861,19 +861,36 @@ mod tests {
     #[test]
     fn code_symbols() {
         assert_eq!(
-            expand_punctuation("const add equals open paren a comma b close paren fat arrow a plus b"),
+            expand_punctuation(
+                "const add equals open paren a comma b close paren fat arrow a plus b"
+            ),
             "const add=(a, b) => a+b"
         );
-        assert_eq!(expand_punctuation("items open bracket 0 close bracket"), "items [0]");
-        assert_eq!(expand_punctuation("if x triple equals y double ampersand ok"), "if x === y && ok");
+        assert_eq!(
+            expand_punctuation("items open bracket 0 close bracket"),
+            "items [0]"
+        );
+        assert_eq!(
+            expand_punctuation("if x triple equals y double ampersand ok"),
+            "if x === y && ok"
+        );
         assert_eq!(expand_punctuation("std double colon fs"), "std::fs");
-        assert_eq!(expand_punctuation("fn main open curly brace close curly brace"), "fn main {}");
+        assert_eq!(
+            expand_punctuation("fn main open curly brace close curly brace"),
+            "fn main {}"
+        );
         assert_eq!(expand_punctuation("fn f thin arrow u32"), "fn f -> u32");
     }
 
     #[test]
     fn prose_with_symbol_words_is_left_alone() {
-        assert_eq!(expand_punctuation("the arrow points at the dot"), "the arrow points at the dot");
-        assert_eq!(expand_punctuation("pipe the output to grep"), "pipe the output to grep");
+        assert_eq!(
+            expand_punctuation("the arrow points at the dot"),
+            "the arrow points at the dot"
+        );
+        assert_eq!(
+            expand_punctuation("pipe the output to grep"),
+            "pipe the output to grep"
+        );
     }
 }

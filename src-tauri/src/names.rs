@@ -55,7 +55,9 @@ fn is_path_token(word: &str) -> bool {
 
 /// A line number, with any punctuation after it.
 fn number_token(word: &str) -> Option<(&str, &str)> {
-    let end = word.find(|c: char| !c.is_ascii_digit()).unwrap_or(word.len());
+    let end = word
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(word.len());
     let (digits, rest) = word.split_at(end);
     (!digits.is_empty() && rest.chars().all(|c| ",.;:!?)".contains(c))).then_some((digits, rest))
 }
@@ -90,14 +92,22 @@ pub fn line_refs(text: &str) -> String {
         if is_word(words[i], &["line", "lines"]) {
             if let Some((range, punct, j)) = range_at(i + 1) {
                 // "of the paste file" left "of the @path".
-                let at = if words.get(j + 1).is_some_and(|w| is_word(w, &["the"])) { j + 2 } else { j + 1 };
+                let at = if words.get(j + 1).is_some_and(|w| is_word(w, &["the"])) {
+                    j + 2
+                } else {
+                    j + 1
+                };
                 if punct.is_empty()
                     && words.get(j).is_some_and(|w| is_word(w, &["of", "in"]))
                     && words.get(at).is_some_and(|w| is_path_token(w))
                 {
                     let path = words[at];
                     let core_len = path.trim_end_matches(|c: char| ",.;:!?)".contains(c)).len();
-                    out.push(format!("{}:{range}{}", &path[..core_len], &path[core_len..]));
+                    out.push(format!(
+                        "{}:{range}{}",
+                        &path[..core_len],
+                        &path[core_len..]
+                    ));
                     i = at + 1;
                     continue;
                 }
@@ -741,7 +751,10 @@ mod tests {
 
     #[test]
     fn line_numbers_join_the_file_reference() {
-        assert_eq!(run("look at line 42 of the paste file"), "look at @src-tauri/src/paste.rs:42");
+        assert_eq!(
+            run("look at line 42 of the paste file"),
+            "look at @src-tauri/src/paste.rs:42"
+        );
         assert_eq!(
             run("check the paste file, line 7, it panics"),
             "check the @src-tauri/src/paste.rs:7, it panics"
@@ -750,7 +763,10 @@ mod tests {
             run("lines 10 to 20 in the paste file."),
             "@src-tauri/src/paste.rs:10-20."
         );
-        assert_eq!(run("the paste file at line 3"), "the @src-tauri/src/paste.rs:3");
+        assert_eq!(
+            run("the paste file at line 3"),
+            "the @src-tauri/src/paste.rs:3"
+        );
     }
 
     #[test]

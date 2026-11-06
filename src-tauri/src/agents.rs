@@ -870,7 +870,10 @@ pub fn reply_to(app: &AppHandle, session_id: &str) {
     }
     let state = app.state::<AgentState>();
     let Some(target) = state.queue.lock().unwrap().get(session_id, now_ms()) else {
-        let _ = app.emit("transcript-error", "That agent is no longer waiting.".to_string());
+        let _ = app.emit(
+            "transcript-error",
+            "That agent is no longer waiting.".to_string(),
+        );
         return;
     };
     crate::applog!("agents: recording a reply for {} (picked)", target.folder);
@@ -946,7 +949,10 @@ pub fn deliver_reply(
                     notice: if press_enter {
                         format!("Sent to {} in Orca", target.folder)
                     } else {
-                        format!("Typed into {} in Orca. Press Return there to send.", target.folder)
+                        format!(
+                            "Typed into {} in Orca. Press Return there to send.",
+                            target.folder
+                        )
                     },
                     copied: false,
                 };
@@ -977,7 +983,9 @@ pub fn deliver_reply(
             match targets::select_tab(bundle, tty) {
                 Ok(()) => true,
                 Err(why) => {
-                    crate::applog!("agents: couldn't select the tab by tty ({why}), using window titles");
+                    crate::applog!(
+                        "agents: couldn't select the tab by tty ({why}), using window titles"
+                    );
                     false
                 }
             }

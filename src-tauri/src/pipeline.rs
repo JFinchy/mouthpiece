@@ -23,7 +23,12 @@ pub trait Refiner {
     fn boilerplate(&self, request: &str, model: &str) -> Result<String, String>;
     /// A commit message from the staged changes in `root` (see
     /// `commit_message.rs`).
-    fn commit_message(&self, _notes: &str, _root: Option<&std::path::Path>, _model: &str) -> Result<String, String> {
+    fn commit_message(
+        &self,
+        _notes: &str,
+        _root: Option<&std::path::Path>,
+        _model: &str,
+    ) -> Result<String, String> {
         Err("commit messages aren't available here".to_string())
     }
     /// Reorganises a long dictation (see `structure.rs`).
@@ -75,7 +80,12 @@ impl Refiner for OllamaRefiner<'_> {
         crate::llm::structure_prompt(text, model)
     }
 
-    fn commit_message(&self, notes: &str, root: Option<&std::path::Path>, model: &str) -> Result<String, String> {
+    fn commit_message(
+        &self,
+        notes: &str,
+        root: Option<&std::path::Path>,
+        model: &str,
+    ) -> Result<String, String> {
         let root = root.ok_or("no project found")?;
         let diff = crate::attachments::read_diff(root, true)?.ok_or("nothing is staged")?;
         crate::llm::commit_message(notes, &diff, model)
@@ -84,6 +94,15 @@ impl Refiner for OllamaRefiner<'_> {
     fn skipped(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Relaxed)
     }
+}
+
+/// What `structure_if_long` did.
+struct Structuring {
+    text: String,
+    /// Time spent on the LLM, if it was asked.
+    llm_ms: Option<u64>,
+    /// The text before structuring, if the structured version was used.
+    original: Option<String>,
 }
 
 /// "Structure long prompts": a long dictation is reorganised by the LLM,
@@ -95,12 +114,16 @@ fn structure_if_long(
     settings: &crate::modes::ResolvedSettings,
     refiner: &dyn Refiner,
     on_refining: &mut dyn FnMut(&str),
-    unrefined: &mut Option<String>,
-    llm_ms: &mut Option<u64>,
-    features_used: &mut Vec<String>,
-) -> String {
-    if !settings.structure_long_prompts || !crate::structure::long_enough(&text) || refiner.skipped() {
-        return text;
+) -> Structuring {
+    if !settings.structure_long_prompts
+        || !crate::structure::long_enough(&text)
+        || refiner.skipped()
+    {
+        return Structuring {
+            text,
+            llm_ms: None,
+            original: None,
+        };
     }
     let model = match &settings.llm_refinement {
         crate::modes::LlmRefinement::Model(id) => id.clone(),
@@ -109,25 +132,33 @@ fn structure_if_long(
     on_refining(&model);
     let started = Instant::now();
     let result = refiner.structure(&text, &model);
-    *llm_ms = Some(llm_ms.unwrap_or(0) + started.elapsed().as_millis() as u64);
+    let llm_ms = Some(started.elapsed().as_millis() as u64);
+    let unchanged = |text| Structuring {
+        text,
+        llm_ms,
+        original: None,
+    };
     match result {
         Ok(structured) => match crate::structure::check(&text, &structured) {
             Ok(()) => {
-                crate::applog!("structure: {model} structured {} words", text.split_whitespace().count());
-                features_used.push("structured".to_string());
-                if unrefined.is_none() {
-                    *unrefined = Some(text);
+                crate::applog!(
+                    "structure: {model} structured {} words",
+                    text.split_whitespace().count()
+                );
+                Structuring {
+                    text: structured,
+                    llm_ms,
+                    original: Some(text),
                 }
-                structured
             }
             Err(why) => {
                 crate::applog!("structure: rejected {model}'s version ({why}), pasting as spoken");
-                text
+                unchanged(text)
             }
         },
         Err(err) => {
             crate::applog!("structure: {model} failed ({err}), pasting as spoken");
-            text
+            unchanged(text)
         }
     }
 }
@@ -331,7 +362,10 @@ pub fn format_in_project(
     let (text, mut attachments) = crate::attachments::extract(&text);
     let (text, should_attach_error) = crate::error_context::try_extract_trigger(&text);
     let (text, earlier) = crate::attachments::extract(&text);
-    let earlier: Vec<_> = earlier.into_iter().filter(|k| !attachments.contains(k)).collect();
+    let earlier: Vec<_> = earlier
+        .into_iter()
+        .filter(|k| !attachments.contains(k))
+        .collect();
     attachments.splice(0..0, earlier);
     if should_attach_error {
         features_used.push("attach_error".to_string());
@@ -410,7 +444,8 @@ pub fn format_in_project(
         } else if let Some(notes) = crate::commit_message::try_extract(&text) {
             on_refining(&cfg.llm_model);
             let started = Instant::now();
-            let result = refiner.commit_message(&notes, project.map(|p| p.root.as_path()), &cfg.llm_model);
+            let result =
+                refiner.commit_message(&notes, project.map(|p| p.root.as_path()), &cfg.llm_model);
             llm_ms = Some(started.elapsed().as_millis() as u64);
             match result {
                 Ok(message) => {
@@ -548,16 +583,15 @@ pub fn format_in_project(
             } else {
                 formatted
             };
-            let formatted = structure_if_long(
-                formatted,
-                cfg,
-                settings,
-                refiner,
-                on_refining,
-                &mut unrefined,
-                &mut llm_ms,
-                &mut features_used,
-            );
+            let structuring = structure_if_long(formatted, cfg, settings, refiner, on_refining);
+            if let Some(ms) = structuring.llm_ms {
+                llm_ms = Some(llm_ms.unwrap_or(0) + ms);
+            }
+            if let Some(original) = structuring.original {
+                features_used.push("structured".to_string());
+                unrefined.get_or_insert(original);
+            }
+            let formatted = structuring.text;
             (formatted, format!("{:?}", settings.mode))
         };
 
@@ -707,7 +741,12 @@ mod golden {
         fn structure(&self, _: &str, _: &str) -> Result<String, String> {
             self.answer()
         }
-        fn commit_message(&self, _: &str, _: Option<&std::path::Path>, _: &str) -> Result<String, String> {
+        fn commit_message(
+            &self,
+            _: &str,
+            _: Option<&std::path::Path>,
+            _: &str,
+        ) -> Result<String, String> {
             self.answer()
         }
     }
@@ -805,7 +844,10 @@ mod golden {
                     .map(|k| format!("{k:?}").to_lowercase())
                     .collect();
                 if &got != expected {
-                    failures.push(format!("{}: attachments {got:?}, expected {expected:?}", case.name));
+                    failures.push(format!(
+                        "{}: attachments {got:?}, expected {expected:?}",
+                        case.name
+                    ));
                 }
             }
             if let Some(attach) = case.expect_attach_error {

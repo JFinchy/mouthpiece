@@ -66,17 +66,23 @@ fn request(req: &Value, wait: Duration) -> Result<Value, String> {
 fn request_at(path: &std::path::Path, req: &Value, wait: Duration) -> Result<Value, String> {
     let mut stream = UnixStream::connect(path)
         .map_err(|_| "Mouthpiece isn't running. Open it and try again.".to_string())?;
-    stream.set_read_timeout(Some(wait)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(wait))
+        .map_err(|e| e.to_string())?;
     writeln!(stream, "{req}").map_err(|e| e.to_string())?;
     let mut line = String::new();
     BufReader::new(&stream)
         .read_line(&mut line)
         .map_err(|e| format!("no reply from Mouthpiece: {e}"))?;
-    let reply: Value = serde_json::from_str(&line).map_err(|e| format!("bad reply from Mouthpiece: {e}"))?;
+    let reply: Value =
+        serde_json::from_str(&line).map_err(|e| format!("bad reply from Mouthpiece: {e}"))?;
     if reply["ok"].as_bool() == Some(true) {
         Ok(reply)
     } else {
-        Err(reply["error"].as_str().unwrap_or("Mouthpiece refused").to_string())
+        Err(reply["error"]
+            .as_str()
+            .unwrap_or("Mouthpiece refused")
+            .to_string())
     }
 }
 
@@ -91,10 +97,17 @@ fn listen(prompt: Option<&str>, timeout_s: Option<u64>) -> Result<String, String
 }
 
 fn vocab_add(terms: &[String]) -> Result<Vec<String>, String> {
-    let reply = request(&json!({"cmd": "vocab_add", "terms": terms}), Duration::from_secs(10))?;
+    let reply = request(
+        &json!({"cmd": "vocab_add", "terms": terms}),
+        Duration::from_secs(10),
+    )?;
     Ok(reply["added"]
         .as_array()
-        .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default())
 }
 
@@ -102,14 +115,20 @@ fn run(args: &[String]) -> i32 {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     let result: Result<(), String> = match words.as_slice() {
         ["listen", rest @ ..] => match parse_listen(rest) {
-            Ok((prompt, timeout)) => listen(prompt.as_deref(), timeout).map(|text| println!("{text}")),
+            Ok((prompt, timeout)) => {
+                listen(prompt.as_deref(), timeout).map(|text| println!("{text}"))
+            }
             Err(err) => {
                 eprintln!("{err}\n\n{USAGE}");
                 return 2;
             }
         },
-        ["status"] => request(&json!({"cmd": "status"}), Duration::from_secs(10))
-            .map(|r| println!("{}", serde_json::to_string_pretty(&r["status"]).unwrap_or_default())),
+        ["status"] => request(&json!({"cmd": "status"}), Duration::from_secs(10)).map(|r| {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&r["status"]).unwrap_or_default()
+            )
+        }),
         ["vocab", "add", terms @ ..] if !terms.is_empty() => {
             let terms: Vec<String> = terms.iter().map(|t| t.to_string()).collect();
             vocab_add(&terms).map(|added| {
@@ -120,13 +139,15 @@ fn run(args: &[String]) -> i32 {
                 }
             })
         }
-        ["vocab", "list"] => request(&json!({"cmd": "vocab_list"}), Duration::from_secs(10)).map(|r| {
-            for term in r["terms"].as_array().into_iter().flatten() {
-                if let Some(t) = term.as_str() {
-                    println!("{t}");
+        ["vocab", "list"] => {
+            request(&json!({"cmd": "vocab_list"}), Duration::from_secs(10)).map(|r| {
+                for term in r["terms"].as_array().into_iter().flatten() {
+                    if let Some(t) = term.as_str() {
+                        println!("{t}");
+                    }
                 }
-            }
-        }),
+            })
+        }
         ["mcp"] => {
             mcp_serve(std::io::stdin().lock(), std::io::stdout().lock());
             Ok(())
@@ -157,7 +178,10 @@ fn parse_listen(args: &[&str]) -> Result<(Option<String>, Option<u64>), String> 
             "--prompt" | "-p" => prompt = Some(it.next().ok_or("--prompt needs text")?.to_string()),
             "--timeout" | "-t" => {
                 let v = it.next().ok_or("--timeout needs a number of seconds")?;
-                timeout = Some(v.parse().map_err(|_| format!("--timeout: {v:?} isn't a number"))?);
+                timeout = Some(
+                    v.parse()
+                        .map_err(|_| format!("--timeout: {v:?} isn't a number"))?,
+                );
             }
             other => return Err(format!("unknown option {other:?}")),
         }
@@ -172,9 +196,9 @@ fn tools() -> Value {
         {
             "name": "ask_user",
             "description": "Ask the user a question and get their spoken answer, transcribed on their Mac by Mouthpiece. \
-The question appears in Mouthpiece's widget; the user answers out loud and stops the recording with their dictation \
-shortcut. Use it when you need a decision or detail and the user may be away from the keyboard. Blocks until they \
-answer, delete the recording, or the timeout passes.",
+    The question appears in Mouthpiece's widget; the user answers out loud and stops the recording with their dictation \
+    shortcut. Use it when you need a decision or detail and the user may be away from the keyboard. Blocks until they \
+    answer, delete the recording, or the timeout passes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -187,7 +211,7 @@ answer, delete the recording, or the timeout passes.",
         {
             "name": "add_vocabulary",
             "description": "Teach Mouthpiece's speech recognition words it should know: project names, libraries, \
-acronyms, people. Useful after you introduce a new name the user will say out loud.",
+    acronyms, people. Useful after you introduce a new name the user will say out loud.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -228,7 +252,9 @@ fn call_tool(name: &str, args: &Value) -> Value {
                 .filter_map(|t| t.as_str().map(str::to_string))
                 .collect();
             match vocab_add(&terms) {
-                Ok(added) if added.is_empty() => text_result("All of those were already in the vocabulary.".into(), false),
+                Ok(added) if added.is_empty() => {
+                    text_result("All of those were already in the vocabulary.".into(), false)
+                }
                 Ok(added) => text_result(format!("Added: {}", added.join(", ")), false),
                 Err(err) => text_result(err, true),
             }
@@ -251,7 +277,7 @@ pub fn mcp_handle(msg: &Value) -> Option<Value> {
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "mouthpiece", "version": env!("CARGO_PKG_VERSION")},
             "instructions": "Mouthpiece is the user's local dictation app. Use ask_user to ask the user something out loud \
-when they may be away from the keyboard, and add_vocabulary to teach it names the user will say."
+        when they may be away from the keyboard, and add_vocabulary to teach it names the user will say."
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),
@@ -278,10 +304,15 @@ pub fn mcp_serve(input: impl BufRead, mut output: impl Write) {
         }
         let reply = match serde_json::from_str::<Value>(&line) {
             Ok(msg) => mcp_handle(&msg),
-            Err(err) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": err.to_string()}})),
+            Err(err) => Some(
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": err.to_string()}}),
+            ),
         };
         if let Some(reply) = reply {
-            if writeln!(output, "{reply}").and_then(|()| output.flush()).is_err() {
+            if writeln!(output, "{reply}")
+                .and_then(|()| output.flush())
+                .is_err()
+            {
                 break;
             }
         }
@@ -307,7 +338,8 @@ pub fn install_wrapper(data_dir: &std::path::Path) -> Result<std::path::PathBuf,
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&path, &script).map_err(|e| e.to_string())?;
     }
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| e.to_string())?;
     Ok(path)
 }
 
@@ -344,7 +376,9 @@ mod tests {
 
     #[test]
     fn mcp_ignores_notifications_and_rejects_unknown_methods() {
-        assert!(mcp_handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+        assert!(
+            mcp_handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none()
+        );
         let err = mcp_handle(&json!({"jsonrpc":"2.0","id":3,"method":"resources/list"})).unwrap();
         assert_eq!(err["error"]["code"], -32601);
     }
@@ -373,7 +407,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path).unwrap();
         let server = std::thread::spawn(move || {
-            for reply in [r#"{"ok":true,"text":"use main"}"#, r#"{"ok":false,"error":"busy"}"#] {
+            for reply in [
+                r#"{"ok":true,"text":"use main"}"#,
+                r#"{"ok":false,"error":"busy"}"#,
+            ] {
                 let (stream, _) = listener.accept().unwrap();
                 let mut line = String::new();
                 BufReader::new(&stream).read_line(&mut line).unwrap();
@@ -387,12 +424,18 @@ mod tests {
         assert_eq!(err, "busy");
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(request_at(&path, &json!({}), Duration::from_secs(1)).unwrap_err().contains("isn't running"));
+        assert!(request_at(&path, &json!({}), Duration::from_secs(1))
+            .unwrap_err()
+            .contains("isn't running"));
     }
 
     #[test]
     fn wrapper_quotes_the_path() {
-        let script = wrapper_script(std::path::Path::new("/Applications/It's Mouthpiece.app/Contents/MacOS/tauri-app"));
-        assert!(script.contains(r"exec '/Applications/It'\''s Mouthpiece.app/Contents/MacOS/tauri-app' --mouthpiece-cli"));
+        let script = wrapper_script(std::path::Path::new(
+            "/Applications/It's Mouthpiece.app/Contents/MacOS/tauri-app",
+        ));
+        assert!(script.contains(
+            r"exec '/Applications/It'\''s Mouthpiece.app/Contents/MacOS/tauri-app' --mouthpiece-cli"
+        ));
     }
 }

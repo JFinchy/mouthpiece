@@ -69,27 +69,39 @@ pub fn parse(bytes: &[u8]) -> Result<RepoConfig, String> {
         ));
     }
     if config.vocabulary.len() > MAX_TERMS {
-        return Err(format!("{FILE_NAME} has more than {MAX_TERMS} vocabulary terms"));
+        return Err(format!(
+            "{FILE_NAME} has more than {MAX_TERMS} vocabulary terms"
+        ));
     }
     if config.replacements.len() > MAX_REPLACEMENTS {
-        return Err(format!("{FILE_NAME} has more than {MAX_REPLACEMENTS} replacements"));
+        return Err(format!(
+            "{FILE_NAME} has more than {MAX_REPLACEMENTS} replacements"
+        ));
     }
     if let Some(bad) = config.vocabulary.iter().find(|t| !ok_text(t)) {
-        return Err(format!("{FILE_NAME}: vocabulary term {bad:?} is empty, too long or has control characters"));
+        return Err(format!(
+            "{FILE_NAME}: vocabulary term {bad:?} is empty, too long or has control characters"
+        ));
     }
     if let Some(bad) = config
         .replacements
         .iter()
         .find(|r| !ok_text(&r.from) || !ok_text(&r.to))
     {
-        return Err(format!("{FILE_NAME}: replacement {:?} -> {:?} is empty, too long or has control characters", bad.from, bad.to));
+        return Err(format!(
+            "{FILE_NAME}: replacement {:?} -> {:?} is empty, too long or has control characters",
+            bad.from, bad.to
+        ));
     }
     Ok(config)
 }
 
 pub fn hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The repo's file: `None` when there isn't one.
@@ -144,7 +156,10 @@ mod tests {
     fn rejects_bad_files() {
         assert!(parse(b"not json").is_err());
         assert!(parse(br#"{"version":2}"#).unwrap_err().contains("newer"));
-        assert!(parse(br#"{"snippets":[]}"#).is_err(), "unknown keys are refused, not ignored");
+        assert!(
+            parse(br#"{"snippets":[]}"#).is_err(),
+            "unknown keys are refused, not ignored"
+        );
         assert!(parse(br#"{"replacements":[{"from":"deploy","to":"x\nrm -rf ~"}]}"#).is_err());
         assert!(parse(br#"{"vocabulary":[""]}"#).is_err());
         let many = format!(r#"{{"vocabulary":[{}]}}"#, vec!["\"a\""; 201].join(","));
@@ -153,7 +168,10 @@ mod tests {
 
     #[test]
     fn trust_is_per_root_and_hash() {
-        let trusted = [Trusted { root: "/w/app".into(), hash: "abc".into() }];
+        let trusted = [Trusted {
+            root: "/w/app".into(),
+            hash: "abc".into(),
+        }];
         assert!(is_trusted(&trusted, Path::new("/w/app"), "abc"));
         assert!(!is_trusted(&trusted, Path::new("/w/app"), "abd"));
         assert!(!is_trusted(&trusted, Path::new("/w/other"), "abc"));
@@ -162,7 +180,10 @@ mod tests {
     #[test]
     fn repo_terms_come_first_without_repeats() {
         assert_eq!(
-            merge_terms(&["Tauri".into(), "paste_text".into()], vec!["paste_text".into(), "main".into()]),
+            merge_terms(
+                &["Tauri".into(), "paste_text".into()],
+                vec!["paste_text".into(), "main".into()]
+            ),
             ["Tauri", "paste_text", "main"]
         );
     }

@@ -160,7 +160,9 @@ pub fn find(text: &str, folders: &[String]) -> Option<Addressed> {
             _ => continue,
         };
         let rest = text[tok.end..]
-            .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | ';' | '—' | '-'))
+            .trim_start_matches(|c: char| {
+                c.is_whitespace() || matches!(c, ',' | ':' | ';' | '—' | '-')
+            })
             .trim();
         // "tell api to run the tests" -> "run the tests".
         let rest = if !needs_break {
@@ -206,7 +208,10 @@ mod tests {
 
     #[test]
     fn splits_folder_names_into_words() {
-        assert_eq!(folder_words("dev-whisper_escPause2"), ["dev", "whisper", "esc", "pause", "2"]);
+        assert_eq!(
+            folder_words("dev-whisper_escPause2"),
+            ["dev", "whisper", "esc", "pause", "2"]
+        );
         assert_eq!(folder_words("API"), ["api"]);
     }
 
@@ -214,14 +219,25 @@ mod tests {
     fn to_with_a_comma_addresses_by_trailing_words() {
         let f = folders(&["dev-whisper", "dev-whisper-esc-pause"]);
         let hit = find("To esc pause, rerun the tests.", &f).unwrap();
-        assert_eq!(hit, Addressed { index: 1, rest: "Rerun the tests.".into() });
+        assert_eq!(
+            hit,
+            Addressed {
+                index: 1,
+                rest: "Rerun the tests.".into()
+            }
+        );
     }
 
     #[test]
     fn longest_name_wins() {
         let f = folders(&["dev-whisper", "dev-whisper-esc-pause"]);
         assert_eq!(find("To dev whisper, commit it", &f).unwrap().index, 0);
-        assert_eq!(find("To dev whisper esc pause: commit it", &f).unwrap().index, 1);
+        assert_eq!(
+            find("To dev whisper esc pause: commit it", &f)
+                .unwrap()
+                .index,
+            1
+        );
     }
 
     #[test]
@@ -235,7 +251,13 @@ mod tests {
     fn tell_needs_no_comma_and_drops_a_following_to() {
         let f = folders(&["api", "web"]);
         let hit = find("Tell api to run the migrations", &f).unwrap();
-        assert_eq!(hit, Addressed { index: 0, rest: "Run the migrations".into() });
+        assert_eq!(
+            hit,
+            Addressed {
+                index: 0,
+                rest: "Run the migrations".into()
+            }
+        );
     }
 
     #[test]

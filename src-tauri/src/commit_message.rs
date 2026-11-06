@@ -58,8 +58,14 @@ mod tests {
 
     #[test]
     fn extracts_notes_after_the_lead() {
-        assert_eq!(try_extract("Commit message: fixed the race in paste.").as_deref(), Some("fixed the race in paste"));
-        assert_eq!(try_extract("commit message for the new hook script").as_deref(), Some("the new hook script"));
+        assert_eq!(
+            try_extract("Commit message: fixed the race in paste.").as_deref(),
+            Some("fixed the race in paste")
+        );
+        assert_eq!(
+            try_extract("commit message for the new hook script").as_deref(),
+            Some("the new hook script")
+        );
         assert_eq!(try_extract("Write a commit message.").as_deref(), Some(""));
         assert_eq!(try_extract("Commit message").as_deref(), Some(""));
     }
@@ -73,6 +79,9 @@ mod tests {
 
     #[test]
     fn cleans_model_wrapping() {
-        assert_eq!(clean("```\nCommit message: Fix paste race\n```"), "Fix paste race");
+        assert_eq!(
+            clean("```\nCommit message: Fix paste race\n```"),
+            "Fix paste race"
+        );
     }
 }
