@@ -215,3 +215,17 @@ test.describe("settings", () => {
     await expect.poll(() => calls(page, "set_dictation_sounds")).toEqual([{ enabled: true }]);
   });
 });
+
+test("a mode can structure long prompts", async ({ page, consoleErrors: _ }) => {
+  await open(page, "settings");
+  await page.locator(".dw-sidebar").getByRole("button", { name: "Modes", exact: true }).click();
+  const toggle = page.getByLabel("Structure long prompts in Terminal");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect
+    .poll(async () => {
+      const saved = (await calls(page, "set_modes")).at(-1) as { modes: { name: string; structure_long_prompts?: boolean }[] };
+      return saved?.modes.find((m) => m.name === "Terminal")?.structure_long_prompts;
+    })
+    .toBe(true);
+});

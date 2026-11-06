@@ -21,6 +21,10 @@ pub trait Refiner {
         vocabulary: &[String],
     ) -> Result<String, String>;
     fn boilerplate(&self, request: &str, model: &str) -> Result<String, String>;
+    /// Reorganises a long dictation (see `structure.rs`).
+    fn structure(&self, _text: &str, _model: &str) -> Result<String, String> {
+        Err("structuring isn't available here".to_string())
+    }
     /// The user asked to paste as-is before refinement started.
     fn skipped(&self) -> bool {
         false
@@ -62,8 +66,58 @@ impl Refiner for OllamaRefiner<'_> {
         crate::llm::generate_boilerplate(request, model)
     }
 
+    fn structure(&self, text: &str, model: &str) -> Result<String, String> {
+        crate::llm::structure_prompt(text, model)
+    }
+
     fn skipped(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// "Structure long prompts": a long dictation is reorganised by the LLM,
+/// and the result is used only if `structure::check` finds nothing lost or
+/// added.
+fn structure_if_long(
+    text: String,
+    cfg: &AppConfig,
+    settings: &crate::modes::ResolvedSettings,
+    refiner: &dyn Refiner,
+    on_refining: &mut dyn FnMut(&str),
+    unrefined: &mut Option<String>,
+    llm_ms: &mut Option<u64>,
+    features_used: &mut Vec<String>,
+) -> String {
+    if !settings.structure_long_prompts || !crate::structure::long_enough(&text) || refiner.skipped() {
+        return text;
+    }
+    let model = match &settings.llm_refinement {
+        crate::modes::LlmRefinement::Model(id) => id.clone(),
+        _ => cfg.llm_model.clone(),
+    };
+    on_refining(&model);
+    let started = Instant::now();
+    let result = refiner.structure(&text, &model);
+    *llm_ms = Some(llm_ms.unwrap_or(0) + started.elapsed().as_millis() as u64);
+    match result {
+        Ok(structured) => match crate::structure::check(&text, &structured) {
+            Ok(()) => {
+                crate::applog!("structure: {model} structured {} words", text.split_whitespace().count());
+                features_used.push("structured".to_string());
+                if unrefined.is_none() {
+                    *unrefined = Some(text);
+                }
+                structured
+            }
+            Err(why) => {
+                crate::applog!("structure: rejected {model}'s version ({why}), pasting as spoken");
+                text
+            }
+        },
+        Err(err) => {
+            crate::applog!("structure: {model} failed ({err}), pasting as spoken");
+            text
+        }
     }
 }
 
@@ -456,6 +510,16 @@ pub fn format_in_project(
             } else {
                 formatted
             };
+            let formatted = structure_if_long(
+                formatted,
+                cfg,
+                settings,
+                refiner,
+                on_refining,
+                &mut unrefined,
+                &mut llm_ms,
+                &mut features_used,
+            );
             (formatted, format!("{:?}", settings.mode))
         };
 
@@ -494,6 +558,9 @@ mod golden {
         /// LLM returns rather than whether it runs.
         #[serde(default)]
         always_refine: bool,
+        /// Turns on "Structure long prompts" for the case's mode.
+        #[serde(default)]
+        structure: bool,
         llm: Option<ScriptedLlm>,
         expect: Option<String>,
         expect_prefix: Option<String>,
@@ -598,6 +665,9 @@ mod golden {
         fn boilerplate(&self, _: &str, _: &str) -> Result<String, String> {
             self.answer()
         }
+        fn structure(&self, _: &str, _: &str) -> Result<String, String> {
+            self.answer()
+        }
     }
 
     fn behavior(name: &str) -> Behavior {
@@ -639,6 +709,7 @@ mod golden {
                     LlmRefinement::Off
                 },
                 custom_instructions: None,
+                structure_long_prompts: case.structure,
             };
             let refiner = FakeRefiner {
                 script: case.llm.clone(),
@@ -796,6 +867,7 @@ mod golden {
             stt_model: None,
             llm_refinement: LlmRefinement::Off,
             custom_instructions: None,
+            structure_long_prompts: false,
         };
         let refiner = FakeRefiner {
             script: Some(ScriptedLlm::Returns("Ship it.".into())),

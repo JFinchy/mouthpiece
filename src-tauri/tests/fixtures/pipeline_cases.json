@@ -554,5 +554,38 @@
     "expect": "ship it",
     "expect_refined": false,
     "expect_llm_called": false
+  },
+  {
+    "name": "a long ramble is structured when the mode asks for it",
+    "input": "Okay so I want you to add rate limiting to the upload endpoint in @src/api/upload.ts, basically right now people can hammer it and the server falls over. Use the existing redisClient we already have, don't pull in a new library. The limit should be 20 requests per minute per user, and anonymous users should get 5. When someone goes over, return a 429 with a Retry-After header. Oh and make sure the admin accounts skip the limit entirely. Write tests for it in the upload spec file, and it's done when the existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "expect_llm_called": true
+  },
+  {
+    "name": "a structured version that drops a requirement is not used",
+    "input": "Okay so I want you to add rate limiting to the upload endpoint in @src/api/upload.ts, basically right now people can hammer it and the server falls over. Use the existing redisClient we already have, don't pull in a new library. The limit should be 20 requests per minute per user, and anonymous users should get 5. When someone goes over, return a 429 with a Retry-After header. Oh and make sure the admin accounts skip the limit entirely. Write tests for it in the upload spec file, and it's done when the existing tests still pass and the new ones cover the anonymous case and the admin case.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect_prefix": "Okay so I want you to add rate limiting",
+    "expect_llm_called": true
+  },
+  {
+    "name": "short dictations are never structured",
+    "input": "Add rate limiting to the upload endpoint.",
+    "mode": "cli",
+    "structure": true,
+    "llm": {
+      "returns": "Goal: Add rate limiting to the upload endpoint in @src/api/upload.ts, because right now people can hammer it and the server falls over.\n\nContext:\n- Use the existing redisClient we already have.\n\nConstraints:\n- Don't pull in a new library.\n- The limit is 20 requests per minute per user; anonymous users get 5.\n- When someone goes over, return a 429 with a Retry-After header.\n- Admin accounts skip the limit entirely.\n\nDone when:\n- Tests for it are written in the upload spec file.\n- The existing tests still pass and the new ones cover the anonymous case and the admin case."
+    },
+    "expect": "Add rate limiting to the upload endpoint",
+    "expect_llm_called": false
   }
 ]

@@ -19,6 +19,8 @@ export type ModeDefinition = {
   stt_model: string | null;
   llm_refinement: LlmRefinement;
   custom_instructions: string | null;
+  /// Reorganise 80+ word dictations into Goal / Context / Constraints / Done when.
+  structure_long_prompts?: boolean;
   is_default: boolean;
 };
 
@@ -174,6 +176,7 @@ export function AppModesSection() {
         stt_model: null,
         llm_refinement: "off",
         custom_instructions: null,
+        structure_long_prompts: false,
         is_default: false,
       },
     ]);
@@ -376,6 +379,25 @@ export function AppModesSection() {
                   }
                 />
               )}
+
+              <label
+                className="mt-2 flex items-start gap-1.5 text-xs"
+                title="Uses this mode's model, or the global one when cleanup is off. The structured version is only used if every name, file, number and requirement you said is still in it; otherwise your words are pasted as spoken."
+              >
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs mt-0.5"
+                  checked={m.structure_long_prompts ?? false}
+                  onChange={(e) => updateMode(index, { structure_long_prompts: e.target.checked })}
+                  aria-label={`Structure long prompts in ${m.name}`}
+                />
+                <span>
+                  Structure long prompts
+                  <span className="block opacity-60">
+                    Dictations of 80+ words become Goal, Context, Constraints and Done when, for a coding agent.
+                  </span>
+                </span>
+              </label>
             </div>
           );
         })}

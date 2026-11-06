@@ -46,6 +46,7 @@ mod shortcut;
 mod snippets;
 mod sounds;
 mod speaker_poller;
+mod structure;
 mod stt;
 mod syntax;
 mod system_audio;
