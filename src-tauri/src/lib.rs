@@ -41,6 +41,7 @@ mod project;
 mod punctuation;
 mod readiness;
 mod recording;
+mod repo_config;
 mod rename;
 mod shortcut;
 mod snippets;
@@ -468,6 +469,7 @@ pub fn run() {
             readiness::request_accessibility,
             agents::get_waiting_agents,
             agents::get_known_agents,
+            project::set_repo_config_trusted,
             agents::get_agent_hook_setups,
             cli_server::get_cli_info,
             agents::get_agent_addressing_enabled,

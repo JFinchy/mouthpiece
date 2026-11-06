@@ -25,7 +25,7 @@ export type Scenario = {
   layout?: "sidebar" | "chain";
   insights?: Json;
   /// The project Settings reports as last detected.
-  projectStatus?: { name: string; names: number } | null;
+  projectStatus?: { name: string; names: number; repo_file?: Json | null } | null;
   /// Correction suggestions Settings > Vocabulary shows (already past the threshold).
   corrections?: { from: string; to: string; source: "edit" | "original"; count: number }[];
   /// Coding agents already waiting when the page loads.
@@ -252,7 +252,7 @@ export function installMockBackend() {
     set_vocabulary: setter("vocabulary", "terms"),
     get_project_names_enabled: () => state.projectNames,
     set_project_names_enabled: setter("projectNames", "enabled"),
-    get_project_status: () => state.projectStatus,
+    get_project_status: () => structuredClone(state.projectStatus),
     get_snippets: () => state.snippets,
     set_snippets: setter("snippets", "snippets"),
     get_modes: () => state.modes,
@@ -264,6 +264,10 @@ export function installMockBackend() {
     // coding agents
     get_waiting_agents: () => state.agents,
     get_known_agents: () => state.agents,
+    set_repo_config_trusted: (args) => {
+      const repo = (state.projectStatus as { repo_file?: { trusted: boolean } } | null)?.repo_file;
+      if (repo) repo.trusted = Boolean(args.trusted);
+    },
     get_agent_hook_setups: () => {
       const path = "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook";
       const entry = [{ hooks: [{ type: "command", command: `'${path}'` }] }];

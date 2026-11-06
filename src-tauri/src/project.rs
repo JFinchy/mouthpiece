@@ -33,6 +33,23 @@ pub struct Project {
     pub terms: Vec<String>,
     /// The repo's folder ("attach the diff" runs git here).
     pub root: PathBuf,
+    /// The repo's `.mouthpiece.json`, if it has one (see `repo_config.rs`).
+    pub repo: Option<Result<crate::repo_config::Loaded, String>>,
+}
+
+impl Project {
+    /// The repo file's replacements, if the user allowed this exact file.
+    pub fn trusted_replacements(
+        &self,
+        trusted: &[crate::repo_config::Trusted],
+    ) -> &[crate::corrections::Replacement] {
+        match &self.repo {
+            Some(Ok(loaded)) if crate::repo_config::is_trusted(trusted, &self.root, &loaded.hash) => {
+                &loaded.config.replacements
+            }
+            _ => &[],
+        }
+    }
 }
 
 const TRACKED_FILE_CAP: usize = 20_000;
@@ -106,6 +123,8 @@ struct State {
     current: Option<Arc<Project>>,
     /// The last project seen, kept for the Settings line.
     last: Option<(String, usize)>,
+    /// The same project, for its repo file's status in Settings.
+    last_project: Option<Arc<Project>>,
     /// Built indexes by repo root.
     indexes: HashMap<PathBuf, (Arc<Project>, Instant)>,
     /// Repo roots with a build running.
@@ -171,6 +190,7 @@ pub fn begin(app: &AppHandle, bundle_id: Option<String>, pid: Option<i32>) {
             let mut st = state().lock().unwrap();
             st.current = Some(project.clone());
             st.last = Some((project.name.clone(), project.index.len()));
+            st.last_project = Some(project.clone());
         }
         set_whisper_terms(&app, &project.terms);
     });
@@ -218,7 +238,15 @@ fn build_and_store(root: &Path) -> Option<Arc<Project>> {
         return None;
     }
     let index = NameIndex::new(entries);
-    let terms = index.top_terms(PROMPT_TERMS);
+    let repo = crate::repo_config::load(root);
+    if let Some(Err(err)) = &repo {
+        crate::applog!("project: {err}");
+    }
+    let repo_terms = match &repo {
+        Some(Ok(loaded)) => loaded.config.vocabulary.clone(),
+        _ => Vec::new(),
+    };
+    let terms = crate::repo_config::merge_terms(&repo_terms, index.top_terms(PROMPT_TERMS));
     let name = root.file_name().map_or_else(
         || "project".to_string(),
         |n| n.to_string_lossy().to_string(),
@@ -233,6 +261,7 @@ fn build_and_store(root: &Path) -> Option<Arc<Project>> {
         index,
         terms,
         root: root.to_path_buf(),
+        repo,
     });
     let mut st = state().lock().unwrap();
     st.indexes
@@ -979,22 +1008,107 @@ pub fn set_project_names_enabled(app: AppHandle, enabled: bool) {
 pub struct ProjectStatus {
     pub name: String,
     pub names: usize,
+    /// The repo's `.mouthpiece.json`, if it has one.
+    pub repo_file: Option<RepoFileStatus>,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct RepoFileStatus {
+    pub root: String,
+    pub hash: Option<String>,
+    pub vocabulary: Vec<String>,
+    pub replacements: Vec<crate::corrections::Replacement>,
+    /// The user allowed this exact file's replacements.
+    pub trusted: bool,
+    pub error: Option<String>,
+}
+
+fn repo_file_status(project: &Project, trusted: &[crate::repo_config::Trusted]) -> Option<RepoFileStatus> {
+    let root = project.root.to_string_lossy().to_string();
+    Some(match project.repo.as_ref()? {
+        Ok(loaded) => RepoFileStatus {
+            trusted: crate::repo_config::is_trusted(trusted, &project.root, &loaded.hash),
+            root,
+            hash: Some(loaded.hash.clone()),
+            vocabulary: loaded.config.vocabulary.clone(),
+            replacements: loaded.config.replacements.clone(),
+            error: None,
+        },
+        Err(err) => RepoFileStatus {
+            root,
+            hash: None,
+            vocabulary: Vec::new(),
+            replacements: Vec::new(),
+            trusted: false,
+            error: Some(err.clone()),
+        },
+    })
 }
 
 /// The last project Mouthpiece found names for, for the Settings line.
 #[tauri::command]
-pub fn get_project_status() -> Option<ProjectStatus> {
-    state()
-        .lock()
-        .unwrap()
-        .last
-        .clone()
-        .map(|(name, names)| ProjectStatus { name, names })
+pub fn get_project_status(app: tauri::AppHandle) -> Option<ProjectStatus> {
+    let st = state().lock().unwrap();
+    let (name, names) = st.last.clone()?;
+    let trusted = crate::config::load(&app).trusted_repo_configs;
+    let repo_file = st
+        .last_project
+        .as_ref()
+        .and_then(|p| repo_file_status(p, &trusted));
+    Some(ProjectStatus { name, names, repo_file })
+}
+
+/// Allows (or stops allowing) the replacements in a repo's
+/// `.mouthpiece.json`. Allowing names the hash the user saw, so a file
+/// changed in between isn't allowed by accident.
+#[tauri::command]
+pub fn set_repo_config_trusted(
+    app: tauri::AppHandle,
+    root: String,
+    hash: String,
+    trusted: bool,
+) -> Result<(), String> {
+    let mut cfg = crate::config::load(&app);
+    cfg.trusted_repo_configs.retain(|t| t.root != root);
+    if trusted {
+        let current = crate::repo_config::load(Path::new(&root))
+            .ok_or("The repo no longer has a .mouthpiece.json")??;
+        if current.hash != hash {
+            return Err("The file changed since it was shown. Look it over again.".to_string());
+        }
+        cfg.trusted_repo_configs.push(crate::repo_config::Trusted { root: root.clone(), hash });
+    }
+    crate::config::save(&app, &cfg)?;
+    crate::applog!("project: repo file replacements {}", if trusted { "allowed" } else { "turned off" });
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repo_replacements_need_the_exact_file_allowed() {
+        use crate::repo_config::{Loaded, RepoConfig, Trusted};
+        let project = Project {
+            name: "app".into(),
+            index: NameIndex::new(Vec::new()),
+            terms: Vec::new(),
+            root: PathBuf::from("/w/app"),
+            repo: Some(Ok(Loaded {
+                config: RepoConfig {
+                    replacements: vec![crate::corrections::Replacement { from: "post gress".into(), to: "Postgres".into() }],
+                    ..RepoConfig::default()
+                },
+                hash: "h1".into(),
+            })),
+        };
+        assert!(project.trusted_replacements(&[]).is_empty());
+        let stale = [Trusted { root: "/w/app".into(), hash: "h0".into() }];
+        assert!(project.trusted_replacements(&stale).is_empty());
+        let ok = [Trusted { root: "/w/app".into(), hash: "h1".into() }];
+        assert_eq!(project.trusted_replacements(&ok)[0].to, "Postgres");
+    }
 
     #[test]
     fn classifies_terminals_and_editors_only() {

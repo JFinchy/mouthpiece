@@ -230,6 +230,12 @@ pub fn format_in_project(
     // The user's learned replacements (see `corrections.rs`) fix known
     // mis-hearings first, so every later pass sees the corrected word.
     let text = crate::corrections::apply_replacements(&text, &cfg.replacements);
+    // Then the repo's team replacements (`.mouthpiece.json`), if the user
+    // allowed that file: personal ones went first, so they win.
+    let text = match project.map(|p| p.trusted_replacements(&cfg.trusted_repo_configs)) {
+        Some(repo) if !repo.is_empty() => crate::corrections::apply_replacements(&text, repo),
+        _ => text,
+    };
 
     // A standalone "scratch that" undoes the last paste. Checked first, on
     // the raw transcript: backtrack (below) only handles the mid-sentence
@@ -623,6 +629,7 @@ mod golden {
             index,
             terms,
             root: "/fake".into(),
+            repo: None,
         })
     }
 

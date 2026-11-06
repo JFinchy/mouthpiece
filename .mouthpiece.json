@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "vocabulary": [
+    "Mouthpiece",
+    "Tauri",
+    "whisper.cpp",
+    "sherpa-onnx",
+    "Silero",
+    "WeSpeaker",
+    "pyannote",
+    "Ollama",
+    "LM Studio",
+    "llama.cpp",
+    "CoreAudio",
+    "Accessibility",
+    "Playwright",
+    "Orca"
+  ]
+}

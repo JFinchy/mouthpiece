@@ -189,6 +189,10 @@ pub struct AppConfig {
     /// ...") sends it to that agent. On by default.
     #[serde(default = "default_true")]
     pub agent_addressing_enabled: bool,
+    /// Repo `.mouthpiece.json` files whose replacements the user allowed,
+    /// by folder and file hash (see `repo_config.rs`).
+    #[serde(default)]
+    pub trusted_repo_configs: Vec<crate::repo_config::Trusted>,
     /// Write dictated text into `app.log`. Off by default: logs then keep
     /// events and timings, with each transcript replaced by its length.
     #[serde(default)]
@@ -243,6 +247,7 @@ impl Default for AppConfig {
             agent_reply_shortcut: None,
             agent_sound_enabled: true,
             agent_addressing_enabled: true,
+            trusted_repo_configs: Vec::new(),
             log_transcripts: false,
             history_lock_enabled: false,
         }
