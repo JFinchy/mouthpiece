@@ -21,6 +21,11 @@ pub trait Refiner {
         vocabulary: &[String],
     ) -> Result<String, String>;
     fn boilerplate(&self, request: &str, model: &str) -> Result<String, String>;
+    /// A commit message from the staged changes in `root` (see
+    /// `commit_message.rs`).
+    fn commit_message(&self, _notes: &str, _root: Option<&std::path::Path>, _model: &str) -> Result<String, String> {
+        Err("commit messages aren't available here".to_string())
+    }
     /// Reorganises a long dictation (see `structure.rs`).
     fn structure(&self, _text: &str, _model: &str) -> Result<String, String> {
         Err("structuring isn't available here".to_string())
@@ -68,6 +73,12 @@ impl Refiner for OllamaRefiner<'_> {
 
     fn structure(&self, text: &str, model: &str) -> Result<String, String> {
         crate::llm::structure_prompt(text, model)
+    }
+
+    fn commit_message(&self, notes: &str, root: Option<&std::path::Path>, model: &str) -> Result<String, String> {
+        let root = root.ok_or("no project found")?;
+        let diff = crate::attachments::read_diff(root, true)?.ok_or("nothing is staged")?;
+        crate::llm::commit_message(notes, &diff, model)
     }
 
     fn skipped(&self) -> bool {
@@ -391,6 +402,22 @@ pub fn format_in_project(
                     (formatted, format!("{:?}", settings.mode))
                 }
             }
+        } else if let Some(notes) = crate::commit_message::try_extract(&text) {
+            on_refining(&cfg.llm_model);
+            let started = Instant::now();
+            let result = refiner.commit_message(&notes, project.map(|p| p.root.as_path()), &cfg.llm_model);
+            llm_ms = Some(started.elapsed().as_millis() as u64);
+            match result {
+                Ok(message) => {
+                    crate::applog!("commit message: written from the staged changes");
+                    (message, "commit message".to_string())
+                }
+                Err(err) => {
+                    crate::applog!("commit message: {err}, pasting as spoken");
+                    let formatted = crate::modes::apply_mode(settings.mode, &text);
+                    (formatted, format!("{:?}", settings.mode))
+                }
+            }
         } else {
             // Names from the project (code and file names), for terminals and
             // editors only: not Casual messaging, and not the literal shell
@@ -673,6 +700,9 @@ mod golden {
             self.answer()
         }
         fn structure(&self, _: &str, _: &str) -> Result<String, String> {
+            self.answer()
+        }
+        fn commit_message(&self, _: &str, _: Option<&std::path::Path>, _: &str) -> Result<String, String> {
             self.answer()
         }
     }

@@ -587,5 +587,32 @@
     },
     "expect": "Add rate limiting to the upload endpoint",
     "expect_llm_called": false
+  },
+  {
+    "name": "code symbols, with no space between a glued symbol and an opening paren",
+    "input": "const add equals open paren a comma b close paren fat arrow a plus b",
+    "mode": "plain",
+    "expect": "const add=(a, b) => a+b"
+  },
+  {
+    "name": "commit message is written by the LLM",
+    "input": "Commit message: fixed the race in paste.",
+    "mode": "cli",
+    "llm": {
+      "returns": "Fix the race between copy and Cmd+V in paste"
+    },
+    "expect": "Fix the race between copy and Cmd+V in paste",
+    "expect_label": "commit message",
+    "expect_llm_called": true
+  },
+  {
+    "name": "commit message falls back to the words when the LLM fails",
+    "input": "Commit message: fixed the race in paste.",
+    "mode": "plain",
+    "llm": {
+      "error": "nothing is staged"
+    },
+    "expect": "Commit message: fixed the race in paste.",
+    "expect_llm_called": true
   }
 ]

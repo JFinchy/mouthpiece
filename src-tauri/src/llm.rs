@@ -752,6 +752,21 @@ pub fn structure_prompt(text: &str, model: &str) -> Result<String, String> {
     }
 }
 
+/// A commit message for `diff`, steered by the spoken `notes`.
+pub fn commit_message(notes: &str, diff: &str, model: &str) -> Result<String, String> {
+    let notes = if notes.is_empty() { "(none)" } else { notes };
+    let prompt = format!(
+        "{}\n\nDeveloper's notes: {notes}\n\nStaged changes:\n{diff}",
+        crate::commit_message::INSTRUCTION
+    );
+    let message = crate::commit_message::clean(&complete(&prompt, model, 45)?);
+    if message.is_empty() {
+        Err("the model returned an empty message".to_string())
+    } else {
+        Ok(message)
+    }
+}
+
 /// One non-streamed answer from a local model (Ollama, or LM Studio /
 /// llama.cpp / Jan through `local_llm`).
 fn complete(prompt: &str, model: &str, timeout_secs: u64) -> Result<String, String> {

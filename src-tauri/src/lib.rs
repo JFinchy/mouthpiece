@@ -9,6 +9,7 @@ mod capture;
 pub mod cli;
 mod cli_server;
 mod clipboard;
+mod commit_message;
 mod config;
 mod corrections;
 mod discard;

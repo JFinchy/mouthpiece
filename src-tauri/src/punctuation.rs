@@ -31,6 +31,8 @@ enum Spacing {
     Closing,
     /// Replaces with `n` newlines, consuming any surrounding spaces.
     LineBreak(usize),
+    /// A space on both sides, like a word (`=>`, `==`, `&&`).
+    Spaced,
 }
 
 /// `(phrase, replacement, spacing)`. Phrases are matched case-insensitively
@@ -93,6 +95,30 @@ const COMMANDS: &[(&str, &str, Spacing)] = &[
     ("open paren", "(", Spacing::Opening),
     ("close parenthesis", ")", Spacing::Closing),
     ("close paren", ")", Spacing::Closing),
+    // Code symbols. Only phrases nobody says in prose: bare "dot",
+    // "arrow" or "pipe" would misfire in ordinary sentences.
+    ("open bracket", "[", Spacing::Opening),
+    ("open square bracket", "[", Spacing::Opening),
+    ("close bracket", "]", Spacing::Closing),
+    ("close square bracket", "]", Spacing::Closing),
+    ("open brace", "{", Spacing::Opening),
+    ("open curly brace", "{", Spacing::Opening),
+    ("open curly", "{", Spacing::Opening),
+    ("close brace", "}", Spacing::Closing),
+    ("close curly brace", "}", Spacing::Closing),
+    ("close curly", "}", Spacing::Closing),
+    ("double colon", "::", Spacing::Glued),
+    ("fat arrow", "=>", Spacing::Spaced),
+    ("thin arrow", "->", Spacing::Spaced),
+    ("double equals", "==", Spacing::Spaced),
+    ("triple equals", "===", Spacing::Spaced),
+    ("not equals", "!=", Spacing::Spaced),
+    ("greater or equal", ">=", Spacing::Spaced),
+    ("less or equal", "<=", Spacing::Spaced),
+    ("double ampersand", "&&", Spacing::Spaced),
+    ("double pipe", "||", Spacing::Spaced),
+    ("pipe symbol", "|", Spacing::Spaced),
+    ("dollar sign", "$", Spacing::Glued),
     ("new paragraph", "\n\n", Spacing::LineBreak(2)),
     ("new line", "\n", Spacing::LineBreak(1)),
     ("next line", "\n", Spacing::LineBreak(1)),
@@ -103,7 +129,7 @@ const QUOTE_PHRASE: &str = "quotation mark";
 
 /// Longest phrase in `COMMANDS`/`QUOTE_PHRASE`, in words — bounds how far
 /// ahead `match_at` looks.
-const MAX_PHRASE_WORDS: usize = 2;
+const MAX_PHRASE_WORDS: usize = 3;
 
 fn normalize(token: &str) -> String {
     token
@@ -177,7 +203,8 @@ fn push_replacement(
             *suppress_space = true;
         }
         Spacing::Opening => {
-            if !out.is_empty() {
+            // No space after a glued symbol: "equals open paren" is "=(".
+            if !out.is_empty() && !*suppress_space {
                 out.push(' ');
             }
             out.push_str(replacement);
@@ -187,6 +214,7 @@ fn push_replacement(
             out.push_str(replacement);
             *suppress_space = false;
         }
+        Spacing::Spaced => push_word(out, replacement, suppress_space),
         Spacing::LineBreak(n) => {
             while out.ends_with(' ') {
                 out.pop();
@@ -828,5 +856,24 @@ mod tests {
         ] {
             assert_eq!(expand_lists(text), text);
         }
+    }
+
+    #[test]
+    fn code_symbols() {
+        assert_eq!(
+            expand_punctuation("const add equals open paren a comma b close paren fat arrow a plus b"),
+            "const add=(a, b) => a+b"
+        );
+        assert_eq!(expand_punctuation("items open bracket 0 close bracket"), "items [0]");
+        assert_eq!(expand_punctuation("if x triple equals y double ampersand ok"), "if x === y && ok");
+        assert_eq!(expand_punctuation("std double colon fs"), "std::fs");
+        assert_eq!(expand_punctuation("fn main open curly brace close curly brace"), "fn main {}");
+        assert_eq!(expand_punctuation("fn f thin arrow u32"), "fn f -> u32");
+    }
+
+    #[test]
+    fn prose_with_symbol_words_is_left_alone() {
+        assert_eq!(expand_punctuation("the arrow points at the dot"), "the arrow points at the dot");
+        assert_eq!(expand_punctuation("pipe the output to grep"), "pipe the output to grep");
     }
 }
