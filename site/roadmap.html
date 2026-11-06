@@ -6,7 +6,7 @@
   <title>Roadmap · Mouthpiece</title>
   <meta name="description" content="Where Mouthpiece is going: what's shipped, what's in testing, and the next phase, a voice layer for a fleet of coding agents.">
   <meta property="og:title" content="Mouthpiece roadmap">
-  <meta property="og:description" content="Next up: a voice layer for a fleet of coding agents.">
+  <meta property="og:description" content="Now: a voice layer for a fleet of coding agents.">
   <meta property="og:image" content="icon.png">
   <meta name="theme-color" content="#0f1113">
   <link rel="icon" href="icon.png">
@@ -68,19 +68,21 @@
 
         <div class="rm-list">
           <div>
-            <h2>Being built now <span class="tag tag-progress">In progress</span></h2>
+            <h2>Built, being tested <span class="tag tag-progress">In progress</span></h2>
+            <p>Built on 2026-11-06 and waiting for a hands-on check before a release.</p>
             <ol>
-              <li><button type="button" data-open="fleet">Several agents at once</button>: address an agent by folder name, a menu of waiting agents, replies into Orca through <code>orca terminal send</code>, and iTerm or Terminal tabs picked by tty.</li>
+              <li><button type="button" data-open="fleet">Several agents at once</button>: say "to esc pause, …" to send a dictation to that agent, pick from a menu of waiting agents, replies typed straight into Orca panes, and iTerm or Terminal tabs picked by tty.</li>
               <li><button type="button" data-open="mcp"><code>mouthpiece</code> CLI and MCP server</button>: <code>mouthpiece listen</code>, and an <code>ask_user</code> tool so an agent can ask you by voice.</li>
-            </ol>
-            <h2>Next up, in order <span class="tag tag-planned">Planned</span></h2>
-            <ol start="3">
-              <li><button type="button" data-open="point">Context you can point at</button>: "this", "look at this", "attach the diff", file and line references.</li>
+              <li><button type="button" data-open="point">Context you can point at</button>: "attach the selection", "look at this", "attach the diff", and "line 42 of the paste file".</li>
               <li><button type="button" data-open="more-hooks">Hooks for more agents</button>: Codex, Gemini CLI, OpenCode, Aider.</li>
-              <li><button type="button" data-open="structured">Structured prompts from long rambles</button>.</li>
-              <li><button type="button" data-open="repo-config">Per-repo <code>.mouthpiece.json</code></button>: team vocabulary, rules and modes.</li>
-              <li>Smaller: <button type="button" data-open="commit-msg">commit-message help</button>, <button type="button" data-open="more-errors">"attach the error" from more terminals</button>, <button type="button" data-open="punctuation">spoken code punctuation</button>.</li>
+              <li><button type="button" data-open="structured">Structured prompts from long rambles</button>, used only when nothing you said is lost.</li>
+              <li><button type="button" data-open="repo-config">Per-repo <code>.mouthpiece.json</code></button>: team vocabulary, and replacements once you allow the file.</li>
+              <li><button type="button" data-open="commit-msg">Commit messages from the staged diff</button> and <button type="button" data-open="punctuation">spoken code symbols</button>.</li>
             </ol>
+            <h2>Next up <span class="tag tag-planned">Planned</span></h2>
+            <ul>
+              <li><button type="button" data-open="more-errors">"Attach the error" from more terminals</button>: Ghostty, Warp and VS Code's terminal.</li>
+            </ul>
           </div>
           <div>
             <h2>In testing <span class="tag tag-testing">Built</span></h2>
