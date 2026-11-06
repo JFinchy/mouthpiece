@@ -196,6 +196,78 @@ function Addressing() {
   );
 }
 
+type CliInfo = { command_path: string | null; running: boolean };
+
+/// Single-quotes a path for a shell command.
+export function shellQuote(path: string): string {
+  return `'${path.replace(/'/g, "'\\''")}'`;
+}
+
+function CopyButton({ text, label, testId }: { text: string; label: string; testId?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="btn btn-xs"
+      data-testid={testId}
+      onClick={() =>
+        navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          })
+          .catch((err) => notifyError("Couldn't copy to the clipboard", err))
+      }
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function CommandLine() {
+  const [info, setInfo] = useState<CliInfo | null>(null);
+  useEffect(() => {
+    invoke<CliInfo>("get_cli_info")
+      .then(setInfo)
+      .catch((err) => notifyError("get_cli_info", err));
+  }, []);
+  if (!info?.command_path) return null;
+  const cmd = shellQuote(info.command_path);
+  const mcpAdd = `claude mcp add --scope user mouthpiece -- ${cmd} mcp`;
+  const pathLine = `export PATH="${info.command_path.replace(/\/mouthpiece$/, "")}:$PATH"`;
+  return (
+    <div className="rounded-lg border border-base-content/10 bg-base-100 p-4" data-testid="agent-cli">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Let agents ask you things</h3>
+      <p className="mb-2 text-xs opacity-60">
+        Mouthpiece has an MCP server, so an agent can ask you a question out loud. The question shows in the widget; you
+        answer, stop with your dictation shortcut, and the text goes back to the agent instead of being pasted. It can
+        also add words to your vocabulary. For Claude Code, run:
+      </p>
+      <pre className="overflow-auto rounded bg-base-300/50 p-2 text-[11px] leading-snug" data-testid="agent-mcp-command">
+        {mcpAdd}
+      </pre>
+      <div className="mt-1.5">
+        <CopyButton text={mcpAdd} label="Copy command" testId="copy-mcp-command" />
+      </div>
+      <p className="mb-2 mt-3 text-xs opacity-60">
+        The same tools work from a shell or script with the <code>mouthpiece</code> command:{" "}
+        <code>mouthpiece listen --prompt "Which branch?"</code> prints what you say, and{" "}
+        <code>mouthpiece vocab add Tauri</code> adds a word. To type just <code>mouthpiece</code>, add this to{" "}
+        <code>~/.zshrc</code>:
+      </p>
+      <pre className="overflow-auto rounded bg-base-300/50 p-2 text-[11px] leading-snug">{pathLine}</pre>
+      <div className="mt-1.5">
+        <CopyButton text={pathLine} label="Copy line" />
+      </div>
+      {!info.running && (
+        <p className="mt-2 text-xs text-warning">
+          The command isn't answering yet. Quit and reopen Mouthpiece if this stays.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function HookSnippet() {
   const [hook, setHook] = useState<HookConfig | null>(null);
   const [copied, setCopied] = useState(false);
@@ -329,6 +401,7 @@ export function AgentsSection() {
       <HookSnippet />
       <ReplyShortcut />
       <Addressing />
+      <CommandLine />
       <div className="rounded-lg border border-base-content/10 bg-base-100 p-4">
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Notice</h3>
         <SoundToggle />

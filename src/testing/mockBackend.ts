@@ -264,6 +264,10 @@ export function installMockBackend() {
     // coding agents
     get_waiting_agents: () => state.agents,
     get_known_agents: () => state.agents,
+    get_cli_info: () => ({
+      command_path: "/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece",
+      running: true,
+    }),
     get_agent_addressing_enabled: () => state.agentAddressing,
     set_agent_addressing_enabled: (args) => {
       state.agentAddressing = Boolean(args.enabled);

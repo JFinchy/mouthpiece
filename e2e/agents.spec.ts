@@ -65,6 +65,15 @@ test.describe("coding agents: widget", () => {
     await expect(page.getByText("Ready")).toBeVisible();
   });
 
+  test("an agent's question shows while you answer it", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "agent-question", "Which branch should I use?");
+    await emit(page, "recording-started", null);
+    await expect(page.getByText("Agent asks: Which branch should I use?")).toBeVisible();
+    await emit(page, "agent-question", null);
+    await expect(page.getByText("Agent asks:")).toHaveCount(0);
+  });
+
   test("a reply that went to the agent says so", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget", { agents: [agent()] });
     await emit(page, "transcript-copied", "Sent to dev-whisper in Terminal");
@@ -130,6 +139,13 @@ test.describe("coding agents: settings", () => {
     await expect(page.getByTestId("known-agents")).toContainText("“to api server”");
     await page.getByTestId("agent-addressing-toggle").uncheck();
     await expect.poll(() => calls(page, "set_agent_addressing_enabled")).toEqual([{ enabled: false }]);
+  });
+
+  test("shows how to add the MCP server and the command", async ({ page, consoleErrors: _ }) => {
+    await openAgents(page);
+    await expect(page.getByTestId("agent-mcp-command")).toHaveText(
+      "claude mcp add --scope user mouthpiece -- '/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece' mcp",
+    );
   });
 
   test("the sound toggle and the reply shortcut are saved", async ({ page, consoleErrors: _ }) => {

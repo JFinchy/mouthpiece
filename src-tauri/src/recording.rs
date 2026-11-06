@@ -81,6 +81,7 @@ fn stop_dictation(app: &AppHandle, state: &RecordingState) {
     let reply = app
         .state::<crate::agents::AgentState>()
         .take_pending_reply();
+    let capture = app.state::<crate::cli_server::CliState>().take_pending();
     match state.audio.stop() {
         Ok(path) => {
             let _ = app.emit("recording-stopped", path.to_string_lossy().to_string());
@@ -88,7 +89,7 @@ fn stop_dictation(app: &AppHandle, state: &RecordingState) {
             let app = app.clone();
             std::thread::spawn(move || {
                 crate::discard::set_processing(&app, true);
-                transcribe_and_paste(&app, &path, stopped_at, live, reply);
+                transcribe_and_paste(&app, &path, stopped_at, live, reply, capture);
                 crate::discard::set_processing(&app, false);
                 // Raw voice recordings shouldn't accumulate in /tmp; history
                 // keeps the transcript, not the audio.
@@ -113,6 +114,8 @@ fn discard_dictation(app: &AppHandle, state: &RecordingState) {
     let _ = app
         .state::<crate::agents::AgentState>()
         .take_pending_reply();
+    // Dropped: a `mouthpiece listen` caller hears there's no answer.
+    drop(app.state::<crate::cli_server::CliState>().take_pending());
     crate::discard::release_escape(app);
     match state.audio.stop() {
         Ok(path) => {
@@ -351,6 +354,7 @@ fn transcribe_and_paste(
     stopped_at: std::time::Instant,
     live: Option<crate::live::LiveSession>,
     reply: Option<crate::agents::WaitingAgent>,
+    capture: Option<crate::cli_server::Capture>,
 ) {
     let state = app.state::<RecordingState>();
 
@@ -436,7 +440,7 @@ fn transcribe_and_paste(
 
             // "To esc pause, rerun the tests" goes to that agent, from a
             // plain dictation or a reply meant for another agent.
-            let addressed = if cfg.agent_addressing_enabled {
+            let addressed = if cfg.agent_addressing_enabled && capture.is_none() {
                 app.state::<crate::agents::AgentState>().address(&text)
             } else {
                 None
@@ -475,6 +479,7 @@ fn transcribe_and_paste(
                     stt_ms,
                     project: crate::project::current(),
                     reply_target: reply,
+                    capture,
                 },
             );
         }
@@ -580,6 +585,9 @@ pub(crate) struct TranscriptContext<'a> {
     /// A waiting coding agent this dictation is a reply to: delivered by
     /// hopping to its window instead of pasting where focus is.
     pub reply_target: Option<crate::agents::WaitingAgent>,
+    /// A `mouthpiece listen` caller (an agent asking a question) waiting for
+    /// this text: sent there instead of pasted.
+    pub capture: Option<crate::cli_server::Capture>,
 }
 
 fn ms_or_dash(ms: Option<u64>) -> String {
@@ -589,7 +597,7 @@ fn ms_or_dash(ms: Option<u64>) -> String {
 /// Runs a cleaned transcript through the formatting pipeline (lists,
 /// punctuation, backtrack, voice commands, snippets, casing, boilerplate,
 /// mode formatting, LLM refinement) and delivers it.
-pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptContext) {
+pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: TranscriptContext) {
     let TranscriptContext {
         cfg,
         settings,
@@ -673,6 +681,32 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, ctx: TranscriptC
     } else {
         (formatted, unrefined)
     };
+
+    // An answer to an agent's question goes back to it, not to the cursor.
+    if let Some(capture) = ctx.capture.take() {
+        let delivered = !formatted.is_empty() && capture.tx.send(formatted.clone()).is_ok();
+        if delivered {
+            crate::history::append_entry(
+                app,
+                crate::history::NewEntry {
+                    text: formatted.clone(),
+                    app_name: Some("Agent question".to_string()),
+                    mode: Some(mode_label),
+                    duration_ms,
+                    features_used,
+                    spoken_words,
+                    latency_ms: ctx.stopped_at.map(|t| t.elapsed().as_millis() as u64),
+                    original_text: unrefined,
+                },
+            );
+            crate::sounds::play(app, crate::sounds::Cue::Done);
+            let _ = app.emit("transcript-copied", "Sent to the agent that asked".to_string());
+        } else {
+            let _ = app.emit("transcript-error", "The agent stopped waiting for an answer".to_string());
+            crate::sounds::play(app, crate::sounds::Cue::Error);
+        }
+        return;
+    }
 
     // A fully-consumed "press enter"-only utterance formats down
     // to an empty string — nothing to paste/copy in that case

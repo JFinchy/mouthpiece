@@ -5,6 +5,8 @@ mod audio;
 mod backtrack;
 mod boilerplate;
 mod capture;
+pub mod cli;
+mod cli_server;
 mod clipboard;
 mod config;
 mod corrections;
@@ -464,6 +466,7 @@ pub fn run() {
             readiness::request_accessibility,
             agents::get_waiting_agents,
             agents::get_known_agents,
+            cli_server::get_cli_info,
             agents::get_agent_addressing_enabled,
             agents::set_agent_addressing_enabled,
             agents::dismiss_waiting_agent,
@@ -577,6 +580,8 @@ pub fn run() {
             app.manage(voice_isolation);
 
             app.manage(ambient::AmbientState::new());
+            app.manage(cli_server::CliState::default());
+            cli_server::start(app.handle());
             if saved_config.ambient_enabled {
                 if let Err(err) = ambient::start(app.handle()) {
                     crate::applog!("ambient: enabled in config but couldn't start: {err}");

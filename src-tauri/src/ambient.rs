@@ -401,6 +401,7 @@ fn handle_segment(app: &AppHandle, audio: Vec<f32>) {
                     stt_ms: None,
                     project: None,
                     reply_target: None,
+                    capture: None,
                 },
             );
         }

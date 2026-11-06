@@ -130,8 +130,11 @@ export function VocabularySection() {
       .catch((err) => notifyError("get_learn_corrections", err));
     refreshLearning();
     const unlisten = listen("corrections-updated", refreshLearning);
+    // `mouthpiece vocab add` / MCP add_vocabulary change it from outside.
+    const unlistenVocab = listen<string[]>("vocabulary-changed", (e) => setTerms(e.payload));
     return () => {
       unlisten.then((f) => f());
+      unlistenVocab.then((f) => f());
     };
   }, []);
 

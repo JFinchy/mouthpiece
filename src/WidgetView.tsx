@@ -498,6 +498,15 @@ function WidgetView() {
   // Coding agents waiting for a reply (see agents.rs), newest first. Expiry
   // happens in the backend, so the list is re-read now and then.
   const [waiting, setWaiting] = useState<WaitingAgent[]>([]);
+  // An agent asked a question through `mouthpiece listen` / MCP ask_user;
+  // the dictation being recorded is the answer. "" = asked without a prompt.
+  const [agentQuestion, setAgentQuestion] = useState<string | null>(null);
+  useEffect(() => {
+    const unlisten = listen<string | null>("agent-question", (e) => setAgentQuestion(e.payload));
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
   const [replyKey, setReplyKey] = useState<string | null>(null);
   useEffect(() => {
     const refresh = () =>
@@ -920,7 +929,11 @@ function WidgetView() {
   const phaseLabel =
     meetingRecording && phase === "recording" && !dictating
       ? "Recording a meeting"
-      : STATUS_LABEL[phase];
+      : agentQuestion !== null && phase === "recording"
+        ? agentQuestion
+          ? `Agent asks: ${agentQuestion}`
+          : "Answering an agent"
+        : STATUS_LABEL[phase];
   // The meeting stops itself at its limit (2.5 h): count down to it for the
   // last 10 minutes so the cut-off is never a surprise.
   const meetingRemainingMs =
@@ -1091,6 +1104,19 @@ function WidgetView() {
           {waiting.length > 1 ? ` +${waiting.length - 1}` : ""}
         </span>
       </button>
+    ) : null;
+
+  // While answering an agent's question, the question replaces the
+  // waveform so it's on screen the whole time you answer.
+  const agentQuestionLine =
+    agentQuestion !== null && phase === "recording" ? (
+      <span
+        className="min-w-0 flex-1 truncate text-xs font-medium text-info"
+        title={agentQuestion || undefined}
+        data-testid="agent-question"
+      >
+        {agentQuestion ? `Agent asks: ${agentQuestion}` : "Answering an agent"}
+      </span>
     ) : null;
 
   const meetingDetectPill =
@@ -1380,10 +1406,12 @@ function WidgetView() {
             <span className={`truncate text-xs ${statusTone}`}>{shortStatus}</span>
           ) : (
             <>
-              <LevelMeter
-                levels={levels}
-                className={`flex-1 group-hover:hidden ${phase === "idle" ? "opacity-40 grayscale" : ""}`}
-              />
+              {(phase === "recording" ? agentQuestionLine : null) ?? (
+                <LevelMeter
+                  levels={levels}
+                  className={`flex-1 group-hover:hidden ${phase === "idle" ? "opacity-40 grayscale" : ""}`}
+                />
+              )}
               <span className="hidden truncate text-xs opacity-75 group-hover:inline">{shortStatus}</span>
             </>
           )}
@@ -1420,7 +1448,7 @@ function WidgetView() {
               ) : showProgress ? (
                 <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
               ) : phase === "recording" ? (
-                <LevelMeter levels={levels} className="flex-1" />
+                (agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />)
               ) : null}
             </div>
             {meetingEndedPill}
@@ -1479,7 +1507,7 @@ function WidgetView() {
               </>
             ) : phase === "recording" && !micSilent ? (
               <>
-                <LevelMeter levels={levels} className="flex-1" />
+                {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
                 <span className="shrink-0 text-xs tabular-nums opacity-60">{shortStatus}</span>
               </>
             ) : (
@@ -1546,7 +1574,7 @@ function WidgetView() {
             </span>
           ) : phase === "recording" ? (
             <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
-              <LevelMeter levels={levels} className="flex-1" />
+              {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
               <span className={`shrink-0 text-xs tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
                 data-testid="recording-elapsed">
                 {elapsedText}
@@ -1642,7 +1670,7 @@ function WidgetView() {
           </span>
         ) : phase === "recording" ? (
           <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
-            <LevelMeter levels={levels} className="flex-1" />
+            {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
             <span className={`shrink-0 text-xs tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
                 data-testid="recording-elapsed">
               {elapsedText}
