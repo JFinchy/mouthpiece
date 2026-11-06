@@ -434,6 +434,29 @@ fn transcribe_and_paste(
                 return;
             }
 
+            // "To esc pause, rerun the tests" goes to that agent, from a
+            // plain dictation or a reply meant for another agent.
+            let addressed = if cfg.agent_addressing_enabled {
+                app.state::<crate::agents::AgentState>().address(&text)
+            } else {
+                None
+            };
+            let (text, reply, readdressed) = match addressed {
+                Some((agent, rest)) => {
+                    crate::applog!(
+                        "agents: dictation addressed to {} ({})",
+                        agent.folder,
+                        agent.agent
+                    );
+                    let mode = resolve_mode(app, false, Some(&agent));
+                    (rest, Some(agent), Some(mode))
+                }
+                None => (text, reply, None),
+            };
+            let (cfg, settings, app_name) = match readdressed {
+                Some(mode) => (mode.cfg, mode.settings, mode.app_name),
+                None => (cfg, settings, app_name),
+            };
             let text = if reply.is_some() {
                 crate::agents::normalize_reply(&text)
             } else {

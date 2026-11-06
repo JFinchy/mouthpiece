@@ -22,6 +22,9 @@ encode() {
   printf '%s' "$1" | LC_ALL=C od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g'
 }
 
+# Which agent this is, for the widget. MOUTHPIECE_AGENT overrides it when
+# another agent's hook reuses this script.
+agent="${MOUTHPIECE_AGENT:-claude}"
 event=$(field hook_event_name)
 session=$(field session_id)
 cwd=$(field cwd)
@@ -42,5 +45,5 @@ fi
 # Keep the link short; Mouthpiece trims again.
 message=$(printf '%s' "$message" | tr '\n\r\t' '   ' | LC_ALL=C cut -c1-300)
 
-"$OPEN" -g "mouthpiece://agent-waiting?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")&message=$(encode "$message")&kind=$kind&pid=$PPID&bundle=$(encode "$__CFBundleIdentifier")&term=$(encode "$TERM_PROGRAM")" >/dev/null 2>&1
+"$OPEN" -g "mouthpiece://agent-waiting?token=$TOKEN&session=$(encode "$session")&cwd=$(encode "$cwd")&message=$(encode "$message")&kind=$kind&pid=$PPID&bundle=$(encode "$__CFBundleIdentifier")&term=$(encode "$TERM_PROGRAM")&orca=$(encode "$ORCA_TERMINAL_HANDLE")&agent=$(encode "$agent")" >/dev/null 2>&1
 exit 0

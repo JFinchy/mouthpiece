@@ -185,6 +185,10 @@ pub struct AppConfig {
     /// Play a soft sound when a coding agent starts waiting. On by default.
     #[serde(default = "default_true")]
     pub agent_sound_enabled: bool,
+    /// Starting a dictation with an agent's folder name ("to esc pause,
+    /// ...") sends it to that agent. On by default.
+    #[serde(default = "default_true")]
+    pub agent_addressing_enabled: bool,
     /// Write dictated text into `app.log`. Off by default: logs then keep
     /// events and timings, with each transcript replaced by its length.
     #[serde(default)]
@@ -238,6 +242,7 @@ impl Default for AppConfig {
             replacements: Vec::new(),
             agent_reply_shortcut: None,
             agent_sound_enabled: true,
+            agent_addressing_enabled: true,
             log_transcripts: false,
             history_lock_enabled: false,
         }

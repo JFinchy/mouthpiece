@@ -73,6 +73,7 @@ function initialState(scenario: Scenario) {
     agents: (scenario.agents ?? []) as { session_id: string }[],
     agentShortcut: { meta: false, ctrl: true, alt: true, shift: false, code: "KeyR" },
     agentSound: true,
+    agentAddressing: true,
     historyLockEnabled: scenario.historyLock ?? false,
     meetingSpeakers: 0,
     meetingAutoDetect: true,
@@ -262,6 +263,12 @@ export function installMockBackend() {
     ],
     // coding agents
     get_waiting_agents: () => state.agents,
+    get_known_agents: () => state.agents,
+    get_agent_addressing_enabled: () => state.agentAddressing,
+    set_agent_addressing_enabled: (args) => {
+      state.agentAddressing = Boolean(args.enabled);
+    },
+    show_agents_menu: () => null,
     dismiss_waiting_agent: (args) => {
       state.agents = state.agents.filter((a) => a.session_id !== args.sessionId);
       void emit("agents-changed", state.agents);

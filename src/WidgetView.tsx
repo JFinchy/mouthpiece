@@ -858,6 +858,15 @@ function WidgetView() {
     invoke("focus_waiting_agent", { sessionId: agent.session_id }).catch(actionFailed("go to the agent"));
   }
 
+  // One agent: go to it. Several: a menu to pick which to reply to or open.
+  function openAgent(agent: WaitingAgent) {
+    if (waiting.length > 1) {
+      invoke("show_agents_menu").catch(actionFailed("list the waiting agents"));
+    } else {
+      focusAgent(agent);
+    }
+  }
+
   function pasteAsIs() {
     invoke("paste_as_is_command").catch(actionFailed("skip refining"));
   }
@@ -1063,20 +1072,22 @@ function WidgetView() {
   const agentTitle = newestAgent
     ? `${newestAgent.kind === "done" ? "Finished" : newestAgent.message || "Needs your input"}${
         newestAgent.app_name ? ` (${newestAgent.app_name})` : ""
-      }. Click to go to it${replyKey ? `, or press ${replyKey} to reply by voice` : ""}.`
+      }. ${waiting.length > 1 ? `${waiting.length} agents are waiting. Click to pick one` : "Click to go to it"}${
+        replyKey ? `, or press ${replyKey} to reply to the newest by voice` : ""
+      }. Start any dictation with "to ${newestAgent.folder}," to send it there.`
     : undefined;
   const agentPill =
     newestAgent && phase === "idle" && !flashing ? (
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-full bg-info/20 px-2 py-0.5 text-left text-xs font-medium text-info hover:bg-info/30"
-        onClick={() => focusAgent(newestAgent)}
+        onClick={() => openAgent(newestAgent)}
         title={agentTitle}
         data-testid="agent-pill"
       >
         <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-info motion-reduce:animate-none" />
         <span className="truncate">
-          Claude is waiting · {newestAgent.folder}
+          {newestAgent.agent || "Claude"} is waiting · {newestAgent.folder}
           {waiting.length > 1 ? ` +${waiting.length - 1}` : ""}
         </span>
       </button>
@@ -1281,7 +1292,11 @@ function WidgetView() {
         (detectedCall && mode === "minimal"
           ? `Record ${detectedCall.app_name}? Click to start meeting recording`
           : null) ??
-        (newestAgent && mode === "minimal" ? `Claude is waiting · ${newestAgent.folder}` : null) ??
+        (newestAgent && mode === "minimal"
+          ? `${newestAgent.agent || "Claude"} is waiting · ${newestAgent.folder}${
+              waiting.length > 1 ? ` +${waiting.length - 1}` : ""
+            }`
+          : null) ??
         (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel)
       }
     >

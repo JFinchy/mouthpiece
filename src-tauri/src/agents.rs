@@ -7,6 +7,14 @@
 //! processes), keeps a short queue of waiting agents, and shows a pill in the
 //! widget. The reply shortcut records a dictation, then hops to the agent's
 //! window, pastes, and hops back.
+//!
+//! Several agents can wait at once. Saying an agent's folder name first
+//! ("to esc pause, rerun the tests") sends a dictation to that agent instead
+//! (see `address.rs`), and Orca, iTerm2 and Terminal panes are reached
+//! exactly rather than by window title (see `targets.rs`).
+
+mod address;
+pub mod targets;
 
 use serde::Serialize;
 use std::sync::Mutex;
@@ -19,6 +27,10 @@ use crate::config::{self, ShortcutConfig};
 /// A waiting agent is forgotten after this long without an update.
 const EXPIRY_MS: u64 = 30 * 60 * 1000;
 const MAX_WAITING: usize = 8;
+/// Agents that can be addressed by name: any heard from in this long, even
+/// if they're busy rather than waiting.
+const RECENT_EXPIRY_MS: u64 = 6 * 60 * 60 * 1000;
+const MAX_RECENT: usize = 16;
 const MAX_MESSAGE_CHARS: usize = 160;
 /// Longest wait for the agent's app to become frontmost before giving up.
 const ACTIVATE_POLLS: u32 = 24;
@@ -53,6 +65,10 @@ pub struct WaitingAgent {
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
     pub tty: Option<String>,
+    /// Orca's handle for the agent's terminal pane, when it runs in Orca.
+    pub orca_terminal: Option<String>,
+    /// Which agent it is, for display: "Claude", "Codex", "Gemini"…
+    pub agent: String,
     pub received_ms: u64,
 }
 
@@ -70,6 +86,10 @@ pub struct Report {
     /// `__CFBundleIdentifier` of the hook's environment.
     pub bundle: Option<String>,
     pub term_program: Option<String>,
+    /// `$ORCA_TERMINAL_HANDLE` of the hook's environment.
+    pub orca_terminal: Option<String>,
+    /// Which agent sent it (`agent=` in the link); Claude Code when absent.
+    pub agent: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +99,20 @@ pub enum LinkEvent {
     Resumed {
         session_id: String,
     },
+}
+
+/// Display name for the `agent=` value the hook scripts send.
+pub fn agent_display_name(id: &str) -> String {
+    match id.to_ascii_lowercase().as_str() {
+        "" | "claude" | "claude-code" => "Claude",
+        "codex" => "Codex",
+        "gemini" => "Gemini",
+        "opencode" => "OpenCode",
+        "aider" => "Aider",
+        "cursor" => "Cursor",
+        _ => "Agent",
+    }
+    .to_string()
 }
 
 fn folder_name(cwd: &str) -> String {
@@ -139,6 +173,10 @@ pub fn parse_link(url: &tauri::Url) -> Result<LinkEvent, String> {
                 pid: get("pid").and_then(|p| p.parse().ok()).filter(|p| *p > 1),
                 bundle: get("bundle").map(str::to_string),
                 term_program: get("term").map(str::to_string),
+                orca_terminal: get("orca")
+                    .filter(|h| targets::valid_orca_handle(h))
+                    .map(str::to_string),
+                agent: agent_display_name(get("agent").unwrap_or_default()),
             }))
         }
         other => Err(format!("unrecognized agent action {other:?}")),
@@ -149,8 +187,11 @@ pub fn parse_link(url: &tauri::Url) -> Result<LinkEvent, String> {
 
 #[derive(Default)]
 pub struct AgentQueue {
-    /// Newest first.
+    /// Waiting for the user, newest first.
     items: Vec<WaitingAgent>,
+    /// Every agent heard from recently, waiting or not, newest first: the
+    /// ones that can be addressed by name.
+    recent: Vec<WaitingAgent>,
 }
 
 impl AgentQueue {
@@ -170,20 +211,52 @@ impl AgentQueue {
             }
             None => true,
         };
+        self.recent.retain(|a| a.session_id != agent.session_id);
+        self.recent.insert(0, agent.clone());
+        self.recent.truncate(MAX_RECENT);
         self.items.insert(0, agent);
         self.items.truncate(MAX_WAITING);
         changed
     }
 
+    /// No longer waiting (answered, or the user typed in the terminal). It
+    /// stays addressable by name.
     pub fn remove(&mut self, session_id: &str) -> bool {
         let before = self.items.len();
         self.items.retain(|a| a.session_id != session_id);
         self.items.len() != before
     }
 
+    /// Marks an agent as just heard from, keeping it addressable.
+    pub fn touch(&mut self, session_id: &str, now_ms: u64) {
+        if let Some(agent) = self.recent.iter_mut().find(|a| a.session_id == session_id) {
+            agent.received_ms = now_ms;
+        }
+    }
+
     pub fn prune(&mut self, now_ms: u64) {
         self.items
             .retain(|a| now_ms.saturating_sub(a.received_ms) < EXPIRY_MS);
+        self.recent
+            .retain(|a| now_ms.saturating_sub(a.received_ms) < RECENT_EXPIRY_MS);
+    }
+
+    /// Agents that can be addressed by name, newest first.
+    pub fn known(&mut self, now_ms: u64) -> Vec<WaitingAgent> {
+        self.prune(now_ms);
+        self.recent.clone()
+    }
+
+    /// The agent a dictation starting with its name is for, and the rest of
+    /// the dictation. Newest wins when two sessions share a folder.
+    pub fn address(&mut self, text: &str, now_ms: u64) -> Option<(WaitingAgent, String)> {
+        let known = self.known(now_ms);
+        if known.is_empty() {
+            return None;
+        }
+        let folders: Vec<String> = known.iter().map(|a| a.folder.clone()).collect();
+        let hit = address::find(text, &folders)?;
+        Some((known[hit.index].clone(), hit.rest))
     }
 
     pub fn list(&mut self, now_ms: u64) -> Vec<WaitingAgent> {
@@ -409,6 +482,12 @@ impl AgentState {
         self.pending_reply.lock().unwrap().take()
     }
 
+    /// If `text` starts by naming an agent ("to esc pause, ..."), that agent
+    /// and the rest of the text.
+    pub fn address(&self, text: &str) -> Option<(WaitingAgent, String)> {
+        self.queue.lock().unwrap().address(text, now_ms())
+    }
+
     pub fn is_reply_shortcut(&self, triggered: &tauri_plugin_global_shortcut::Shortcut) -> bool {
         crate::shortcut::to_shortcut(&self.shortcut.lock().unwrap()).is_ok_and(|s| s == *triggered)
     }
@@ -571,12 +650,12 @@ pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
     let app = app.clone();
     std::thread::spawn(move || match event {
         LinkEvent::Resumed { session_id } => {
-            let removed = app
-                .state::<AgentState>()
-                .queue
-                .lock()
-                .unwrap()
-                .remove(&session_id);
+            let removed = {
+                let state = app.state::<AgentState>();
+                let mut queue = state.queue.lock().unwrap();
+                queue.touch(&session_id, now_ms());
+                queue.remove(&session_id)
+            };
             if removed {
                 crate::applog!("agents: {session_id} resumed");
                 emit_changed(&app);
@@ -591,9 +670,11 @@ pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
             );
             let folder = folder_name(&report.cwd);
             crate::applog!(
-                "agents: waiting session={} folder={folder} kind={:?} app={:?}",
+                "agents: waiting session={} agent={} folder={folder} kind={:?} orca={} app={:?}",
                 report.session_id,
+                report.agent,
                 report.kind,
+                report.orca_terminal.is_some(),
                 owner.as_ref().map(|o| (&o.name, o.pid))
             );
             let agent = WaitingAgent {
@@ -606,6 +687,8 @@ pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
                 bundle_id: owner.as_ref().map(|o| o.bundle_id.clone()),
                 app_name: owner.as_ref().map(|o| o.name.clone()),
                 tty: owner.and_then(|o| o.tty),
+                orca_terminal: report.orca_terminal,
+                agent: report.agent,
                 received_ms: now_ms(),
             };
             let notify = app
@@ -667,6 +750,40 @@ pub fn reply_hotkey(app: &AppHandle) {
     }
 }
 
+/// Answered, so it stops showing as waiting (it stays addressable).
+fn mark_answered(app: &AppHandle, session_id: &str) {
+    let removed = app
+        .state::<AgentState>()
+        .queue
+        .lock()
+        .unwrap()
+        .remove(session_id);
+    if removed {
+        emit_changed(app);
+    }
+}
+
+/// Starts a reply by voice to one particular waiting agent (the widget's
+/// agent menu). The dictation shortcut or the reply shortcut stops it.
+pub fn reply_to(app: &AppHandle, session_id: &str) {
+    use crate::capture::{CaptureState, Request, Trigger};
+    let recording = app.state::<crate::recording::RecordingState>();
+    if !matches!(recording.capture.state(), CaptureState::Idle) {
+        return;
+    }
+    let state = app.state::<AgentState>();
+    let Some(target) = state.queue.lock().unwrap().get(session_id, now_ms()) else {
+        let _ = app.emit("transcript-error", "That agent is no longer waiting.".to_string());
+        return;
+    };
+    crate::applog!("agents: recording a reply for {} (picked)", target.folder);
+    *state.pending_reply.lock().unwrap() = Some(target);
+    crate::recording::request_dictation(app, Request::StartDictation(Trigger::Hotkey));
+    if !matches!(recording.capture.state(), CaptureState::Dictating { .. }) {
+        state.take_pending_reply();
+    }
+}
+
 pub struct ReplyOutcome {
     pub result: Result<(), String>,
     /// Shown in the widget.
@@ -714,6 +831,34 @@ pub fn deliver_reply(
     if copy_only {
         return copied(text, "Copy only is on, so nothing was sent.".into());
     }
+    // In Orca the reply is typed straight into the agent's pane: exact, and
+    // focus never moves.
+    if let Some(handle) = &target.orca_terminal {
+        match targets::orca_send(handle, text, press_enter) {
+            Ok(()) => {
+                crate::applog!(
+                    "agents: reply sent through Orca to {} in {}ms",
+                    target.folder,
+                    started.elapsed().as_millis()
+                );
+                if press_enter {
+                    mark_answered(app, &target.session_id);
+                }
+                return ReplyOutcome {
+                    result: Ok(()),
+                    notice: if press_enter {
+                        format!("Sent to {} in Orca", target.folder)
+                    } else {
+                        format!("Typed into {} in Orca. Press Return there to send.", target.folder)
+                    },
+                    copied: false,
+                };
+            }
+            Err(why) => {
+                crate::applog!("agents: Orca couldn't take the reply ({why}), trying its window");
+            }
+        }
+    }
     let Some(pid) = target.app_pid else {
         return copied(
             text,
@@ -728,14 +873,33 @@ pub fn deliver_reply(
 
     let (folder, tty) = (target.folder.clone(), target.tty.clone());
     let choice = std::cell::Cell::new(None);
-    let raised = crate::focus::raise_chosen(pid, &|titles| {
-        let picked = choose_window(titles, &folder, tty.as_deref())?;
-        let index = match &picked {
-            WindowChoice::Tty(i) | WindowChoice::Match(i) | WindowChoice::Only(i) => *i,
-        };
-        choice.set(Some(picked));
-        Ok(index)
-    });
+    // iTerm2 and Terminal can select the agent's own tab by its tty, which
+    // confirms the tab as well as the window.
+    let tab_selected = match (target.bundle_id.as_deref(), tty.as_deref()) {
+        (Some(bundle), Some(tty)) if targets::can_select_by_tty(bundle) => {
+            match targets::select_tab(bundle, tty) {
+                Ok(()) => true,
+                Err(why) => {
+                    crate::applog!("agents: couldn't select the tab by tty ({why}), using window titles");
+                    false
+                }
+            }
+        }
+        _ => false,
+    };
+    let raised = if tab_selected {
+        choice.set(Some(WindowChoice::Tty(0)));
+        Ok(String::new())
+    } else {
+        crate::focus::raise_chosen(pid, &|titles| {
+            let picked = choose_window(titles, &folder, tty.as_deref())?;
+            let index = match &picked {
+                WindowChoice::Tty(i) | WindowChoice::Match(i) | WindowChoice::Only(i) => *i,
+            };
+            choice.set(Some(picked));
+            Ok(index)
+        })
+    };
     let title = match raised {
         Ok(title) => title,
         Err(why) => {
@@ -765,7 +929,8 @@ pub fn deliver_reply(
     }
     std::thread::sleep(SETTLE_AFTER_RAISE);
     let kind = choice.take().unwrap_or(WindowChoice::Only(0));
-    if matches!(kind, WindowChoice::Tty(_) | WindowChoice::Match(_))
+    if !tab_selected
+        && matches!(kind, WindowChoice::Tty(_) | WindowChoice::Match(_))
         && crate::focus::focused_window_title(pid).is_some_and(|now| now != title)
     {
         if let Some(snapshot) = &previous {
@@ -807,13 +972,7 @@ pub fn deliver_reply(
     );
 
     if delivered.is_ok() && !hold {
-        // Answered, so it stops showing as waiting.
-        app.state::<AgentState>()
-            .queue
-            .lock()
-            .unwrap()
-            .remove(&target.session_id);
-        emit_changed(app);
+        mark_answered(app, &target.session_id);
     }
 
     let notice = match delivered {
@@ -843,6 +1002,13 @@ pub fn get_waiting_agents(state: tauri::State<AgentState>) -> Vec<WaitingAgent> 
     state.queue.lock().unwrap().list(now_ms())
 }
 
+/// Agents heard from in the last few hours, waiting or not: the ones a
+/// dictation can address by folder name.
+#[tauri::command]
+pub fn get_known_agents(state: tauri::State<AgentState>) -> Vec<WaitingAgent> {
+    state.queue.lock().unwrap().known(now_ms())
+}
+
 #[tauri::command]
 pub fn dismiss_waiting_agent(app: AppHandle, session_id: String) {
     app.state::<AgentState>()
@@ -865,6 +1031,21 @@ pub fn focus_waiting_agent(app: AppHandle, session_id: String) -> Result<String,
         .get(&session_id, now_ms())
         .ok_or("That agent is no longer waiting.")?;
     let app_label = target.app_name.clone().unwrap_or_else(|| "its app".into());
+    if let Some(handle) = &target.orca_terminal {
+        match targets::orca_switch(handle) {
+            Ok(()) => {
+                crate::applog!("agents: focused {} in Orca", target.folder);
+                return Ok("Orca".to_string());
+            }
+            Err(why) => crate::applog!("agents: Orca couldn't switch ({why}), trying its window"),
+        }
+    }
+    if let (Some(bundle), Some(tty)) = (target.bundle_id.as_deref(), target.tty.as_deref()) {
+        if targets::can_select_by_tty(bundle) && targets::select_tab(bundle, tty).is_ok() {
+            crate::applog!("agents: focused {} in {app_label} by tty", target.folder);
+            return Ok(app_label);
+        }
+    }
     let pid = target
         .app_pid
         .ok_or_else(|| format!("Couldn't tell which app {} runs in.", target.folder))?;
@@ -941,6 +1122,18 @@ pub fn get_agent_sound_enabled(app: AppHandle) -> bool {
 pub fn set_agent_sound_enabled(app: AppHandle, enabled: bool) {
     let mut cfg = config::load(&app);
     cfg.agent_sound_enabled = enabled;
+    let _ = config::save(&app, &cfg);
+}
+
+#[tauri::command]
+pub fn get_agent_addressing_enabled(app: AppHandle) -> bool {
+    config::load(&app).agent_addressing_enabled
+}
+
+#[tauri::command]
+pub fn set_agent_addressing_enabled(app: AppHandle, enabled: bool) {
+    let mut cfg = config::load(&app);
+    cfg.agent_addressing_enabled = enabled;
     let _ = config::save(&app, &cfg);
 }
 

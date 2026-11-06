@@ -14,6 +14,9 @@ const NEXT: &str = "next:";
 const NEXT_AUTO: &str = "next-auto";
 const STYLE: &str = "widget-style:";
 const SETTINGS: &str = "widget-settings";
+const AGENT_REPLY: &str = "agent-reply:";
+const AGENT_FOCUS: &str = "agent-focus:";
+const AGENT_DISMISS: &str = "agent-dismiss:";
 
 fn err(e: tauri::Error) -> String {
     e.to_string()
@@ -64,6 +67,69 @@ fn mic_items(app: &AppHandle) -> Result<Vec<Box<dyn IsMenuItem<Wry>>>, String> {
     Ok(items)
 }
 
+/// "esc-pause · Needs input · Claude in Orca · 2 min ago".
+fn agent_label(agent: &crate::agents::WaitingAgent, now_ms: u64) -> String {
+    let what = match agent.kind {
+        crate::agents::Kind::Done => "Finished".to_string(),
+        crate::agents::Kind::NeedsInput if agent.message.is_empty() => "Needs your input".to_string(),
+        crate::agents::Kind::NeedsInput => agent.message.chars().take(50).collect(),
+    };
+    let place = match (&agent.orca_terminal, &agent.app_name) {
+        (Some(_), _) => format!("{} in Orca", agent.agent),
+        (None, Some(app)) => format!("{} in {app}", agent.agent),
+        (None, None) => agent.agent.clone(),
+    };
+    let minutes = now_ms.saturating_sub(agent.received_ms) / 60_000;
+    let age = if minutes < 1 { "just now".to_string() } else { format!("{minutes} min ago") };
+    format!("{} · {what} · {place} · {age}", agent.folder)
+}
+
+/// One submenu per waiting agent: reply by voice, go to it, dismiss.
+fn agent_submenus(app: &AppHandle) -> Result<Vec<Submenu<Wry>>, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let agents = crate::agents::get_waiting_agents(app.state());
+    let mut out = Vec::new();
+    for agent in agents {
+        let sub = Submenu::new(app, agent_label(&agent, now), true).map_err(err)?;
+        let id = &agent.session_id;
+        sub.append(
+            &MenuItem::with_id(app, format!("{AGENT_REPLY}{id}"), "Reply by voice", true, None::<&str>)
+                .map_err(err)?,
+        )
+        .map_err(err)?;
+        sub.append(
+            &MenuItem::with_id(app, format!("{AGENT_FOCUS}{id}"), "Go to it", true, None::<&str>)
+                .map_err(err)?,
+        )
+        .map_err(err)?;
+        sub.append(
+            &MenuItem::with_id(app, format!("{AGENT_DISMISS}{id}"), "Dismiss", true, None::<&str>)
+                .map_err(err)?,
+        )
+        .map_err(err)?;
+        out.push(sub);
+    }
+    Ok(out)
+}
+
+/// The waiting agents, newest first (the widget's agent pill).
+#[tauri::command]
+pub fn show_agents_menu(window: tauri::Window) -> Result<(), String> {
+    let app = window.app_handle();
+    let menu = Menu::new(app).map_err(err)?;
+    menu.append(&heading(app, "Waiting agents")?).map_err(err)?;
+    for sub in agent_submenus(app)? {
+        menu.append(&sub).map_err(err)?;
+    }
+    menu.append(&separator(app)?).map_err(err)?;
+    menu.append(&heading(app, "Or say \"to <folder>, …\" in any dictation")?)
+        .map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
 fn append_all(menu: &Menu<Wry>, items: &[Box<dyn IsMenuItem<Wry>>]) -> Result<(), String> {
     for item in items {
         menu.append(item.as_ref()).map_err(err)?;
@@ -79,6 +145,15 @@ pub fn show_widget_menu(window: tauri::Window) -> Result<(), String> {
     let cfg = crate::config::load(app);
     let state = app.state::<RecordingState>();
     let menu = Menu::new(app).map_err(err)?;
+
+    let agents = agent_submenus(app)?;
+    if !agents.is_empty() {
+        menu.append(&heading(app, "Waiting agents")?).map_err(err)?;
+        for sub in &agents {
+            menu.append(sub).map_err(err)?;
+        }
+        menu.append(&separator(app)?).map_err(err)?;
+    }
 
     menu.append(&heading(app, "Microphone")?).map_err(err)?;
     append_all(&menu, &mic_items(app)?)?;
@@ -179,6 +254,17 @@ pub fn handle(app: &AppHandle, id: &str) {
         .and_then(crate::widget::WidgetMode::from_id)
     {
         crate::widget::set_mode(app, style);
+    } else if let Some(session) = id.strip_prefix(AGENT_REPLY) {
+        crate::agents::reply_to(app, session);
+    } else if let Some(session) = id.strip_prefix(AGENT_FOCUS) {
+        let (app, session) = (app.clone(), session.to_string());
+        std::thread::spawn(move || {
+            if let Err(err) = crate::agents::focus_waiting_agent(app.clone(), session) {
+                let _ = app.emit("transcript-error", err);
+            }
+        });
+    } else if let Some(session) = id.strip_prefix(AGENT_DISMISS) {
+        crate::agents::dismiss_waiting_agent(app.clone(), session.to_string());
     } else if id == SETTINGS {
         let _ = crate::open_settings(app.clone());
     }

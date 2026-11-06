@@ -16,6 +16,10 @@ export type WaitingAgent = {
   bundle_id: string | null;
   app_name: string | null;
   tty: string | null;
+  /// Orca's handle for the agent's terminal pane, when it runs in Orca.
+  orca_terminal: string | null;
+  /// "Claude", "Codex", "Gemini"…
+  agent: string;
   received_ms: number;
 };
 
@@ -119,6 +123,79 @@ function SoundToggle() {
   );
 }
 
+/// How a folder name is said: "dev-whisper-esc-pause" -> "dev whisper esc pause".
+export function spokenFolder(folder: string): string {
+  return folder
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function Addressing() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [known, setKnown] = useState<WaitingAgent[]>([]);
+
+  useEffect(() => {
+    invoke<boolean>("get_agent_addressing_enabled")
+      .then(setEnabled)
+      .catch((err) => notifyError("get_agent_addressing_enabled", err));
+    const load = () =>
+      invoke<WaitingAgent[]>("get_known_agents")
+        .then(setKnown)
+        .catch((err) => notifyError("get_known_agents", err));
+    load();
+    const unlisten = listen("agents-changed", load);
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  function toggle(next: boolean) {
+    setEnabled(next);
+    invoke("set_agent_addressing_enabled", { enabled: next }).catch((err) => {
+      notifyError("set_agent_addressing_enabled", err);
+      setEnabled(!next);
+    });
+  }
+
+  if (enabled === null) return null;
+  const example = known[0] ? spokenFolder(known[0].folder) : "esc pause";
+  return (
+    <div className="rounded-lg border border-base-content/10 bg-base-100 p-4" data-testid="agent-addressing">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Talk to an agent by name</h3>
+      <label className="flex items-center gap-1.5 text-xs">
+        <input
+          type="checkbox"
+          className="checkbox checkbox-xs"
+          checked={enabled}
+          onChange={(e) => toggle(e.target.checked)}
+          data-testid="agent-addressing-toggle"
+        />
+        Send a dictation to an agent when it starts with the agent's folder name
+      </label>
+      <p className="mt-1.5 text-xs opacity-60">
+        Say "to {example}, rerun the tests, send it" or "tell {example} to commit" with your normal dictation shortcut,
+        from any app. The end of the folder name is enough when it's unique. Agents can be named for 6 hours after their
+        hook last fired, whether or not they're waiting.
+      </p>
+      {known.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="known-agents">
+          {known.map((agent) => (
+            <li
+              key={agent.session_id}
+              className="rounded-full bg-base-300/60 px-2 py-0.5 text-[11px]"
+              title={`${agent.agent} in ${agent.orca_terminal ? "Orca" : (agent.app_name ?? "an unknown app")} · ${agent.cwd}`}
+            >
+              “to {spokenFolder(agent.folder)}”
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function HookSnippet() {
   const [hook, setHook] = useState<HookConfig | null>(null);
   const [copied, setCopied] = useState(false);
@@ -218,7 +295,8 @@ function WaitingList() {
                 <div className="truncate font-medium">
                   {agent.folder}
                   <span className="ml-1.5 font-normal opacity-60">
-                    {agent.app_name ?? "app unknown"} · {ageLabel(agent.received_ms, now)}
+                    {agent.agent || "Claude"} in {agent.orca_terminal ? "Orca" : (agent.app_name ?? "an unknown app")} ·{" "}
+                    {ageLabel(agent.received_ms, now)}
                   </span>
                 </div>
                 <div className="truncate opacity-60" title={agent.message}>
@@ -243,11 +321,14 @@ export function AgentsSection() {
   return (
     <div className="flex flex-col gap-3" data-testid="agents-section">
       <p className="text-xs opacity-70">
-        When a Claude Code agent finishes or asks for permission, Mouthpiece shows a pill in the widget. Press the reply
-        shortcut, say your answer, and it is pasted into that agent's window and you are returned to what you were doing.
+        When a coding agent finishes or asks for permission, Mouthpiece shows a pill in the widget. Press the reply
+        shortcut, say your answer, and it is pasted into that agent's terminal and you are returned to what you were
+        doing. With several agents waiting, click the pill to pick one, or start any dictation with an agent's folder
+        name.
       </p>
       <HookSnippet />
       <ReplyShortcut />
+      <Addressing />
       <div className="rounded-lg border border-base-content/10 bg-base-100 p-4">
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Notice</h3>
         <SoundToggle />
@@ -257,12 +338,17 @@ export function AgentsSection() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">What it can and can't do</h3>
         <ul className="list-disc space-y-1 pl-4 text-xs opacity-70">
           <li>
-            Finds the agent's window by looking for its folder name in window titles. VS Code, Cursor and Terminal usually
-            show it; iTerm, Orca, Warp and others often don't.
+            In Orca, the reply is typed straight into the agent's pane through Orca's command-line tool. Your window doesn't
+            change.
           </li>
           <li>
-            When titles don't say, a reply is sent only if the app has a single window. Tabs and split panes inside a window
-            can't be selected, so make sure the agent's tab is the one showing.
+            In iTerm2 and Terminal, the agent's own tab is selected by its terminal device. macOS asks once to let
+            Mouthpiece control the app (Privacy &amp; Security &gt; Automation).
+          </li>
+          <li>
+            Elsewhere it finds the agent's window by looking for its folder name in window titles. VS Code and Cursor
+            usually show it; Warp and others often don't. When titles don't say, a reply is sent only if the app has a
+            single window, so make sure the agent's tab is the one showing.
           </li>
           <li>
             If it can't be sure, the reply is copied to the clipboard instead and the widget says so. It never pastes into

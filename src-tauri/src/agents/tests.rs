@@ -13,6 +13,8 @@ fn report(pid: Option<i32>) -> Report {
         pid,
         bundle: None,
         term_program: None,
+        orca_terminal: None,
+        agent: "Claude".into(),
     }
 }
 
@@ -27,6 +29,8 @@ fn agent(session: &str, received_ms: u64) -> WaitingAgent {
         bundle_id: None,
         app_name: None,
         tty: None,
+        orca_terminal: None,
+        agent: "Claude".into(),
         received_ms,
     }
 }

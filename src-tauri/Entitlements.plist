@@ -16,6 +16,10 @@
     libraries (ONNX Runtime and whisper.cpp are static), so there are no
     third-party dylibs to validate. If a bundled .dylib/.framework is ever
     added it must be signed with the same identity, or loading fails.
+  - automation.apple-events: lets a reply select the agent's own tab in
+    iTerm2 or Terminal by its tty (agents/targets.rs). macOS still asks
+    the user once per app; without this key a hardened app is refused
+    silently.
   - No allow-dyld-environment-variables / get-task-allow: those are the
     injection paths this exists to close.
 
@@ -25,6 +29,8 @@
 <plist version="1.0">
 <dict>
   <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <key>com.apple.security.automation.apple-events</key>
   <true/>
 </dict>
 </plist>

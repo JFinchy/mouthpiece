@@ -11,6 +11,8 @@ const agent = (over: Record<string, unknown> = {}) => ({
   bundle_id: "com.apple.Terminal",
   app_name: "Terminal",
   tty: "ttys004",
+  orca_terminal: null,
+  agent: "Claude",
   received_ms: Date.now() - 2 * 60_000,
   ...over,
 });
@@ -39,9 +41,20 @@ test.describe("coding agents: widget", () => {
     await expect.poll(() => calls(page, "focus_waiting_agent")).toEqual([{ sessionId: "s1" }]);
   });
 
-  test("several agents show the newest and a count", async ({ page, consoleErrors: _ }) => {
+  test("several agents show the newest and a count, and the pill lists them", async ({ page, consoleErrors: _ }) => {
     await open(page, "widget", { agents: [agent({ session_id: "b", folder: "api" }), agent()] });
-    await expect(page.getByTestId("agent-pill")).toHaveText("Claude is waiting · api +1");
+    const pill = page.getByTestId("agent-pill");
+    await expect(pill).toHaveText("Claude is waiting · api +1");
+    await expect(pill).toHaveAttribute("title", /2 agents are waiting.*"to api,"/);
+    await pill.hover();
+    await pill.click();
+    await expect.poll(() => calls(page, "show_agents_menu")).toHaveLength(1);
+    expect(await calls(page, "focus_waiting_agent")).toEqual([]);
+  });
+
+  test("names the agent that is waiting", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget", { agents: [agent({ agent: "Codex", orca_terminal: "term_abc" })] });
+    await expect(page.getByTestId("agent-pill")).toHaveText("Codex is waiting · dev-whisper");
   });
 
   test("the pill goes away once the agent is answered", async ({ page, consoleErrors: _ }) => {
@@ -96,7 +109,7 @@ test.describe("coding agents: settings", () => {
     const rows = page.getByTestId("agent-row");
     await expect(rows).toHaveCount(2);
     await expect(rows.first()).toContainText("dev-whisper");
-    await expect(rows.first()).toContainText("Terminal · 2 min ago");
+    await expect(rows.first()).toContainText("Claude in Terminal · 2 min ago");
     await expect(rows.nth(1)).toContainText("Finished");
 
     await rows.first().getByRole("button", { name: "Go to window" }).click();
@@ -105,6 +118,18 @@ test.describe("coding agents: settings", () => {
     await rows.first().getByRole("button", { name: /Dismiss/ }).click();
     await expect.poll(() => calls(page, "dismiss_waiting_agent")).toEqual([{ sessionId: "s1" }]);
     await expect(rows).toHaveCount(1);
+  });
+
+  test("agents can be addressed by their spoken folder names", async ({ page, consoleErrors: _ }) => {
+    await openAgents(page, {
+      agents: [agent({ folder: "dev-whisper-esc-pause", orca_terminal: "term_x" }), agent({ session_id: "s2", folder: "apiServer" })],
+    });
+    const card = page.getByTestId("agent-addressing");
+    await expect(card).toContainText('Say "to dev whisper esc pause, rerun the tests, send it"');
+    await expect(page.getByTestId("known-agents")).toContainText("“to dev whisper esc pause”");
+    await expect(page.getByTestId("known-agents")).toContainText("“to api server”");
+    await page.getByTestId("agent-addressing-toggle").uncheck();
+    await expect.poll(() => calls(page, "set_agent_addressing_enabled")).toEqual([{ enabled: false }]);
   });
 
   test("the sound toggle and the reply shortcut are saved", async ({ page, consoleErrors: _ }) => {
