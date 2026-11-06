@@ -119,6 +119,9 @@ pub struct Formatted {
     /// "Attach the error" was spoken; the caller appends the most recent
     /// error output as a fenced block (reading it is a side effect).
     pub attach_error: bool,
+    /// "Attach the selection / the diff", "look at this": what else the
+    /// caller appends (see `attachments.rs`), in spoken order.
+    pub attachments: Vec<crate::attachments::Kind>,
     /// The whole dictation was "scratch that" / "undo that": no text, the
     /// caller undoes the last paste instead.
     pub undo_last: bool,
@@ -184,6 +187,7 @@ pub fn format_in_project(
             press_enter: false,
             append_clipboard: false,
             attach_error: false,
+            attachments: Vec::new(),
             undo_last: true,
             features_used: vec!["undo".to_string()],
             spoken_words: Some(0),
@@ -246,9 +250,21 @@ pub fn format_in_project(
     // "Attach the error": stripped the same way, after "press enter" (the
     // later-spoken phrase goes first). Always on: the phrases are
     // deliberate, and nothing happens beyond appending a block.
+    // Other attachments ("look at this, attach the diff") can sit on
+    // either side of "attach the error", so strip them before and after.
+    let (text, mut attachments) = crate::attachments::extract(&text);
     let (text, should_attach_error) = crate::error_context::try_extract_trigger(&text);
+    let (text, earlier) = crate::attachments::extract(&text);
+    let earlier: Vec<_> = earlier.into_iter().filter(|k| !attachments.contains(k)).collect();
+    attachments.splice(0..0, earlier);
     if should_attach_error {
         features_used.push("attach_error".to_string());
+    }
+    for kind in &attachments {
+        let feature = kind.feature().to_string();
+        if !features_used.contains(&feature) {
+            features_used.push(feature);
+        }
     }
 
     // Word count of what was actually spoken, captured here (post
@@ -449,6 +465,7 @@ pub fn format_in_project(
         press_enter: should_press_enter,
         append_clipboard: should_append_clipboard,
         attach_error: should_attach_error,
+        attachments,
         undo_last: false,
         features_used,
         spoken_words,
@@ -484,6 +501,8 @@ mod golden {
         expect_press_enter: Option<bool>,
         expect_append_clipboard: Option<bool>,
         expect_attach_error: Option<bool>,
+        /// e.g. ["screenshot", "diff"], in spoken order.
+        expect_attachments: Option<Vec<String>>,
         expect_undo_last: Option<bool>,
         expect_llm_called: Option<bool>,
         /// Names in the dictated-into project, as `"file:src/paste.rs"` /
@@ -536,6 +555,7 @@ mod golden {
             name: "fake".into(),
             index,
             terms,
+            root: "/fake".into(),
         })
     }
 
@@ -663,6 +683,16 @@ mod golden {
                         "append_clipboard {}, expected {append}",
                         out.append_clipboard
                     ));
+                }
+            }
+            if let Some(expected) = &case.expect_attachments {
+                let got: Vec<String> = out
+                    .attachments
+                    .iter()
+                    .map(|k| format!("{k:?}").to_lowercase())
+                    .collect();
+                if &got != expected {
+                    failures.push(format!("{}: attachments {got:?}, expected {expected:?}", case.name));
                 }
             }
             if let Some(attach) = case.expect_attach_error {

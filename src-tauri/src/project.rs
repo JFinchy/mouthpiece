@@ -31,6 +31,8 @@ pub struct Project {
     pub index: NameIndex,
     /// The top names, for Whisper's prompt and the LLM.
     pub terms: Vec<String>,
+    /// The repo's folder ("attach the diff" runs git here).
+    pub root: PathBuf,
 }
 
 const TRACKED_FILE_CAP: usize = 20_000;
@@ -56,6 +58,11 @@ enum AppKind {
 /// "attach the error".
 pub fn is_terminal(bundle_id: &str) -> bool {
     classify(bundle_id) == Some(AppKind::Terminal)
+}
+
+/// A terminal or a code editor: where you talk to a coding agent.
+pub fn is_terminal_or_editor(bundle_id: &str) -> bool {
+    classify(bundle_id).is_some()
 }
 
 fn classify(bundle_id: &str) -> Option<AppKind> {
@@ -221,7 +228,12 @@ fn build_and_store(root: &Path) -> Option<Arc<Project>> {
         index.len(),
         started.elapsed().as_millis()
     );
-    let project = Arc::new(Project { name, index, terms });
+    let project = Arc::new(Project {
+        name,
+        index,
+        terms,
+        root: root.to_path_buf(),
+    });
     let mut st = state().lock().unwrap();
     st.indexes
         .insert(root.to_path_buf(), (project.clone(), Instant::now()));

@@ -45,6 +45,89 @@ pub const SCORE_TRACKED: u32 = 100;
 /// A name at or above this score is "recent" for tie-breaking.
 const RECENT_TIER: u32 = SCORE_BRANCH;
 
+// --- Line references --------------------------------------------------
+
+/// A file reference the matcher wrote: `@path`, or a path with a folder.
+fn is_path_token(word: &str) -> bool {
+    let core = word.trim_end_matches(|c: char| ",.;:!?)".contains(c));
+    (core.starts_with('@') && core.len() > 1) || (core.contains('/') && core.contains('.'))
+}
+
+/// A line number, with any punctuation after it.
+fn number_token(word: &str) -> Option<(&str, &str)> {
+    let end = word.find(|c: char| !c.is_ascii_digit()).unwrap_or(word.len());
+    let (digits, rest) = word.split_at(end);
+    (!digits.is_empty() && rest.chars().all(|c| ",.;:!?)".contains(c))).then_some((digits, rest))
+}
+
+fn is_word(word: &str, options: &[&str]) -> bool {
+    let w = word.trim_end_matches(',').to_ascii_lowercase();
+    options.contains(&w.as_str())
+}
+
+/// "line 42 of @src/paste.rs" and "@src/paste.rs, line 42" become
+/// `@src/paste.rs:42`; "lines 10 to 20 in …" becomes `…:10-20`.
+pub fn line_refs(text: &str) -> String {
+    let words: Vec<&str> = text.split(' ').collect();
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    // Reads "N" or "N to M" at `j`: (range text, trailing punctuation, next index).
+    let range_at = |j: usize| -> Option<(String, String, usize)> {
+        let (start, punct) = number_token(words.get(j)?)?;
+        if punct.is_empty() {
+            if let (Some(sep), Some(end_word)) = (words.get(j + 1), words.get(j + 2)) {
+                if is_word(sep, &["to", "through", "-"]) {
+                    if let Some((end, punct)) = number_token(end_word) {
+                        return Some((format!("{start}-{end}"), punct.to_string(), j + 3));
+                    }
+                }
+            }
+        }
+        Some((start.to_string(), punct.to_string(), j + 1))
+    };
+    while i < words.len() {
+        // line N [to M] of|in PATH
+        if is_word(words[i], &["line", "lines"]) {
+            if let Some((range, punct, j)) = range_at(i + 1) {
+                // "of the paste file" left "of the @path".
+                let at = if words.get(j + 1).is_some_and(|w| is_word(w, &["the"])) { j + 2 } else { j + 1 };
+                if punct.is_empty()
+                    && words.get(j).is_some_and(|w| is_word(w, &["of", "in"]))
+                    && words.get(at).is_some_and(|w| is_path_token(w))
+                {
+                    let path = words[at];
+                    let core_len = path.trim_end_matches(|c: char| ",.;:!?)".contains(c)).len();
+                    out.push(format!("{}:{range}{}", &path[..core_len], &path[core_len..]));
+                    i = at + 1;
+                    continue;
+                }
+            }
+        }
+        // PATH[,] [at|on] line N [to M]
+        if is_path_token(words[i]) {
+            let path = words[i];
+            let core_len = path.trim_end_matches(|c: char| ",.;:!?)".contains(c)).len();
+            let trailing = &path[core_len..];
+            if trailing.is_empty() || trailing == "," {
+                let mut j = i + 1;
+                if words.get(j).is_some_and(|w| is_word(w, &["at", "on"])) {
+                    j += 1;
+                }
+                if words.get(j).is_some_and(|w| is_word(w, &["line", "lines"])) {
+                    if let Some((range, punct, next)) = range_at(j + 1) {
+                        out.push(format!("{}:{range}{punct}", &path[..core_len]));
+                        i = next;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(words[i].to_string());
+        i += 1;
+    }
+    out.join(" ")
+}
+
 // --- Spoken forms -----------------------------------------------------
 
 /// The words someone would say for a name: `paste_text` -> [paste, text],
@@ -303,6 +386,9 @@ impl NameIndex {
             }
         }
         out.push_str(&tail_space(text));
+        if count > 0 {
+            out = line_refs(&out);
+        }
         (out, count)
     }
 
@@ -651,6 +737,27 @@ mod tests {
             run("look at file tagging dot rs, then paste dot rs."),
             "look at @src-tauri/src/file_tagging.rs, then @src-tauri/src/paste.rs."
         );
+    }
+
+    #[test]
+    fn line_numbers_join_the_file_reference() {
+        assert_eq!(run("look at line 42 of the paste file"), "look at @src-tauri/src/paste.rs:42");
+        assert_eq!(
+            run("check the paste file, line 7, it panics"),
+            "check the @src-tauri/src/paste.rs:7, it panics"
+        );
+        assert_eq!(
+            run("lines 10 to 20 in the paste file."),
+            "@src-tauri/src/paste.rs:10-20."
+        );
+        assert_eq!(run("the paste file at line 3"), "the @src-tauri/src/paste.rs:3");
+    }
+
+    #[test]
+    fn line_refs_leave_other_numbers_alone() {
+        assert_eq!(line_refs("line 42 of the poem"), "line 42 of the poem");
+        assert_eq!(line_refs("@a.rs has 3 lines"), "@a.rs has 3 lines");
+        assert_eq!(line_refs("@a.rs. Line 4 is fine"), "@a.rs. Line 4 is fine");
     }
 
     #[test]

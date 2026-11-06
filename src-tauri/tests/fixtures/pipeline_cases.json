@@ -163,6 +163,28 @@
     "expect_attach_error": false
   },
   {
+    "name": "look at this and attach the diff are stripped in spoken order",
+    "input": "Why is the header red, look at this, attach the diff.",
+    "mode": "plain",
+    "expect": "Why is the header red",
+    "expect_attachments": ["screenshot", "diff"]
+  },
+  {
+    "name": "attach the selection around attach the error",
+    "input": "Explain this, attach the selection, attach the error.",
+    "mode": "plain",
+    "expect": "Explain this",
+    "expect_attach_error": true,
+    "expect_attachments": ["selection"]
+  },
+  {
+    "name": "look at this in a sentence is ordinary text",
+    "input": "I will look at this tomorrow.",
+    "mode": "plain",
+    "expect": "I will look at this tomorrow.",
+    "expect_attachments": []
+  },
+  {
     "name": "standalone scratch that undoes the last paste",
     "input": "Scratch that.",
     "mode": "plain",

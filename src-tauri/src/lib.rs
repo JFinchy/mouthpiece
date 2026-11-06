@@ -1,6 +1,7 @@
 mod agents;
 mod ambient;
 mod app_detect;
+mod attachments;
 mod audio;
 mod backtrack;
 mod boilerplate;

@@ -612,6 +612,7 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
         press_enter: should_press_enter,
         append_clipboard: should_append_clipboard,
         attach_error: should_attach_error,
+        attachments,
         undo_last,
         features_used,
         spoken_words,
@@ -659,6 +660,18 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
         }
     } else {
         formatted
+    };
+
+    // "Attach the selection / the diff", "look at this": read now, before
+    // pasting moves anything, and appended in the order they were said.
+    let formatted = if attachments.is_empty() {
+        formatted
+    } else {
+        let (text, attach_note) = append_attachments(app, formatted, &attachments, &ctx);
+        if attach_note.is_some() {
+            note = attach_note;
+        }
+        text
     };
 
     // Applied uniformly after whichever branch above resolved
@@ -904,6 +917,64 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
             crate::sounds::play(app, crate::sounds::Cue::Error);
         }
     }
+}
+
+/// Reads and appends each requested attachment. Returns the text and, if
+/// something couldn't be attached, a note for the widget.
+fn append_attachments(
+    app: &AppHandle,
+    mut text: String,
+    kinds: &[crate::attachments::Kind],
+    ctx: &TranscriptContext,
+) -> (String, Option<&'static str>) {
+    use crate::attachments::{self as att, Kind};
+    let front = crate::app_detect::frontmost_bundle_and_pid_blocking(app);
+    let front_pid = front.as_ref().map(|(_, pid)| *pid);
+    let front_bundle = front.as_ref().map(|(b, _)| b.as_str());
+    let to_terminal = ctx.reply_target.is_some()
+        || front_bundle.is_some_and(crate::project::is_terminal);
+    let mut note = None;
+    for kind in kinds {
+        match kind {
+            Kind::Selection => match front_pid.and_then(crate::error_context::read_selected_text) {
+                Some(sel) => {
+                    crate::applog!("attach: selection, {} chars", sel.chars().count());
+                    text = att::fence(&text, &att::cap_selection(&sel), "");
+                }
+                None => note = Some("Nothing selected to attach"),
+            },
+            Kind::Diff | Kind::StagedDiff => {
+                let staged = *kind == Kind::StagedDiff;
+                match ctx.project.as_ref().map(|p| att::read_diff(&p.root, staged)) {
+                    Some(Ok(Some(diff))) => {
+                        crate::applog!("attach: diff, {} lines", diff.lines().count());
+                        text = att::fence(&text, &diff, "diff");
+                    }
+                    Some(Ok(None)) => note = Some("No changes to attach"),
+                    Some(Err(err)) => {
+                        crate::applog!("attach: diff failed: {err}");
+                        note = Some("Couldn't read the changes");
+                    }
+                    None => note = Some("No project found for the diff"),
+                }
+            }
+            Kind::Screenshot => match att::capture_window(front_pid, front_bundle) {
+                Ok(path) => {
+                    crate::applog!("attach: screenshot saved");
+                    text = att::screenshot_reference(&text, &path, to_terminal);
+                }
+                Err(err) => {
+                    crate::applog!("attach: screenshot failed: {err}");
+                    note = Some(if err.contains("Screen Recording") {
+                        "Allow Screen Recording for Mouthpiece to attach screenshots"
+                    } else {
+                        "Couldn't take the screenshot"
+                    });
+                }
+            },
+        }
+    }
+    (text, note)
 }
 
 /// The most recent error output, for "attach the error": the frontmost
