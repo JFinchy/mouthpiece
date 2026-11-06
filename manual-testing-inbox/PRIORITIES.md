@@ -51,6 +51,7 @@ place with a one-line note.
 - [ ] Settings layout toggle, About page, vocabulary books - see `settings-layout-toggle-about-vocab-books.md`
 - [ ] Settings visual cleanup - see `settings-dictation-cleanup.md`
 - [ ] Dictation page order + model speed/accuracy bars - see `dictation-reorder-model-bars.md`
+- [ ] Website: Features, Guides and Roadmap pages - see `website-feature-pages.md`
 
 ## Backlog (passed)
 

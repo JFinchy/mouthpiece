@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Features · Mouthpiece</title>
+  <meta name="description" content="Everything Mouthpiece does: names from your codebase, voice commands for coding agents, code-shaped output, local whisper.cpp dictation, meetings, local AI cleanup, privacy and automation.">
+  <meta property="og:title" content="Mouthpiece features">
+  <meta property="og:description" content="The voice interface for coding agents. It knows your codebase and runs on your Mac.">
+  <meta property="og:image" content="icon.png">
+  <meta name="theme-color" content="#0f1113">
+  <link rel="icon" href="icon.png">
+  <link rel="preload" href="fonts/bricolage-grotesque-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/ibm-plex-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="nav-pill">
+      <a class="brand" href="index.html" aria-label="Mouthpiece home">
+        <img src="icon.png" alt="" width="26" height="26">
+        <span>Mouthpiece</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span class="nav-toggle-bars" aria-hidden="true"><i></i><i></i></span>Menu</button>
+      <nav id="site-nav" aria-label="Site">
+        <a href="index.html">Home</a>
+        <a href="features.html" aria-current="page">Features</a>
+        <a href="guides.html">Guides</a>
+        <a href="roadmap.html">Roadmap</a>
+        <a href="https://github.com/JFinchy/mouthpiece">GitHub</a>
+        <a class="nav-dl" href="index.html#download">Download</a>
+      </nav>
+      <a class="btn btn-small" href="index.html#download">Download</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="page-hero">
+      <div class="wrap">
+        <p class="eyebrow">Features</p>
+        <h1>The voice interface for coding agents.</h1>
+        <p class="lede">It knows your codebase and runs on your Mac. Here's everything it does
+          between the key press and the paste, from your side of the microphone.</p>
+        <ul class="jump" aria-label="Jump to a section">
+          <li><a href="#codebase">Knows your codebase</a></li>
+          <li><a href="#agents">Built for coding agents</a></li>
+          <li><a href="#code">Code-shaped output</a></li>
+          <li><a href="#dictation">Dictation core</a></li>
+          <li><a href="#meetings">Meetings</a></li>
+          <li><a href="#local-ai">Local AI cleanup</a></li>
+          <li><a href="#privacy">Privacy &amp; security</a></li>
+          <li><a href="#automation">Automation</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Knows your codebase -->
+    <section class="feature" id="codebase" aria-labelledby="codebase-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Knows your codebase</p>
+          <h2 id="codebase-h">Say the name the way you'd say it out loud.</h2>
+          <p>In a terminal or editor, Mouthpiece finds the repo you're working in and reads its
+            names. Spoken names in your dictation become the real ones, with the file tag your
+            agent expects.</p>
+          <dl class="points">
+            <div>
+              <dt>Names from your project</dt>
+              <dd>Files, functions, packages, the branch and recent commits, read from the repo
+                behind the front terminal (its working directory) or editor (VS Code, Cursor, Zed,
+                JetBrains, Sublime). Kept in memory, refreshed in the background, never in the way
+                of a dictation.</dd>
+            </div>
+            <div>
+              <dt>Leaves prose alone</dt>
+              <dd>Exact matches first, then one slip in a long name. Ambiguous names, like two
+                <code>mod.rs</code> files, and ordinary words stay as you said them.</dd>
+            </div>
+            <div>
+              <dt>Developer vocabulary</dt>
+              <dd>An editable term list, plus vocabulary books you adopt in one click, so
+                <code>kubectl</code> and <code>Hammerspoon</code> come out right. The LLM sees
+                your terms too, so it won't "fix" them.</dd>
+            </div>
+            <div>
+              <dt>Learns from your corrections</dt>
+              <dd>Fix the same word twice in History and it offers to remember it: the term goes
+                in your vocabulary and a replacement rule runs on every later dictation.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › Vocabulary · <a href="guides.html#vocabulary">Vocabulary guide</a></p>
+        </div>
+        <div class="demo reveal">
+          <ul class="say" aria-label="Examples: what you say and what gets pasted">
+            <li>
+              <span class="ctx">Claude Code · in the mouthpiece repo</span>
+              <q>Look at the paste text function in the paste file.</q>
+              <span class="out"><span>Look at the <span class="hl">paste_text</span> function in <span class="hl">@src-tauri/src/paste.rs</span>.</span></span>
+            </li>
+            <li>
+              <span class="ctx">Terminal agent</span>
+              <q>Look at recording dot rs and fix the crash.</q>
+              <span class="out"><span>Look at <span class="hl">@recording.rs</span> and fix the crash</span></span>
+            </li>
+            <li>
+              <span class="ctx">Cursor · outside a terminal agent</span>
+              <q>The bug is in the paste file.</q>
+              <span class="out"><span>The bug is in <span class="hl">src-tauri/src/paste.rs</span>.</span></span>
+            </li>
+          </ul>
+          <div class="suggest" role="img" aria-label="A suggestion card in Settings, Vocabulary: You've corrected post gress to Postgres 2 times. Add it?">
+            <span>You've corrected <strong>"post gress"</strong> to <strong>"Postgres"</strong> 2 times. Add it?</span>
+            <span class="fake-btn" aria-hidden="true">Add</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Built for coding agents -->
+    <section class="feature flip" id="agents" aria-labelledby="agents-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Built for coding agents</p>
+          <h2 id="agents-h">Talk to Claude Code like you'd talk to a colleague.</h2>
+          <p>A handful of phrases at the end of a dictation do the things you'd otherwise reach
+            for the keyboard to do.</p>
+          <dl class="points">
+            <div>
+              <dt>"Send it"</dt>
+              <dd>Presses Enter after the paste. Only counts at the end or after a pause, so
+                "I'll send it tomorrow" is pasted as written.</dd>
+            </div>
+            <div>
+              <dt>"Attach the error"</dt>
+              <dd>Adds your latest stack trace as a fenced code block: from the terminal in front
+                (Terminal, iTerm2), else the clipboard if it holds an error. Knows rustc, tsc,
+                Python, Node, Jest, Vitest, Playwright and pytest output, capped at 60 lines.</dd>
+            </div>
+            <div>
+              <dt>"Scratch that"</dt>
+              <dd>Takes back the last paste: ⌘Z in editors and chat, exact backspaces in a
+                terminal if nothing was submitted. If it can't be done safely, it says so and
+                sends nothing.</dd>
+            </div>
+            <div>
+              <dt>"Append clipboard"</dt>
+              <dd>Puts whatever you copied after your words, verbatim, so you never read a URL or
+                log line aloud.</dd>
+            </div>
+            <div>
+              <dt>Reply to a waiting agent</dt>
+              <dd>A Claude Code hook tells Mouthpiece when an agent is waiting. The widget shows
+                a pill; press <kbd>⌃⌥R</kbd>, answer, and the reply lands in that agent's window
+                while you stay where you were.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › Coding agents · <a href="guides.html#claude-code">Set up the Claude Code hook</a></p>
+        </div>
+        <div class="demo reveal">
+          <div class="window" role="img" aria-label="A terminal running Claude Code. The prompt reads: The build fails after the rename, can you fix it? followed by a code block with a rustc error, then a sent marker.">
+            <div class="window-bar">
+              <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="window-title">Terminal — api · claude</span>
+            </div>
+            <div class="window-body short" aria-hidden="true">
+              <div class="dim">You say: "The build fails after the rename, can you fix it? Attach the error. Send it."</div>
+              <div class="prompt">The build fails after the rename, can you fix it?
+<span class="fence">```</span>
+<span class="err">error[E0425]: cannot find function `paste_txt` in module `paste`</span>
+<span class="trace">  --&gt; src-tauri/src/recording.rs:212:12
+    |
+212 |     paste::paste_txt(&amp;app, &amp;text)?;
+    |            ^^^^^^^^^ not found in `paste`</span>help: a function with a similar name exists: `paste_text`
+<span class="fence">```</span></div>
+              <div class="ok">↵ sent</div>
+            </div>
+          </div>
+          <div class="mini" role="img" aria-label="The widget shows Claude is waiting in folder api. Claude asks: Run the migration on staging first? You reply by voice: Yes, staging first, then show me the diff.">
+            <div class="mini-pill" aria-hidden="true"><span class="pulse"></span>Claude is waiting · api</div>
+            <div class="mini-line" aria-hidden="true"><span class="dim">claude ›</span> Run the migration on staging first?</div>
+            <div class="mini-line mini-reply" aria-hidden="true"><span class="dim">you, ⌃⌥R ›</span> Yes, staging first, then show me the diff. Send it.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Code-shaped output -->
+    <section class="feature" id="code" aria-labelledby="code-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Code-shaped output</p>
+          <h2 id="code-h">Identifiers, commands and boilerplate, not just sentences.</h2>
+          <p>Casing and command formatting are plain rules, so they're instant and work with no
+            LLM at all. Boilerplate goes to your local model.</p>
+          <dl class="points">
+            <div>
+              <dt>Casing on command</dt>
+              <dd>Say a case name, then the words: snake, camel, Pascal, kebab, screaming snake or
+                title case.</dd>
+            </div>
+            <div>
+              <dt>CLI mode for terminals</dt>
+              <dd>Terminals get shell-shaped output by default: "git commit update readme" pastes
+                <code>git commit -m "update readme"</code>.</dd>
+            </div>
+            <div>
+              <dt>Boilerplate generation</dt>
+              <dd>"Generate boilerplate for…" sends the request to your local model and pastes the
+                code without stray markdown fences. If the model is down, you get your words
+                instead of nothing.</dd>
+            </div>
+            <div>
+              <dt>Lists, backtrack, snippets</dt>
+              <dd>"One… two…" becomes a numbered list. "Actually" corrects you mid-sentence. A
+                short cue like "PR checklist" pastes a saved block.</dd>
+            </div>
+          </dl>
+          <p class="where">Every phrase is listed in Settings › Dictation › Voice Commands</p>
+        </div>
+        <div class="demo reveal">
+          <ul class="say" aria-label="Casing and command examples">
+            <li><q>Snake case error response handler</q><span class="out"><span>error_response_handler</span></span></li>
+            <li><q>Camel case user profile ID</q><span class="out"><span>userProfileId</span></span></li>
+            <li><q>Pascal case error response handler</q><span class="out"><span>ErrorResponseHandler</span></span></li>
+            <li><q>Screaming snake case max retry count</q><span class="out"><span>MAX_RETRY_COUNT</span></span></li>
+            <li><span class="ctx">Terminal</span><q>Git commit update readme</q><span class="out"><span>git commit -m "update readme"</span></span></li>
+          </ul>
+          <div class="codeblock" role="img" aria-label="Example boilerplate output: a React component called UserCard taking name and avatar props.">
+            <div class="codeblock-head"><span>"Generate boilerplate for a React component called UserCard with name and avatar props"</span></div>
+            <pre aria-hidden="true"><span class="k">type</span> UserCardProps = { name: <span class="k">string</span>; avatar: <span class="k">string</span> };
+
+<span class="k">export function</span> <span class="v">UserCard</span>({ name, avatar }: UserCardProps) {
+  <span class="k">return</span> (
+    &lt;div className=<span class="s">"user-card"</span>&gt;
+      &lt;img src={avatar} alt={name} /&gt;
+      &lt;span&gt;{name}&lt;/span&gt;
+    &lt;/div&gt;
+  );
+}</pre>
+          </div>
+          <p class="small">Boilerplate output depends on the local model you pick; this is one example.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dictation core -->
+    <section class="feature flip" id="dictation" aria-labelledby="dictation-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Dictation core</p>
+          <h2 id="dictation-h">Fast because it starts before you stop.</h2>
+          <p>Speech recognition is whisper.cpp on your Mac's GPU (Metal). Each phrase is
+            transcribed at the pause after it, so when you stop there's only the tail left.</p>
+          <dl class="points">
+            <div>
+              <dt>Transcribe while you talk</dt>
+              <dd>Long pauses cost nothing, and live drafts show your words in the widget while
+                you're still speaking. Text is ready about a quarter of a second after you stop.</dd>
+            </div>
+            <div>
+              <dt>Esc pauses</dt>
+              <dd>Esc while recording pauses the mic and asks: Resume, Transcribe or Delete. Esc
+                still reaches the app in front, and isn't claimed at any other time.</dd>
+            </div>
+            <div>
+              <dt>Your hotkey, or double-tap Fn</dt>
+              <dd>Push-to-talk on any shortcut (⇧⌘Space by default). Double-tap Fn, like macOS
+                dictation, is an opt-in extra.</dd>
+            </div>
+            <div>
+              <dt>Paste as-is</dt>
+              <dd>Click the violet bar, or add Shift to your hotkey, to skip the LLM and paste
+                the transcript right away.</dd>
+            </div>
+            <div>
+              <dt>Sounds and seven widget styles</dt>
+              <dd>Optional start, stop, pasted and failed sounds. Pick Minimal, Pill, Compact,
+                Compact two-line, Notch, Live caption or Detailed, or show the widget only while
+                you dictate.</dd>
+            </div>
+            <div>
+              <dt>Hands-free <span class="tag tag-testing">In testing</span></dt>
+              <dd>Always-on listening ("Mouthpiece, …") that only acts on your enrolled voice, and
+                Isolated Voice, which filters out other people near you. Built; waiting on a
+                real-Mac check before they're called done.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › Dictation and Settings › Voice · <a href="guides.html#whisper-model">Pick a speech model</a></p>
+        </div>
+        <div class="demo reveal">
+          <p class="demo-label" id="states-label">The widget, stage by stage</p>
+          <div class="states" role="list" aria-labelledby="states-label">
+            <figure class="state" role="listitem">
+              <div class="widget is-static" data-stage="listening" aria-hidden="true">
+                <div class="widget-row"><span class="widget-dot"></span><span class="widget-label">Listening 0:04</span><span class="widget-meter on"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+                <div class="widget-bar"><span></span></div>
+              </div>
+              <figcaption>Red while it listens, with a live level meter.</figcaption>
+            </figure>
+            <figure class="state" role="listitem">
+              <div class="widget is-static" data-stage="paused" aria-hidden="true">
+                <div class="widget-row"><span class="widget-dot"></span><span class="widget-label">Paused</span></div>
+                <div class="widget-actions"><span>Resume</span><span>Transcribe</span><span>Delete</span></div>
+              </div>
+              <figcaption>Esc pauses. Shortcut transcribes, Esc again deletes.</figcaption>
+            </figure>
+            <figure class="state" role="listitem">
+              <div class="widget is-static" data-stage="transcribing" aria-hidden="true">
+                <div class="widget-row"><span class="widget-dot"></span><span class="widget-label">Transcribing 64%</span></div>
+                <div class="widget-bar"><span style="width:64%"></span></div>
+              </div>
+              <figcaption>Amber while Whisper finishes the tail.</figcaption>
+            </figure>
+            <figure class="state" role="listitem">
+              <div class="widget is-static" data-stage="refining" aria-hidden="true">
+                <div class="widget-row"><span class="widget-dot"></span><span class="widget-label">✦ Refining 40%</span></div>
+                <div class="widget-bar shimmer"><span style="width:40%"></span></div>
+              </div>
+              <figcaption>Violet if the local LLM tidies up. Click to skip it.</figcaption>
+            </figure>
+          </div>
+          <p class="demo-label" id="styles-label">Seven styles</p>
+          <div class="styles" role="list" aria-labelledby="styles-label">
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-minimal"><span class="d"></span></span></div><figcaption>Minimal</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-pill"><span class="d"></span><span class="wv"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span></div><figcaption>Pill</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-compact"><span class="d"></span>Listening 0:03<span class="g"></span></span></div><figcaption>Compact</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-stacked"><span class="row"><span class="d"></span>Listening 0:03</span><span class="sub">MacBook mic · CLI</span></span></div><figcaption>Compact, two-line</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen screen-notch" aria-hidden="true"><span class="mw mw-notch"><span class="d"></span><span class="wv"><i></i><i></i><i></i><i></i><i></i></span></span></div><figcaption>Notch</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-caption">"…then show me the diff"</span></div><figcaption>Live caption</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-detailed"><span>Transcribing 64%</span><span class="bar"></span></span></div><figcaption>Detailed</figcaption></figure>
+            <figure class="style-tile" role="listitem"><div class="screen" aria-hidden="true"><span class="mw mw-pill"><span class="d" style="background:var(--ok)"></span>Pasted</span></div><figcaption>Or only while dictating</figcaption></figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Meetings -->
+    <section class="feature" id="meetings" aria-labelledby="meetings-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Meetings</p>
+          <h2 id="meetings-h">Record a call, get a transcript split by speaker.</h2>
+          <p>Mic and system audio, recorded and transcribed on your Mac. The result is a Markdown
+            file with one paragraph per turn.</p>
+          <dl class="points">
+            <div>
+              <dt>Your mic and the call's audio <span class="tag tag-testing">In testing</span></dt>
+              <dd>On macOS 14.4 and later, the call's audio is captured next to your mic, so calls
+                on headphones just work, with no Screen Recording permission or virtual audio
+                driver. On speakers, an echo gate keeps the call out of your channel.</dd>
+            </div>
+            <div>
+              <dt>Speakers, then names</dt>
+              <dd>Turns are grouped by voice; your enrolled voice is "You", the rest "Speaker 1",
+                "Speaker 2". In Google Meet, Slack Huddles, Teams and Zoom, names are read from the
+                call window's tiles and matched to voices after the call. <span class="tag tag-testing">In testing</span></dd>
+            </div>
+            <div>
+              <dt>Offers to record when a call starts <span class="tag tag-testing">In testing</span></dt>
+              <dd>Zoom, Google Meet, Teams, Slack Huddle, Webex, FaceTime or Discord: the widget
+                asks "Record Zoom?", and "Call ended · Stop?" when it's over. Detected locally.</dd>
+            </div>
+            <div>
+              <dt>Dictate during a meeting</dt>
+              <dd>Push-to-talk still works while a meeting records, and what you dictate is
+                silenced on the meeting's mic track.</dd>
+            </div>
+            <div>
+              <dt>Crash-safe</dt>
+              <dd>Audio is flushed to disk every 5 seconds, so a quit or crash leaves a recording
+                you can still transcribe. Meetings stop at 2.5 hours, with a countdown.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › Meetings, or Start Meeting in the menu bar · <a href="guides.html#meetings">Meetings guide</a></p>
+        </div>
+        <div class="demo reveal">
+          <div class="pills" role="img" aria-label="Widget prompts: Record Google Meet? and later Call ended, Stop?">
+            <span class="mini-pill rec" aria-hidden="true"><span class="pulse"></span>Record Google Meet?</span>
+            <span class="mini-pill quiet" aria-hidden="true">Call ended · Stop?</span>
+          </div>
+          <article class="doc" aria-label="Example meeting transcript">
+            <div class="window-bar">
+              <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="window-title">Settings › Meetings › View</span>
+            </div>
+            <div class="doc-body">
+              <div>
+                <h3>Release sync</h3>
+                <p class="doc-meta">24 min · 3 speakers</p>
+              </div>
+              <div class="turn"><b>Priya<small>00:00</small></b><p>Where are we on the notarization step? It's the last thing blocking the download page.</p></div>
+              <div class="turn you"><b>You<small>00:07</small></b><p>Still waiting on the developer account. The one-line install works around it for now.</p></div>
+              <div class="turn"><b>Speaker 2<small>00:15</small></b><p>Can we at least ship the hook docs this week?</p></div>
+              <div class="turn you"><b>You<small>00:19</small></b><p>Yes, the guide is up. I'll post the link after this.</p></div>
+            </div>
+          </article>
+          <p class="small">Example transcript. Names come from the call window when it shows them; anyone it can't match stays "Speaker N".</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Local AI cleanup -->
+    <section class="feature flip" id="local-ai" aria-labelledby="local-ai-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Local AI cleanup</p>
+          <h2 id="local-ai-h">An LLM pass that never leaves your Mac.</h2>
+          <p>Optional. Clean transcripts skip it and paste right away; fillers, stutters and
+            run-ons get a quick pass from a model running on this Mac.</p>
+          <dl class="points">
+            <div>
+              <dt>Ollama, LM Studio, llama.cpp, Jan</dt>
+              <dd>Pull a model from the in-app catalog, or use one you already run: LM Studio,
+                llama.cpp's server and Jan are found on their local ports and listed with their
+                source.</dd>
+            </div>
+            <div>
+              <dt>Local-only, enforced</dt>
+              <dd>Ollama's cloud models are never listed or sent a prompt. Other servers are
+                reached on loopback only, and redirects are never followed.</dd>
+            </div>
+            <div>
+              <dt>Bring a .gguf file</dt>
+              <dd>Model files in LM Studio's, Jan's and the Hugging Face folders are listed with
+                "Add to Ollama". Anything else, pick it with "Choose a .gguf file…". No download
+                needed.</dd>
+            </div>
+            <div>
+              <dt>Speed you can see</dt>
+              <dd>Each model shows its last round-trip time, and a reply that starts with
+                chatter or runs long is cut off so your unrefined text pastes instead.</dd>
+            </div>
+            <div>
+              <dt>The original is kept</dt>
+              <dd>When the LLM changed a dictation, History keeps the text from before, with
+                Copy original and Use original.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › LLM · <a href="guides.html#local-llm">Set up local cleanup</a></p>
+        </div>
+        <div class="demo reveal">
+          <ul class="say" aria-label="Before and after cleanup">
+            <li>
+              <span class="ctx">Slack · Casual mode</span>
+              <q>So um I think we should uh ship it tonight, actually tomorrow.</q>
+              <span class="out"><span>I think we should ship it tomorrow.</span></span>
+            </li>
+          </ul>
+          <div class="picker" role="img" aria-label="An example model list: models from Ollama, LM Studio, llama.cpp and Jan with their last round-trip times; an Ollama cloud model is struck out as never used.">
+            <div class="picker-head" aria-hidden="true">LLM refinement</div>
+            <div class="picker-row" aria-hidden="true"><span>gemma3 <span class="src">Ollama ✓</span></span><span class="lat">0.9 s</span></div>
+            <div class="picker-row" aria-hidden="true"><span>qwen2.5-coder <span class="src">LM Studio</span></span><span class="lat">1.4 s</span></div>
+            <div class="picker-row" aria-hidden="true"><span>llama-3.2-3b <span class="src">llama.cpp</span></span><span class="lat">1.1 s</span></div>
+            <div class="picker-row" aria-hidden="true"><span>phi-4-mini <span class="src">Jan</span></span><span class="lat">—</span></div>
+            <div class="picker-row off" aria-hidden="true"><span>gpt-oss:120b-cloud <span class="src">Ollama</span></span><span class="lat">never used</span></div>
+          </div>
+          <p class="small">Illustration; model names and times depend on what's on your Mac.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Privacy & security -->
+    <section class="feature" id="privacy" aria-labelledby="privacy-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Privacy &amp; security</p>
+          <h2 id="privacy-h">Nothing you say leaves your Mac.</h2>
+          <p>No account, no telemetry, no cloud fallback. The table is every connection the app
+            makes, and none of them carry your voice or text unless you set a webhook.</p>
+          <dl class="points">
+            <div>
+              <dt>Your history stays yours</dt>
+              <dd>Transcripts live in an owner-only file. Lock History behind Touch ID or your
+                password. Logs keep timings, not what you said, unless you turn that on.</dd>
+            </div>
+            <div>
+              <dt>Token-protected links</dt>
+              <dd>Any web page can open a <code>mouthpiece://</code> link, so recording links and
+                the agent hook must carry this install's secret token. Links without it are
+                ignored.</dd>
+            </div>
+            <div>
+              <dt>Hardened runtime <span class="tag tag-testing">In testing</span></dt>
+              <dd>Release builds are signed with macOS's hardened runtime, so other code can't
+                inject itself into Mouthpiece and borrow its microphone or Accessibility access.</dd>
+            </div>
+            <div>
+              <dt>Verified downloads and updates</dt>
+              <dd>Speech models are checked against SHA-256 checksums; updates must carry the
+                project's signature. Dependencies are scanned for known vulnerabilities on every
+                change.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › History › Privacy</p>
+        </div>
+        <div class="demo reveal">
+          <div class="netlog" role="table" aria-label="Every network connection Mouthpiece makes">
+            <div class="netlog-head" role="row">
+              <span role="columnheader">What</span><span role="columnheader">Where</span><span role="columnheader">When</span>
+            </div>
+            <div role="row"><span role="cell">Your speech</span><span role="cell" class="local">this Mac</span><span role="cell">always</span></div>
+            <div role="row"><span role="cell">LLM cleanup</span><span role="cell" class="local">localhost only</span><span role="cell">if a local LLM is set up</span></div>
+            <div role="row"><span role="cell">Meetings</span><span role="cell" class="local">this Mac</span><span role="cell">when you record one</span></div>
+            <div role="row"><span role="cell">Update check</span><span role="cell">github.com</span><span role="cell">at launch</span></div>
+            <div role="row"><span role="cell">Speech models</span><span role="cell">huggingface.co</span><span role="cell">when you click Download</span></div>
+            <div role="row"><span role="cell">Webhook</span><span role="cell">your URL</span><span role="cell">only if you set one</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Automation -->
+    <section class="feature flip" id="automation" aria-labelledby="automation-h">
+      <div class="wrap feature-grid">
+        <div class="feature-copy reveal">
+          <p class="eyebrow">Automation</p>
+          <h2 id="automation-h">Start it from anything, send the text anywhere.</h2>
+          <p>Deep links drive recording from Raycast, Alfred, Hammerspoon or a shell script. A
+            webhook gets every finished dictation.</p>
+          <dl class="points">
+            <div>
+              <dt>Deep links</dt>
+              <dd><code>start-recording</code>, <code>stop-recording</code> and
+                <code>toggle-recording</code>. Start and stop are idempotent, so a script doesn't
+                track state.</dd>
+            </div>
+            <div>
+              <dt>Output webhook</dt>
+              <dd>A JSON POST after each delivered dictation, for n8n, Zapier, Make.com or a
+                Slack/Notion incoming webhook. Sent in the background, so a slow endpoint never
+                delays the paste.</dd>
+            </div>
+            <div>
+              <dt>History search and reprocess</dt>
+              <dd>Search every retained dictation by text, summary or app. Re-run one through a
+                different mode, preview it, then copy or replace.</dd>
+            </div>
+            <div>
+              <dt>Insights and a work journal</dt>
+              <dd>Words per minute, time to paste, per-app usage. Optionally, a one-line summary
+                of each dictation, like a commit subject.</dd>
+            </div>
+          </dl>
+          <p class="where">Settings › Integrations · <a href="guides.html#deep-links">Deep links guide</a> · <a href="guides.html#webhook">Webhook guide</a></p>
+        </div>
+        <div class="demo reveal">
+          <div class="codeblock">
+            <div class="codeblock-head"><span>Terminal · toggle recording</span><button type="button" class="copy" data-copy aria-label="Copy the toggle-recording command">Copy</button></div>
+            <pre data-cmd>open "mouthpiece://toggle-recording?token=$(cat ~/Library/Application\ Support/dev.mouthpiece/agent-hook-token)"</pre>
+          </div>
+          <div class="codeblock" role="group" aria-label="Example webhook payload">
+            <div class="codeblock-head"><span>POST to your webhook · application/json</span></div>
+            <pre>{
+  <span class="v">"timestamp_ms"</span>: 1762425600000,
+  <span class="v">"text"</span>: <span class="s">"git commit -m \"update readme\""</span>,
+  <span class="v">"summary"</span>: <span class="k">null</span>,
+  <span class="v">"app_name"</span>: <span class="s">"Terminal"</span>,
+  <span class="v">"mode"</span>: <span class="s">"cli"</span>
+}</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-band">
+      <div class="wrap">
+        <h2>Free, local, and set up in a few minutes.</h2>
+        <div class="cta-row">
+          <a class="btn btn-large" href="https://github.com/JFinchy/mouthpiece/releases/latest/download/Mouthpiece.dmg">
+            <svg aria-hidden="true" viewBox="0 0 16 16" width="17" height="17"><path d="M8 1v9m0 0 3.5-3.5M8 10 4.5 6.5M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download for Mac
+          </a>
+          <a class="btn-ghost" href="guides.html">Read the setup guide</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Mouthpiece</span>
+        <p>The voice interface for coding agents. It knows your codebase and runs on your Mac.</p>
+      </div>
+      <div>
+        <h2>Product</h2>
+        <ul>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="roadmap.html">Roadmap</a></li>
+          <li><a href="index.html#download">Download</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/JFinchy/mouthpiece">GitHub</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/releases">Releases</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/issues">Issues</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="wrap footer-row">
+      <span>Open source under the <a href="https://github.com/JFinchy/mouthpiece/blob/main/LICENSE">MIT license</a></span>
+      <span>Apple Silicon · macOS 12+</span>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>

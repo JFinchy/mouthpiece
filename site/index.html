@@ -19,15 +19,18 @@
 
   <header class="nav">
     <div class="nav-pill">
-      <a class="brand" href="#top" aria-label="Mouthpiece home">
+      <a class="brand" href="index.html" aria-label="Mouthpiece home">
         <img src="icon.png" alt="" width="26" height="26">
         <span>Mouthpiece</span>
       </a>
-      <nav aria-label="Sections">
-        <a href="#agents">Agents</a>
-        <a href="#examples">Examples</a>
-        <a href="#compare">Compare</a>
-        <a href="#faq">FAQ</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span class="nav-toggle-bars" aria-hidden="true"><i></i><i></i></span>Menu</button>
+      <nav id="site-nav" aria-label="Site">
+        <a href="index.html" aria-current="page">Home</a>
+        <a href="features.html">Features</a>
+        <a href="guides.html">Guides</a>
+        <a href="roadmap.html">Roadmap</a>
+        <a href="https://github.com/JFinchy/mouthpiece">GitHub</a>
+        <a class="nav-dl" href="#download">Download</a>
       </nav>
       <a class="btn btn-small" href="#download">Download</a>
     </div>
@@ -37,7 +40,7 @@
     <!-- Hero: the product doing its one job, big and centered -->
     <section class="hero" id="top">
       <div class="wrap hero-copy">
-        <a class="badge" href="#agents"><span class="badge-dot"></span>New in 0.3: built for coding agents <span aria-hidden="true">→</span></a>
+        <a class="badge" href="roadmap.html"><span class="badge-dot"></span>Next up: a voice layer for a fleet of agents <span aria-hidden="true">→</span></a>
         <h1>Dictation that speaks <span class="underline">developer<svg aria-hidden="true" viewBox="0 0 300 24" preserveAspectRatio="none"><path pathLength="1" d="M2 14 C 20 14, 24 6, 32 6 S 42 20, 50 20 S 60 4, 70 4 S 80 22, 92 22 S 104 8, 114 8 S 124 18, 136 18 S 148 10, 160 10 S 172 15, 186 15 S 204 12, 222 12 S 260 13, 298 13"/></svg></span>.</h1>
         <p class="lede">Talk to Claude Code, Cursor and your terminal. The text lands at your cursor
           with <code>@file</code> tags, <code>snake_case</code> and line breaks where they belong,
@@ -100,7 +103,7 @@
           <p class="eyebrow">New in 0.3</p>
           <h2>Made for talking to coding agents.</h2>
           <p>Claude Code, Cursor and the terminal are where most of your words go now. These
-            features are for them.</p>
+            features are for them. <a href="features.html#agents">All agent features</a></p>
         </div>
         <div class="bento">
           <article class="card card-wide reveal">
@@ -194,6 +197,8 @@
       <div class="wrap">
         <div class="section-head reveal">
           <h2>Everything between the key press and the paste.</h2>
+          <p>The short version. <a href="features.html">See every feature in detail</a>, including
+            <a href="features.html#meetings">meetings</a> and <a href="features.html#local-ai">local AI cleanup</a>.</p>
         </div>
         <div class="feature-groups">
           <div class="group reveal">
@@ -318,7 +323,7 @@
         <div class="reveal">
           <h2>Your voice never leaves your Mac.</h2>
           <p>Speech recognition runs in whisper.cpp on your Mac's GPU. The optional LLM
-            cleanup runs in Ollama, also on your Mac, and Ollama's cloud models are blocked. There's no
+            cleanup runs in Ollama, LM Studio, llama.cpp or Jan, also on your Mac, and Ollama's cloud models are blocked. There's no
             account, no telemetry and no cloud fallback. This is everything the app ever connects to:</p>
         </div>
         <div class="netlog reveal" role="table" aria-label="Every network connection Mouthpiece makes">
@@ -326,7 +331,7 @@
             <span role="columnheader">What</span><span role="columnheader">Where</span><span role="columnheader">When</span>
           </div>
           <div role="row"><span role="cell">Your speech</span><span role="cell" class="local">this Mac</span><span role="cell">always</span></div>
-          <div role="row"><span role="cell">LLM cleanup</span><span role="cell" class="local">localhost:11434</span><span role="cell">if Ollama is installed</span></div>
+          <div role="row"><span role="cell">LLM cleanup</span><span role="cell" class="local">localhost only</span><span role="cell">if a local LLM is set up</span></div>
           <div role="row"><span role="cell">Update check</span><span role="cell">github.com</span><span role="cell">at launch</span></div>
           <div role="row"><span role="cell">Speech models</span><span role="cell">huggingface.co</span><span role="cell">when you click Download</span></div>
           <div role="row"><span role="cell">Webhook</span><span role="cell">your URL</span><span role="cell">only if you set one</span></div>
@@ -387,7 +392,8 @@
             <summary>How do I connect it to Claude Code?</summary>
             <p>Open Settings → Coding agents, copy the hook config, and add it to
               <code>~/.claude/settings.json</code>. From then on, the widget shows when an agent
-              is waiting, and <kbd>⌃⌥R</kbd> records your reply.</p>
+              is waiting, and <kbd>⌃⌥R</kbd> records your reply. The
+              <a href="guides.html#claude-code">step-by-step guide</a> has the details.</p>
           </details>
           <details>
             <summary>Which apps does it work in?</summary>
@@ -429,7 +435,7 @@
           <li><strong>Set up</strong> <span>Follow the checklist in Settings: download a speech model
             (Base, 57 MB, is a good start) and allow Accessibility so it can paste.</span></li>
           <li><strong>Optional: add cleanup</strong> <span>Install <a href="https://ollama.com">Ollama</a>,
-            then pick a small model in Settings → LLM.</span></li>
+            then pick a small model in Settings → LLM. <a href="guides.html">All setup guides</a></span></li>
         </ol>
 
         <div class="alt-installs reveal">
@@ -462,9 +468,32 @@
   </main>
 
   <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Mouthpiece</span>
+        <p>The voice interface for coding agents. It knows your codebase and runs on your Mac.</p>
+      </div>
+      <div>
+        <h2>Product</h2>
+        <ul>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="guides.html">Guides</a></li>
+          <li><a href="roadmap.html">Roadmap</a></li>
+          <li><a href="index.html#download">Download</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/JFinchy/mouthpiece">GitHub</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/releases">Releases</a></li>
+          <li><a href="https://github.com/JFinchy/mouthpiece/issues">Issues</a></li>
+        </ul>
+      </div>
+    </div>
     <div class="wrap footer-row">
-      <span class="brand-small"><img src="icon.png" alt="" width="20" height="20"> Mouthpiece</span>
-      <span>Open source under the <a href="https://github.com/JFinchy/mouthpiece/blob/main/LICENSE">MIT license</a> · <a href="https://github.com/JFinchy/mouthpiece">GitHub</a></span>
+      <span>Open source under the <a href="https://github.com/JFinchy/mouthpiece/blob/main/LICENSE">MIT license</a></span>
+      <span>Apple Silicon · macOS 12+</span>
     </div>
   </footer>
 
