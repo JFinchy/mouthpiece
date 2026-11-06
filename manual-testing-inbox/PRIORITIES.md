@@ -25,6 +25,7 @@ place with a one-line note.
 - [ ] Dictation sounds (start, stop, pasted, failed) - see `dictation-sounds.md`
 - [ ] Mic fallback skips Bluetooth, dead mic swapped mid-recording, Switch mic menu, decibel level meter, widget menu in every style - see `mic-fallback-and-switch.md`
 - [ ] Dictation accuracy fixes (casing, lists, backtrack, capitalization) - see `dictation-accuracy.md`
+- [ ] Pauses to think don't leave "..." or "--"; "Open at login" setting - see `pause-marks.md`
 - [ ] Mic visibility, quick switching, "no sound" warnings - see `mic-visibility-and-silence.md`
 - [ ] Isolated Voice + voice enrollment (required before always-on) - see `isolated-voice.md`
 - [ ] Names from your project (terminal/editor repo names in dictation) - see `project-names.md`

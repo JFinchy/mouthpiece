@@ -342,14 +342,20 @@ export function GeneralSection() {
         <span className="loading loading-spinner loading-xs" />
       ) : (
         <div className="flex flex-col gap-3">
-          <label className="flex items-center gap-2 text-xs">
+          <label className="flex items-start gap-2 text-xs">
             <input
               type="checkbox"
-              className="checkbox checkbox-xs"
+              className="checkbox checkbox-xs mt-0.5"
               checked={autostart}
               onChange={(e) => toggleAutostart(e.target.checked)}
+              data-testid="open-at-login"
             />
-            Launch Mouthpiece at login
+            <span className="flex flex-col gap-0.5">
+              Open at login
+              <span className="text-[11px] opacity-60">
+                Start Mouthpiece when you log in to your Mac, so dictation is ready right away.
+              </span>
+            </span>
           </label>
           <label className="flex items-start gap-2 text-xs">
             <input

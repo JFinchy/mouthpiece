@@ -32,6 +32,7 @@ mod models;
 mod modes;
 mod names;
 mod paste;
+mod pauses;
 mod pipeline;
 mod privacy;
 mod project;

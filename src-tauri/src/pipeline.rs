@@ -204,6 +204,11 @@ pub fn format_in_project(
         features_used.push("lists".to_string());
     }
 
+    // Whisper's "..." and "--" for a pause to think go next: after lists,
+    // which use those pauses to find the items, and before the spoken
+    // "ellipsis"/"em dash" commands, which insert them on purpose.
+    let text = crate::pauses::remove_pause_marks(&text);
+
     // Named punctuation commands ("period", "open paren", "new
     // line") are expanded next, ahead of everything else — like
     // casing commands below, they're cross-cutting rather than

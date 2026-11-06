@@ -532,5 +532,29 @@
     "expect": "ship it",
     "expect_refined": false,
     "expect_llm_called": false
+  },
+  {
+    "name": "a pause to think after 'the' leaves no dots",
+    "input": "Okay, for the... Amazon Prime account.",
+    "mode": "plain",
+    "expect": "Okay, for the Amazon Prime account."
+  },
+  {
+    "name": "a pause written as a dash disappears",
+    "input": "Can we add a setting for-- Boot at startup when the-- computer turns on?",
+    "mode": "plain",
+    "expect": "Can we add a setting for boot at startup when the computer turns on?"
+  },
+  {
+    "name": "a pause after a full thought starts a new sentence",
+    "input": "I was looking for learning... Do we have a course?",
+    "mode": "plain",
+    "expect": "I was looking for learning. Do we have a course?"
+  },
+  {
+    "name": "command-line flags keep their dashes",
+    "input": "git commit --amend",
+    "mode": "plain",
+    "expect": "git commit --amend"
   }
 ]

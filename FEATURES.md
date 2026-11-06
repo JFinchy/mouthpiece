@@ -315,8 +315,9 @@ built yet.
 
 ## System integration
 
-- **Auto-launch at login** — off by default (a privacy-first app
-  shouldn't silently add itself as a login item), toggle in Settings.
+- **Open at login** — off by default (a privacy-first app
+  shouldn't silently add itself as a login item); "Open at login", the
+  name macOS uses, at the top of Settings > Dictation.
 - **Tray icon reflects recording state** — the glyph is the app icon's
   prompt, wave and cursor as plain strokes (drawn by
   `src-tauri/icons/source/tray-icon.py`), a macOS template image so it
@@ -493,3 +494,11 @@ Found by running real speech through Whisper in the audio e2e suite:
 - **"…, press enter."** no longer leaves a dangling comma.
 - **Terminal file tags include paths** — `src/lib.rs` becomes
   `@src/lib.rs` for terminal coding agents.
+- **Pauses to think don't leave "..." or "--" behind** (2026-11-06) —
+  Whisper writes a pause as an ellipsis or a dash ("for the... Amazon
+  Prime", "when the-- computer turns on"). `pauses.rs` removes them before
+  the spoken punctuation commands run: after a word like "the" or "for" the
+  words are just joined, a capitalized word after a finished thought starts
+  a new sentence, and a trailing-off "..." becomes a period. Saying
+  "ellipsis" or "em dash" still inserts one; `--flags` and hyphenated
+  words are left alone.
