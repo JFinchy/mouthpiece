@@ -180,12 +180,21 @@ const NEGATIONS: &[&str] = &[
     "without",
 ];
 
-/// How often each negation word appears, sorted.
+/// How often each negation word appears, sorted, with every "n't" counted
+/// as "not".
 fn negations(text: &str) -> Vec<String> {
     let mut found: Vec<String> = tokens(&text.replace('\u{2019}', "'"))
         .into_iter()
         .map(|t| t.to_lowercase())
-        .filter(|t| NEGATIONS.contains(&t.as_str()))
+        .filter(|t| NEGATIONS.contains(&t.as_str()) || t.ends_with("n't"))
+        // "don't" and "do not" say the same thing; only the count matters.
+        .map(|t| {
+            if t.ends_with("n't") {
+                "not".to_string()
+            } else {
+                t
+            }
+        })
         .collect();
     found.sort();
     found
@@ -290,6 +299,15 @@ mod tests {
         for t in ["Hello", "tests", "don't"] {
             assert!(!is_identifier_like(t), "{t}");
         }
+    }
+
+    #[test]
+    fn negations_count_the_same_however_spelled() {
+        assert_eq!(
+            negations("don't add it, it isn't needed"),
+            negations("do not add it; it is not needed")
+        );
+        assert_ne!(negations("don't add a library"), negations("add a library"));
     }
 
     #[test]
