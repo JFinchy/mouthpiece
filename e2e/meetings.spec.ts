@@ -35,7 +35,16 @@ test.describe("meetings page", () => {
     await expect(rows.first()).toContainText("24 min · 3 speakers");
 
     await rows.first().getByRole("button", { name: "View" }).click();
-    await expect(rows.first().locator("pre")).toContainText("Let's get started.");
+    await expect(rows.first().locator("pre").first()).toContainText("Let's get started.");
+
+    // Rename a speaker inline and generate local AI meeting notes.
+    await rows.first().getByTestId("meeting-speaker-chip").filter({ hasText: "Speaker 2" }).click();
+    await rows.first().getByTestId("meeting-speaker-rename-form").locator("input").fill("Sarah");
+    await rows.first().getByTestId("meeting-speaker-rename-form").getByRole("button", { name: "Save" }).click();
+    await expect(rows.first().getByTestId("meeting-speaker-chip").filter({ hasText: "Sarah" })).toBeVisible();
+
+    await rows.first().getByTestId("meeting-summarize").click();
+    await expect(rows.first().getByTestId("meeting-summary-box")).toContainText("Reviewed the launch timeline.");
 
     await expect(rows.nth(1)).toContainText("Not transcribed yet");
     await rows.nth(1).getByRole("button", { name: "Transcribe" }).click();
@@ -163,8 +172,16 @@ test.describe("meeting in the widget", () => {
     await expect(page.getByRole("button", { name: "Start recording" })).toBeEnabled();
 
     await emit(page, "meeting-changed", { recording: null, processing: null, queued: [] });
-    await emit(page, "meeting-saved", "Meeting, Mon 26 Oct 2026, 17:40");
+    await emit(page, "meeting-saved", {
+      id: "2026-10-26-174005",
+      title: "Meeting, Mon 26 Oct 2026, 17:40",
+      detail: "24 min · 3 speakers",
+      state: "ready",
+    });
     await expect(page.getByText("Meeting transcript saved")).toBeVisible();
+    await expect(page.getByTestId("meeting-saved-copy")).toBeVisible();
+    await page.getByTestId("meeting-saved-view").click();
+    expect(await calls(page, "open_meeting_in_settings")).toEqual([{ id: "2026-10-26-174005" }]);
   });
 
   test("prompts to record a detected call, allows dismissal, and prompts when the call ends", async ({

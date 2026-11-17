@@ -6,7 +6,7 @@ import { applyTheme, type ThemeId } from "./theme";
 import { getReadiness, type ReadinessCheck } from "./settings/readiness";
 import { shortcutLabel, skipVariant, type ShortcutConfig } from "./shortcut";
 import { spokenFolder, type WaitingAgent } from "./settings/sections/agents";
-import { useMeetingStatus, type DetectedCall } from "./settings/sections/meetings";
+import { useMeetingStatus, type DetectedCall, type MeetingSummary } from "./settings/sections/meetings";
 
 type Phase = "idle" | "recording" | "transcribing" | "refining";
 type WidgetMode = "minimal" | "compact" | "detailed" | "pill" | "notch" | "caption" | "stacked";
@@ -223,18 +223,20 @@ function SparkleIcon() {
 function StageProgress({
   stage,
   percent,
+  label: labelOverride,
   title,
   onMouseDown,
   onSkip,
 }: {
   stage: Stage;
   percent: number | null;
+  label?: string;
   title?: string;
   onMouseDown: (e: React.MouseEvent) => void;
   /// Refining only: clicking pastes the unrefined text now.
   onSkip?: () => void;
 }) {
-  const label = stage === "transcribe" ? "Transcribing" : "Refining";
+  const label = labelOverride ?? (stage === "transcribe" ? "Transcribing" : "Refining");
   return (
     <div
       className={`flex min-w-0 flex-1 flex-col gap-1 ${
@@ -372,6 +374,8 @@ function WidgetView() {
   const [meetingNote, setMeetingNote] = useState<string | null>(null);
   const [detectedCall, setDetectedCall] = useState<DetectedCall | null>(null);
   const [endedCall, setEndedCall] = useState<DetectedCall | null>(null);
+  const [savedMeeting, setSavedMeeting] = useState<MeetingSummary | null>(null);
+  const [savedMeetingCopied, setSavedMeetingCopied] = useState(false);
   useEffect(() => {
     invoke<DetectedCall | null>("get_detected_meeting")
       .then((call) => {
@@ -396,9 +400,16 @@ function WidgetView() {
     };
   }, []);
   useEffect(() => {
-    if (meetingRecording) setDetectedCall(null);
-    else setEndedCall(null);
+    if (meetingRecording) {
+      setDetectedCall(null);
+      setSavedMeeting(null);
+    } else {
+      setEndedCall(null);
+    }
   }, [meetingRecording]);
+  useEffect(() => {
+    if (phase !== "idle") setSavedMeeting(null);
+  }, [phase]);
   useEffect(() => {
     if (!meetingNote) return;
     const timer = setTimeout(() => setMeetingNote(null), 2500);
@@ -426,6 +437,11 @@ function WidgetView() {
   const [onlyWhileDictating, setOnlyWhileDictating] = useState(false);
   const hideWhenDone = useRef(false);
   const [pointerInside, setPointerInside] = useState(false);
+  useEffect(() => {
+    if (!savedMeeting || pointerInside) return;
+    const timer = setTimeout(() => setSavedMeeting(null), 15_000);
+    return () => clearTimeout(timer);
+  }, [savedMeeting, pointerInside]);
   // Esc paused the recording: the widget asks whether to resume,
   // transcribe or delete it (see discard.rs).
   const [paused, setPaused] = useState(false);
@@ -752,9 +768,14 @@ function WidgetView() {
     const unlistenLimitReached = listen("meeting-limit-reached", () =>
       announce("Meeting stopped at the 2.5-hour limit and is being transcribed. Start a new one to keep recording.", true),
     );
-    const unlistenMeetingSaved = listen<string>("meeting-saved", () =>
-      announce("Meeting transcript saved", false),
-    );
+    const unlistenMeetingSaved = listen<MeetingSummary | string>("meeting-saved", (e) => {
+      const summary: MeetingSummary =
+        typeof e.payload === "string"
+          ? { id: "latest", title: e.payload, detail: null, state: "ready" }
+          : e.payload;
+      setSavedMeeting(summary);
+      setSavedMeetingCopied(false);
+    });
     const unlistenMeetingFailed = listen<string>("meeting-failed", (event) => announce(event.payload, true));
     const unlistenPaused = listen("dictation-paused", () => {
       setPaused(true);
@@ -805,10 +826,12 @@ function WidgetView() {
   // backend re-centers it on every resize).
   const notchActive =
     phase !== "idle" ||
+    meetingProcessing !== null ||
     (flashVisible && message !== null) ||
     needsAccess ||
     detectedCall !== null ||
-    endedCall !== null;
+    endedCall !== null ||
+    savedMeeting !== null;
   useEffect(() => {
     if (mode !== "notch") return;
     invoke("set_widget_size", notchActive ? NOTCH_ACTIVE : NOTCH_IDLE).catch((err) =>
@@ -816,10 +839,10 @@ function WidgetView() {
     );
   }, [mode, notchActive]);
 
-  // Suppress the 4-section hover flyout while a meeting start/stop prompt pill
-  // is on screen so hovering Compact/Stacked to click the pill doesn't jump
+  // Suppress the 4-section hover flyout while a meeting start/stop/saved prompt
+  // pill is on screen so hovering Compact/Stacked to click the pill doesn't jump
   // the window height to 340px.
-  const flyoutOpen = flyoutHovered && !detectedCall && !endedCall;
+  const flyoutOpen = flyoutHovered && !detectedCall && !endedCall && !savedMeeting;
 
   useEffect(() => {
     if (mode !== "compact" && mode !== "stacked") return;
@@ -859,10 +882,17 @@ function WidgetView() {
 
   function toggleRecording() {
     // In Minimal mode there is no separate pill slot, so clicking the main dot
-    // while a call is detected starts the meeting recording.
+    // while a call is detected starts the meeting recording, or opens a newly
+    // saved meeting transcript.
     if (mode === "minimal" && detectedCall && phase === "idle" && !meetingRecording) {
       setDetectedCall(null);
       invoke("start_meeting").catch(actionFailed("start the meeting"));
+      return;
+    }
+    if (mode === "minimal" && savedMeeting && phase === "idle" && !meetingRecording) {
+      const id = savedMeeting.id === "latest" ? null : savedMeeting.id;
+      setSavedMeeting(null);
+      invoke("open_meeting_in_settings", { id }).catch(actionFailed("open the meeting transcript"));
       return;
     }
     // During push-to-talk inside a meeting, the button stops the dictation,
@@ -927,7 +957,7 @@ function WidgetView() {
 
   const busy = phase === "transcribing" || phase === "refining";
   // Which processing stage to draw, if any.
-  const activeStage: { stage: Stage; percent: number | null } | null =
+  const activeStage: { stage: Stage; percent: number | null; label?: string } | null =
     phase === "transcribing" && progress !== null
       ? { stage: "transcribe", percent: progress }
       : phase === "refining"
@@ -995,10 +1025,16 @@ function WidgetView() {
     };
   }, []);
   useEffect(() => {
-    if (phase !== "idle" || detectedCall !== null || endedCall !== null) {
+    if (
+      phase !== "idle" ||
+      meetingProcessing !== null ||
+      detectedCall !== null ||
+      endedCall !== null ||
+      savedMeeting !== null
+    ) {
       hideWhenDone.current = true;
     }
-  }, [phase, detectedCall, endedCall]);
+  }, [phase, meetingProcessing, detectedCall, endedCall, savedMeeting]);
   // A paste hides the widget almost at once; an error or note stays up
   // until it's had its time, as do "Allow pasting" and
   // anything the pointer is resting on.
@@ -1006,7 +1042,9 @@ function WidgetView() {
   const dictationOver =
     phase === "idle" &&
     !meetingRecording &&
+    !meetingProcessing &&
     !endedCall &&
+    !savedMeeting &&
     (!flashing || justPasted) &&
     !needsAccess &&
     !detectedCall &&
@@ -1195,6 +1233,72 @@ function WidgetView() {
       </button>
     ) : null;
 
+  const meetingSavedPill =
+    savedMeeting && phase === "idle" && !meetingRecording && !meetingProcessing && !flashing ? (
+      <span
+        className="flex min-w-0 flex-1 items-center gap-1 rounded-full bg-success/20 pl-2 pr-1 py-0.5 text-xs font-medium text-success"
+        onMouseDown={(e) => e.stopPropagation()}
+        data-testid="meeting-saved-prompt"
+      >
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-left hover:underline"
+          onClick={() => {
+            const id = savedMeeting.id === "latest" ? null : savedMeeting.id;
+            setSavedMeeting(null);
+            invoke("open_meeting_in_settings", { id }).catch(actionFailed("open the meeting transcript"));
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          title={`${savedMeeting.title}${savedMeeting.detail ? ` (${savedMeeting.detail})` : ""} — click to view in Settings`}
+          data-testid="meeting-saved-view"
+        >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />
+          <span className="truncate">{narrow ? "Saved · View" : "Meeting transcript saved · View"}</span>
+        </button>
+        {savedMeeting.id !== "latest" && mode !== "pill" && (
+          <button
+            type="button"
+            className="shrink-0 rounded-full bg-success/20 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-success/30"
+            onClick={() => {
+              const id = savedMeeting.id;
+              invoke<string>("read_meeting", { id })
+                .then((text) => navigator.clipboard.writeText(text))
+                .then(() => {
+                  setSavedMeetingCopied(true);
+                  setTimeout(() => setSavedMeeting((cur) => (cur?.id === id ? null : cur)), 1200);
+                })
+                .catch((err) => {
+                  if (String(err).toLowerCase().includes("locked")) {
+                    setSavedMeeting(null);
+                    invoke("open_meeting_in_settings", { id }).catch(actionFailed("open the meeting transcript"));
+                  } else {
+                    actionFailed("copy the meeting transcript")(err);
+                  }
+                });
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title="Copy transcript to clipboard"
+            data-testid="meeting-saved-copy"
+          >
+            {savedMeetingCopied ? "Copied" : "Copy"}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-ghost btn-circle h-4 w-4 min-h-0 shrink-0 opacity-70 hover:opacity-100"
+          onClick={() => setSavedMeeting(null)}
+          onMouseDown={(e) => e.stopPropagation()}
+          aria-label="Dismiss saved meeting prompt"
+          title="Dismiss"
+          data-testid="meeting-saved-dismiss"
+        >
+          <svg aria-hidden="true" viewBox="0 0 12 12" width="8" height="8">
+            <path d="M2.5 2.5l7 7m0-7l-7 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+      </span>
+    ) : null;
+
   const isPaused = paused && phase === "recording";
   // ⏸ while dictating (same as Esc); ✕ while the paste is being prepared,
   // which copies the text instead of pasting it. A meeting has its own stop.
@@ -1301,22 +1405,26 @@ function WidgetView() {
             ? "ring-2 ring-warning"
             : detectedCall && mode === "minimal"
               ? "ring-2 ring-primary"
-              : newestAgent && mode === "minimal"
-                ? "ring-2 ring-info"
-                : ""
+              : savedMeeting && mode === "minimal"
+                ? "ring-2 ring-success"
+                : newestAgent && mode === "minimal"
+                  ? "ring-2 ring-info"
+                  : ""
       }`}
       onClick={toggleRecording}
       disabled={busy}
       aria-label={
         mode === "minimal" && detectedCall && phase === "idle" && !meetingRecording
           ? `Record ${detectedCall.app_name} meeting`
-          : meetingRecording && !dictating
-            ? "Stop the meeting"
-            : phase === "idle"
-              ? "Start recording"
-              : isPaused
-                ? "Transcribe"
-              : "Stop recording"
+          : mode === "minimal" && savedMeeting && phase === "idle" && !meetingRecording
+            ? `View ${savedMeeting.title} transcript`
+            : meetingRecording && !dictating
+              ? "Stop the meeting"
+              : phase === "idle"
+                ? "Start recording"
+                : isPaused
+                  ? "Transcribe"
+                : "Stop recording"
       }
       title={
         (isPaused ? pausedHint : null) ??
@@ -1329,6 +1437,9 @@ function WidgetView() {
           : null) ??
         (detectedCall && mode === "minimal"
           ? `Record ${detectedCall.app_name}? Click to start meeting recording`
+          : null) ??
+        (savedMeeting && mode === "minimal"
+          ? `Meeting transcript saved — click to view ${savedMeeting.title}`
           : null) ??
         (newestAgent && mode === "minimal"
           ? `${newestAgent.agent || "Claude"} is waiting · ${newestAgent.folder}${
@@ -1410,6 +1521,8 @@ function WidgetView() {
             setupButton
           ) : meetingDetectPill ? (
             meetingDetectPill
+          ) : meetingSavedPill ? (
+            meetingSavedPill
           ) : meetingEndedPill ? (
             meetingEndedPill
           ) : showSwitchMic ? (
@@ -1429,7 +1542,11 @@ function WidgetView() {
           )}
         </div>
         {discardButton}
-        {menuButton("hidden group-hover:inline-flex")}
+        {!isPaused &&
+          !meetingDetectPill &&
+          !meetingSavedPill &&
+          !meetingEndedPill &&
+          menuButton("hidden group-hover:inline-flex")}
       </main>
     );
   }
@@ -1451,18 +1568,22 @@ function WidgetView() {
               setupButton
             ) : meetingDetectPill ? (
               meetingDetectPill
+            ) : meetingSavedPill ? (
+              meetingSavedPill
             ) : (
               <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
             )}
-            <div className="flex h-6 min-w-0 flex-1 items-center">
-              {isPaused ? (
-                pausedControls
-              ) : showProgress ? (
-                <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
-              ) : phase === "recording" ? (
-                (agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />)
-              ) : null}
-            </div>
+            {!meetingDetectPill && !meetingSavedPill && (
+              <div className="flex h-6 min-w-0 flex-1 items-center">
+                {isPaused ? (
+                  pausedControls
+                ) : showProgress ? (
+                  <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
+                ) : phase === "recording" ? (
+                  (agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />)
+                ) : null}
+              </div>
+            )}
             {meetingEndedPill}
             {showSwitchMic && switchMicButton}
             {discardButton}
@@ -1528,9 +1649,11 @@ function WidgetView() {
                   setupButton
                 ) : meetingDetectPill ? (
                   meetingDetectPill
+                ) : meetingSavedPill ? (
+                  meetingSavedPill
                 ) : (
                   <span className={`shrink-0 truncate text-xs ${statusTone || "opacity-70"}`}>
-                    {phase === "idle" && !flashing && lastPasted ? "Pasted" : shortStatus}
+                    {phase === "idle" && !flashing && !meetingProcessing && lastPasted ? "Pasted" : shortStatus}
                   </span>
                 )}
                 {showProgress && <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />}
@@ -1596,6 +1719,7 @@ function WidgetView() {
             <StageProgress
             stage={activeStage!.stage}
             percent={activeStage!.percent}
+            label={activeStage!.label}
             title={stageTitle}
             onMouseDown={startDrag}
             onSkip={activeStage!.stage === "refine" ? pasteAsIs : undefined}
@@ -1604,6 +1728,8 @@ function WidgetView() {
             setupButton
           ) : meetingDetectPill ? (
             meetingDetectPill
+          ) : meetingSavedPill ? (
+            meetingSavedPill
           ) : agentPill ? (
             agentPill
           ) : (
@@ -1692,6 +1818,7 @@ function WidgetView() {
           <StageProgress
             stage={activeStage!.stage}
             percent={activeStage!.percent}
+            label={activeStage!.label}
             title={stageTitle}
             onMouseDown={startDrag}
             onSkip={activeStage!.stage === "refine" ? pasteAsIs : undefined}
@@ -1700,6 +1827,8 @@ function WidgetView() {
           setupButton
         ) : meetingDetectPill ? (
           meetingDetectPill
+        ) : meetingSavedPill ? (
+          meetingSavedPill
         ) : agentPill ? (
           agentPill
         ) : (

@@ -3,12 +3,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { applyTheme, type ThemeId } from "./theme";
 import { notifyError, Toaster } from "./ui/toast";
-import { ChainLayout, SidebarLayout } from "./settings/layouts";
+import { ChainLayout, SidebarLayout, useSettingsNavigation } from "./settings/layouts";
 import { type LayoutId, LayoutSection, ThemeSection } from "./settings/sections/app";
 
 function SettingsView() {
   const [theme, setThemeState] = useState<ThemeId>("terminal");
   const [layout, setLayoutState] = useState<LayoutId>("sidebar");
+  const [focusMeetingId, setFocusMeetingId] = useState<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
+
+  useSettingsNavigation((nav) => {
+    if (nav.page === "meetings") {
+      setFocusMeetingId(nav.meeting_id ?? "latest");
+      setFocusNonce((n) => n + 1);
+    }
+  });
 
   useEffect(() => {
     invoke<ThemeId>("get_theme")
@@ -53,7 +62,11 @@ function SettingsView() {
 
   return (
     <>
-      {layout === "chain" ? <ChainLayout appearance={appearance} /> : <SidebarLayout appearance={appearance} />}
+      {layout === "chain" ? (
+        <ChainLayout appearance={appearance} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+      ) : (
+        <SidebarLayout appearance={appearance} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+      )}
       <Toaster />
     </>
   );

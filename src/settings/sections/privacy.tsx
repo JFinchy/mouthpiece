@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { notifyError } from "../../ui/toast";
 
 export type HistoryLockStatus = { enabled: boolean; locked: boolean };
@@ -18,7 +19,13 @@ export function useHistoryLock() {
       .catch((err) => notifyError("Couldn't read the History lock", err));
   }, []);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    refresh();
+    const unlisten = listen<HistoryLockStatus>("history-lock-changed", (e) => setStatus(e.payload));
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [refresh]);
 
   // Lock again when History is left or the window is hidden, and when the
   // unlock runs out.

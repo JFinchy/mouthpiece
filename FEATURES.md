@@ -253,7 +253,29 @@ built yet.
   Teams and Zoom tile trees) every 300 ms and fuses active-speaker overlap and
   muted-tile negative evidence with `group_voices` speaker clusters after the
   call (promoting clusters after `>= 3` corroborated turns or a `>= 4s`
-  monologue).
+  monologue with `>= 55%` cluster share, plus UI turn-boundary splitting and
+  cannot-link constraints during voice clustering).
+- **Multi-speaker stand-up separation & `"Group"` fallback (2026-11-06)** —
+  uses exact duration-weighted average pairwise cosine (UPGMA) with a
+  complete-linkage worst-pair guard and mid-segment acoustic/UI speaker-change
+  splitting so compressed WebRTC stand-up voices stay distinct instead of
+  snowballing into one speaker through centroid drift. When remote speech still
+  cannot be separated into confirmed individual voices (e.g., short clips,
+  degraded audio, or multiple UI speakers clumped into one bucket), it labels
+  the unseparated bucket `"Group"` (`"X min · You + group"`) instead of
+  misleadingly calling everyone `"Speaker 1"`.
+- **Post-meeting widget handoff, deep-linking, local AI summary & speaker rename (2026-11-12)** —
+  when a meeting finishes transcribing, the widget pops up an interactive
+  `"Meeting transcript saved · View"` + `"Copy"` pill (across all widget
+  styles) that either copies the Markdown transcript straight to the clipboard
+  or opens Settings directly to the **Meetings** page with that transcript
+  expanded and scrolled into view (also reachable anytime from `"View Meeting Notes…"`
+  in the menu bar or widget right-click menu). Inside Settings → Meetings,
+  expanded transcripts display clickable speaker chips to rename `"Speaker 1"`
+  → `"Sarah"` across all turns (merging adjacent turns and updating the
+  speaker count), inline meeting title renaming, and a one-click **Summarize**
+  button that runs your configured local LLM to attach grounded **Summary, Key
+  points, and Action items** notes to the Markdown file.
 
 ## Widget & Settings UI
 

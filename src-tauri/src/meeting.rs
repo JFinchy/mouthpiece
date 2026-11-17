@@ -750,6 +750,11 @@ fn transcribe_saved(app: &AppHandle, id: &str) {
                 .into(),
         )
             });
+    // Release the processing lock and dequeue before emitting `meeting-saved` /
+    // `meeting-failed` so listeners calling `list_meetings` see `Ready` (not
+    // `Processing`) and `meetingProcessing` is already cleared in the widget.
+    drop(_one_at_a_time);
+    drop(_dequeue);
     match result {
         Ok(summary) => {
             crate::applog!(
@@ -757,10 +762,12 @@ fn transcribe_saved(app: &AppHandle, id: &str) {
                 started.elapsed().as_secs_f32(),
                 summary.detail.as_deref().unwrap_or("")
             );
-            let _ = app.emit("meeting-saved", summary.title);
+            crate::widget::show(app);
+            let _ = app.emit("meeting-saved", summary);
         }
         Err(err) => {
             crate::applog!("meeting: couldn't transcribe {id}: {err}");
+            crate::widget::show(app);
             let _ = app.emit("meeting-failed", err);
         }
     }
@@ -832,17 +839,53 @@ fn transcribe_file(app: &AppHandle, id: &str) -> Result<MeetingSummary, String> 
         } else {
             0
         };
-        let remote_segments = diarize_segments(sys_samples, &models, remote_speakers)?;
-        let all_turns = merge_dual_channel_turns(&you_segments, &remote_segments);
+        let remote = diarize_segments_with_observations(
+            sys_samples,
+            &models,
+            remote_speakers,
+            &observations,
+        )?;
+        let all_turns = merge_dual_channel_turns(&you_segments, &remote.segments);
         let mut names = resolve_cluster_names(&all_turns, &observations, Some(YOU_SPEAKER_ID));
+        apply_remote_group_fallback(
+            &mut names,
+            &all_turns,
+            &observations,
+            speakers,
+            remote.confirmed_single_voice,
+        );
         names.insert(YOU_SPEAKER_ID, "You".to_string());
+        let remote_clusters = all_turns
+            .iter()
+            .filter(|t| t.speaker != YOU_SPEAKER_ID)
+            .map(|t| t.speaker)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        crate::applog!(
+            "meeting: diarized {id} (stereo, you_segs={}, remote_segs={}, remote_clusters={remote_clusters}, single_voice={}, ui_obs={})",
+            you_segments.len(),
+            remote.segments.len(),
+            remote.confirmed_single_voice,
+            observations.len()
+        );
         (all_turns, names)
     } else {
         // Single-channel fallback (mono WAV or silent system channel during an
         // in-person room meeting).
-        let turns = diarize(&mic, &models, speakers)?;
+        let outcome = diarize_segments_with_observations(&mic, &models, speakers, &observations)?;
+        let turns = merge_turns(&outcome.segments);
         let you = find_you(app, &mic, &turns);
         let names = resolve_cluster_names(&turns, &observations, you);
+        let cluster_count = turns
+            .iter()
+            .map(|t| t.speaker)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        crate::applog!(
+            "meeting: diarized {id} (mono, segs={}, clusters={cluster_count}, ui_obs={})",
+            outcome.segments.len(),
+            observations.len()
+        );
         (turns, names)
     };
 
@@ -1208,22 +1251,33 @@ pub struct DiarizationModels {
 /// sherpa-onnx finds the speech segments, but its own speaker grouping
 /// works on short windows and blurs similar voices together, even when
 /// told the speaker count. So it's run to over-split (its grouping only
-/// shapes the segment boundaries), then each whole segment gets one voice
-/// embedding and `group_voices` decides who is who.
+/// shapes the segment boundaries), long segments with mid-segment speaker
+/// handoffs are split at local pause valleys, and `group_voices` decides
+/// who is who.
+#[cfg(test)]
 pub fn diarize(
     samples: &[f32],
     models: &DiarizationModels,
     speakers: u32,
 ) -> Result<Vec<Turn>, String> {
-    let labelled = diarize_segments(samples, models, speakers)?;
-    Ok(merge_turns(&labelled))
+    let outcome = diarize_segments_with_observations(samples, models, speakers, &[])?;
+    Ok(merge_turns(&outcome.segments))
 }
 
-fn diarize_segments(
+struct DiarizationOutcome {
+    segments: Vec<(f32, f32, i32)>,
+    /// When all speech landed in a single cluster, whether acoustic evidence
+    /// positively confirms one consistent voice rather than short/noisy or
+    /// borderline-spread clips that couldn't be separated.
+    confirmed_single_voice: bool,
+}
+
+fn diarize_segments_with_observations(
     samples: &[f32],
     models: &DiarizationModels,
     speakers: u32,
-) -> Result<Vec<(f32, f32, i32)>, String> {
+    observations: &[crate::speaker_poller::SpeakerObservation],
+) -> Result<DiarizationOutcome, String> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(4) as i32)
         .unwrap_or(2);
@@ -1252,7 +1306,7 @@ fn diarize_segments(
     let result = diarizer
         .process(samples)
         .ok_or("speaker separation failed")?;
-    let segments: Vec<(f32, f32)> = result
+    let raw_segments: Vec<(f32, f32)> = result
         .sort_by_start_time()
         .into_iter()
         .map(|s| (s.start, s.end))
@@ -1260,33 +1314,279 @@ fn diarize_segments(
         .collect();
     drop(diarizer);
 
+    let spans = observation_spans(observations);
+    let ui_split = if spans.is_empty() {
+        raw_segments
+    } else {
+        split_segments_at_ui_changes(samples, &raw_segments, &spans)
+    };
+
     let extractor = SpeakerEmbeddingExtractor::create(&embedding)
         .ok_or("couldn't load the speaker embedding model")?;
-    let rate = WHISPER_SAMPLE_RATE as f32;
+    let segments = split_segments_at_voice_changes(samples, ui_split, &extractor);
+
     let voices: Vec<Voice> = segments
         .iter()
-        .map(|&(start, end)| {
-            let a = ((start * rate) as usize).min(samples.len());
-            let b = ((end * rate) as usize).clamp(a, samples.len());
-            let stream = extractor.create_stream()?;
-            stream.accept_waveform(WHISPER_SAMPLE_RATE as i32, &samples[a..b]);
-            stream.input_finished();
-            extractor.is_ready(&stream).then_some(())?;
-            extractor.compute(&stream)
-        })
-        .zip(&segments)
-        .map(|(embedding, &(start, end))| Voice {
-            embedding,
+        .map(|&(start, end)| Voice {
+            embedding: extract_embedding(&extractor, samples, start, end),
             seconds: end - start,
         })
         .collect();
-    let labels = group_voices(&voices, speakers, SAME_SPEAKER_SIMILARITY);
+    let ui_hints: Vec<Option<String>> = if spans.is_empty() {
+        Vec::new()
+    } else {
+        segments
+            .iter()
+            .map(|&(start, end)| dominant_ui_speaker(start, end, &spans).map(str::to_string))
+            .collect()
+    };
+    let hints_ref = (!ui_hints.is_empty()).then_some(ui_hints.as_slice());
+    let labels = group_voices_with_hints(&voices, hints_ref, speakers, SAME_SPEAKER_SIMILARITY);
+
+    let unique_clusters: std::collections::HashSet<usize> = labels.iter().copied().collect();
+    let single_half_similarity = if unique_clusters.len() <= 1 {
+        let anchors: Vec<usize> = (0..voices.len())
+            .filter(|&i| voices[i].embedding.is_some() && voices[i].seconds >= ANCHOR_SECONDS)
+            .collect();
+        if anchors.len() == 1 {
+            let (start, end) = segments[anchors[0]];
+            if end - start >= 3.2 {
+                let mid = (start + end) * 0.5;
+                let split_t = quietest_split_time(samples, mid, start + 1.4, end - 1.4, 0.35);
+                match (
+                    extract_embedding(&extractor, samples, start, split_t),
+                    extract_embedding(&extractor, samples, split_t, end),
+                ) {
+                    (Some(h1), Some(h2)) => Some(cosine(&h1, &h2)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let confirmed_single_voice = unique_clusters.len() == 1
+        && single_voice_consistent_from_embeddings(&voices, single_half_similarity);
+
     let labelled: Vec<(f32, f32, i32)> = segments
         .iter()
         .zip(labels)
         .map(|(&(start, end), label)| (start, end, label as i32))
         .collect();
-    Ok(labelled)
+    Ok(DiarizationOutcome {
+        segments: labelled,
+        confirmed_single_voice,
+    })
+}
+
+fn extract_embedding(
+    extractor: &SpeakerEmbeddingExtractor,
+    samples: &[f32],
+    start: f32,
+    end: f32,
+) -> Option<Vec<f32>> {
+    let rate = WHISPER_SAMPLE_RATE as f32;
+    let a = ((start * rate) as usize).min(samples.len());
+    let b = ((end * rate) as usize).clamp(a, samples.len());
+    if b <= a {
+        return None;
+    }
+    let stream = extractor.create_stream()?;
+    stream.accept_waveform(WHISPER_SAMPLE_RATE as i32, &samples[a..b]);
+    stream.input_finished();
+    extractor.is_ready(&stream).then_some(())?;
+    extractor.compute(&stream)
+}
+
+/// Finds the center timestamp (in seconds) of the quietest 20ms frame near
+/// `target_sec`, clamped to `[min_sec, max_sec]`, so segment splits land in
+/// natural syllable/breath pauses rather than mid-word.
+fn quietest_split_time(
+    samples: &[f32],
+    target_sec: f32,
+    min_sec: f32,
+    max_sec: f32,
+    search_radius_sec: f32,
+) -> f32 {
+    const WINDOW: usize = 320; // 20ms at 16 kHz
+    const STEP: usize = 80; // 5ms step
+    if min_sec >= max_sec {
+        return target_sec.clamp(min_sec.min(max_sec), min_sec.max(max_sec));
+    }
+    let rate = WHISPER_SAMPLE_RATE as f32;
+    let lo_sec = (target_sec - search_radius_sec).max(min_sec);
+    let hi_sec = (target_sec + search_radius_sec).min(max_sec);
+    let lo = ((lo_sec * rate) as usize).min(samples.len());
+    let hi = ((hi_sec * rate) as usize).clamp(lo, samples.len());
+    if hi < lo + WINDOW {
+        return target_sec.clamp(min_sec, max_sec);
+    }
+    let mut best_sample = ((target_sec.clamp(min_sec, max_sec) * rate) as usize).min(samples.len());
+    let mut min_energy = f32::INFINITY;
+    let mut pos = lo;
+    while pos + WINDOW <= hi {
+        let energy: f32 = samples[pos..pos + WINDOW].iter().map(|x| x * x).sum();
+        if energy < min_energy {
+            min_energy = energy;
+            best_sample = pos + WINDOW / 2;
+        }
+        pos += STEP;
+    }
+    (best_sample as f32 / rate).clamp(min_sec, max_sec)
+}
+
+/// Splits segments where Accessibility UI tile observations show an
+/// unambiguous active-speaker handoff from one participant to another.
+fn split_segments_at_ui_changes(
+    samples: &[f32],
+    segments: &[(f32, f32)],
+    spans: &[(f32, f32, &crate::speaker_poller::SpeakerObservation)],
+) -> Vec<(f32, f32)> {
+    let mut out = Vec::with_capacity(segments.len());
+    for &(seg_start, seg_end) in segments {
+        let mut cur = seg_start;
+        while seg_end - cur >= 2.2 {
+            let mut split_at: Option<f32> = None;
+            for &(obs_start, _, _) in spans {
+                if obs_start <= cur + 0.9 || obs_start >= seg_end - 0.9 {
+                    continue;
+                }
+                let before = dominant_ui_speaker(cur.max(obs_start - 2.5), obs_start, spans);
+                let after = dominant_ui_speaker(obs_start, seg_end.min(obs_start + 2.5), spans);
+                if let (Some(b), Some(a)) = (before, after) {
+                    if a != b {
+                        split_at = Some(quietest_split_time(
+                            samples,
+                            obs_start,
+                            cur + 0.8,
+                            seg_end - 0.8,
+                            0.35,
+                        ));
+                        break;
+                    }
+                }
+            }
+            if let Some(t) = split_at {
+                out.push((cur, t));
+                cur = t;
+            } else {
+                break;
+            }
+        }
+        out.push((cur, seg_end));
+    }
+    out
+}
+
+/// Checks long speech segments (`>= MIN_SPLIT_SEGMENT_SECONDS`) for missed
+/// back-to-back speaker handoffs (common in rapid stand-up updates) and splits
+/// at the quietest pause valley when the two sides' voice embeddings diverge.
+fn split_segments_at_voice_changes(
+    samples: &[f32],
+    segments: Vec<(f32, f32)>,
+    extractor: &SpeakerEmbeddingExtractor,
+) -> Vec<(f32, f32)> {
+    let mut out = Vec::with_capacity(segments.len());
+    let mut queue: std::collections::VecDeque<(f32, f32, u8)> =
+        segments.into_iter().map(|(s, e)| (s, e, 0)).collect();
+    while let Some((start, end, depth)) = queue.pop_front() {
+        let dur = end - start;
+        if dur >= MIN_SPLIT_SEGMENT_SECONDS && depth < 3 {
+            let fractions: &[f32] = if dur >= 10.0 {
+                &[0.33, 0.5, 0.67]
+            } else {
+                &[0.5]
+            };
+            // Under ~2 s a half's voice print is too noisy to trust: a pause
+            // inside one person's line ("Great, thanks. Daniel, is…") would
+            // split off a piece that then takes a speaker slot of its own.
+            let min_edge = MIN_SPLIT_PIECE_SECONDS;
+            let mut worst_split: Option<(f32, f32)> = None;
+            for &frac in fractions {
+                let target = start + dur * frac;
+                let split_t =
+                    quietest_split_time(samples, target, start + min_edge, end - min_edge, 0.5);
+                if let (Some(left), Some(right)) = (
+                    extract_embedding(extractor, samples, start, split_t),
+                    extract_embedding(extractor, samples, split_t, end),
+                ) {
+                    let sim = cosine(&left, &right);
+                    if worst_split.is_none_or(|(_, best_sim)| sim < best_sim) {
+                        worst_split = Some((split_t, sim));
+                    }
+                }
+            }
+            if let Some((split_t, sim)) = worst_split {
+                if sim < VOICE_CHANGE_SPLIT_SIMILARITY {
+                    queue.push_front((split_t, end, depth + 1));
+                    queue.push_front((start, split_t, depth + 1));
+                    continue;
+                }
+            }
+        }
+        out.push((start, end));
+    }
+    out
+}
+
+/// Whether a single-cluster diarization result has tight enough voice
+/// embeddings to be confident a single person spoke (e.g. a 1:1 call), as
+/// opposed to short/noisy or spread-out clips that should fall back to `"Group"`.
+fn single_voice_consistent_from_embeddings(
+    voices: &[Voice],
+    single_half_similarity: Option<f32>,
+) -> bool {
+    let total_speech: f32 = voices.iter().map(|v| v.seconds.max(0.0)).sum();
+    if total_speech <= 0.0 {
+        return false;
+    }
+    let mut anchors: Vec<usize> = (0..voices.len())
+        .filter(|&i| voices[i].embedding.is_some() && voices[i].seconds >= ANCHOR_SECONDS)
+        .collect();
+    let anchor_speech: f32 = anchors.iter().map(|&i| voices[i].seconds.max(0.0)).sum();
+    if anchor_speech < 0.5 * total_speech {
+        return false;
+    }
+    if anchors.len() > MAX_ANCHORS {
+        anchors.sort_by(|&a, &b| voices[b].seconds.total_cmp(&voices[a].seconds));
+        anchors.truncate(MAX_ANCHORS);
+        anchors.sort_unstable();
+    }
+    if anchors.len() >= 2 {
+        let units: Vec<Vec<f32>> = anchors
+            .iter()
+            .map(|&i| normalized(voices[i].embedding.as_ref().unwrap()))
+            .collect();
+        let mut min_cos = f32::INFINITY;
+        let mut weighted_cos_sum = 0.0f32;
+        let mut weight_sum = 0.0f32;
+        for a in 0..units.len() {
+            let wa = voices[anchors[a]].seconds.max(0.1);
+            for b in a + 1..units.len() {
+                let wb = voices[anchors[b]].seconds.max(0.1);
+                let c: f32 = units[a].iter().zip(&units[b]).map(|(x, y)| x * y).sum();
+                min_cos = min_cos.min(c);
+                let w = wa * wb;
+                weighted_cos_sum += w * c;
+                weight_sum += w;
+            }
+        }
+        let mean_cos = if weight_sum > 0.0 {
+            weighted_cos_sum / weight_sum
+        } else {
+            min_cos
+        };
+        let min_pair_floor = SAME_SPEAKER_SIMILARITY - MAX_PAIR_SPREAD;
+        return mean_cos >= SINGLE_VOICE_MIN_COSINE && min_cos >= min_pair_floor;
+    }
+    if anchors.len() == 1 && anchor_speech >= 0.6 * total_speech {
+        return single_half_similarity.is_some_and(|sim| sim >= SINGLE_VOICE_MIN_COSINE);
+    }
+    false
 }
 
 /// sherpa-onnx's grouping threshold, set low so that it splits rather than
@@ -1295,12 +1595,26 @@ const OVERSPLIT_THRESHOLD: f32 = 0.15;
 const MIN_SEGMENT_SECONDS: f32 = 0.3;
 /// Segments at least this long set the speakers; shorter ones (noisier
 /// embeddings) then join whichever speaker they sound most like.
-const ANCHOR_SECONDS: f32 = 1.0;
-/// Average-voice similarity above which two groups are taken to be the
-/// same person when the speaker count isn't given. One person across
-/// utterances scores about 0.85-0.9 with this model; different people
-/// mostly score well under 0.6.
-const SAME_SPEAKER_SIMILARITY: f32 = 0.6;
+const ANCHOR_SECONDS: f32 = 1.2;
+const FALLBACK_ANCHOR_SECONDS: f32 = 0.8;
+/// Duration-weighted average pairwise similarity above which two groups are
+/// taken to be the same person when the speaker count isn't given.
+/// One person across >=1.2s turns scores ~0.81-0.95 with WeSpeaker ResNet34;
+/// distinct voices on the same compressed call codec score up to ~0.75-0.79.
+const SAME_SPEAKER_SIMILARITY: f32 = 0.792;
+/// Complete-linkage guard offset: when `speakers == 0`, two groups cannot
+/// merge if their worst anchor pair scores below `same_speaker - MAX_PAIR_SPREAD`,
+/// preventing bridge segments from chaining distinct stand-up voices together.
+const MAX_PAIR_SPREAD: f32 = 0.14;
+/// Minimum pairwise cosine required to confirm a single-cluster remote track
+/// belongs to one consistent speaker rather than an unseparated `"Group"`.
+const SINGLE_VOICE_MIN_COSINE: f32 = 0.78;
+/// Long segments are checked for missed mid-segment speaker handoffs and split
+/// at a local pause valley when the two halves score below this similarity.
+const MIN_SPLIT_SEGMENT_SECONDS: f32 = 3.6;
+const VOICE_CHANGE_SPLIT_SIMILARITY: f32 = 0.72;
+/// Shortest piece a voice-change split may leave on either side.
+const MIN_SPLIT_PIECE_SECONDS: f32 = 2.0;
 /// At most this many segments set the speakers (see `group_voices`).
 const MAX_ANCHORS: usize = 400;
 
@@ -1327,15 +1641,36 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 
 /// Groups segments by voice, returning a group number per segment.
 ///
-/// Agglomerative: every long segment starts as its own group, and the two
-/// most alike groups (by their duration-weighted average voice) merge
-/// until there are `speakers` groups, or, with `speakers` 0, until no two
-/// are more alike than `same_speaker`. Short segments then join the group
-/// they're closest to; a segment with no embedding takes its neighbour's.
+/// Agglomerative using exact duration-weighted average pairwise cosine (UPGMA)
+/// plus a complete-linkage worst-pair guard: every long segment starts as its
+/// own group, and the two most alike groups merge until there are `speakers`
+/// groups, or, with `speakers` 0, until no eligible pair is at least
+/// `same_speaker` alike. Dividing by scalar weight (`W_A * W_B`) rather than
+/// re-normalizing summed centroids avoids high-dimensional centroid drift that
+/// would otherwise snowball distinct call speakers into a single cluster.
+/// Short segments then join the group whose mean voice direction they're
+/// closest to; a segment with no embedding takes its neighbour's.
+#[cfg(test)]
 pub fn group_voices(voices: &[Voice], speakers: u32, same_speaker: f32) -> Vec<usize> {
+    group_voices_with_hints(voices, None, speakers, same_speaker)
+}
+
+pub fn group_voices_with_hints(
+    voices: &[Voice],
+    ui_hints: Option<&[Option<String>]>,
+    speakers: u32,
+    same_speaker: f32,
+) -> Vec<usize> {
     let mut anchors: Vec<usize> = (0..voices.len())
         .filter(|&i| voices[i].embedding.is_some() && voices[i].seconds >= ANCHOR_SECONDS)
         .collect();
+    if anchors.is_empty() {
+        anchors = (0..voices.len())
+            .filter(|&i| {
+                voices[i].embedding.is_some() && voices[i].seconds >= FALLBACK_ANCHOR_SECONDS
+            })
+            .collect();
+    }
     if anchors.is_empty() {
         anchors = (0..voices.len())
             .filter(|&i| voices[i].embedding.is_some())
@@ -1352,38 +1687,83 @@ pub fn group_voices(voices: &[Voice], speakers: u32, same_speaker: f32) -> Vec<u
         anchors.sort_unstable();
     }
 
-    // (sum of weighted unit vectors, members); `None` once merged away.
-    let mut groups: Vec<Option<(Vec<f32>, Vec<usize>)>> = anchors
+    struct AnchorGroup {
+        weighted_sum: Vec<f32>,
+        total_weight: f32,
+        members: Vec<usize>,
+        ui_speaker: Option<String>,
+    }
+
+    let mut groups: Vec<Option<AnchorGroup>> = anchors
         .iter()
         .map(|&i| {
             let v = &voices[i];
+            let weight = v.seconds.max(1e-3);
             let unit = normalized(v.embedding.as_ref().unwrap());
-            Some((unit.iter().map(|x| x * v.seconds).collect(), vec![i]))
+            let ui_speaker = ui_hints.and_then(|h| h.get(i)).and_then(|opt| opt.clone());
+            Some(AnchorGroup {
+                weighted_sum: unit.iter().map(|x| x * weight).collect(),
+                total_weight: weight,
+                members: vec![i],
+                ui_speaker,
+            })
         })
         .collect();
-    // Pairwise similarity, updated only for the merged group each step.
+
+    let avg_pairwise_cosine = |g1: &AnchorGroup, g2: &AnchorGroup| -> f32 {
+        let dot: f32 = g1
+            .weighted_sum
+            .iter()
+            .zip(&g2.weighted_sum)
+            .map(|(x, y)| x * y)
+            .sum();
+        let denom = g1.total_weight * g2.total_weight;
+        if denom <= 0.0 {
+            0.0
+        } else {
+            dot / denom
+        }
+    };
+
+    // Pairwise UPGMA similarity and complete-linkage minimum similarity,
+    // both updated in O(1)/O(D) per live neighbour after each merge.
     let n = groups.len();
     let mut similarity = vec![vec![f32::NEG_INFINITY; n]; n];
+    let mut min_pair_sim = vec![vec![f32::INFINITY; n]; n];
     for a in 0..n {
         for b in a + 1..n {
-            let s = cosine(
-                &groups[a].as_ref().unwrap().0,
-                &groups[b].as_ref().unwrap().0,
-            );
+            let s = avg_pairwise_cosine(groups[a].as_ref().unwrap(), groups[b].as_ref().unwrap());
             similarity[a][b] = s;
             similarity[b][a] = s;
+            min_pair_sim[a][b] = s;
+            min_pair_sim[b][a] = s;
         }
     }
+
+    let min_allowed_pair = same_speaker - MAX_PAIR_SPREAD;
     let mut live = n;
     let target = speakers.max(1) as usize;
     while live > 1 && !(speakers > 0 && live <= target) {
         let mut best: Option<(usize, usize, f32)> = None;
         for a in 0..n {
-            if groups[a].is_none() {
+            let Some(ga) = &groups[a] else {
                 continue;
-            }
+            };
             for b in a + 1..n {
-                if groups[b].is_some() && best.is_none_or(|(_, _, s)| similarity[a][b] > s) {
+                let Some(gb) = &groups[b] else {
+                    continue;
+                };
+                if speakers == 0 {
+                    if min_pair_sim[a][b] < min_allowed_pair {
+                        continue;
+                    }
+                    if let (Some(ua), Some(ub)) = (&ga.ui_speaker, &gb.ui_speaker) {
+                        if ua != ub {
+                            continue;
+                        }
+                    }
+                }
+                if best.is_none_or(|(_, _, s)| similarity[a][b] > s) {
                     best = Some((a, b, similarity[a][b]));
                 }
             }
@@ -1394,30 +1774,39 @@ pub fn group_voices(voices: &[Voice], speakers: u32, same_speaker: f32) -> Vec<u
         if speakers == 0 && best_similarity < same_speaker {
             break;
         }
-        let (sum, members) = groups[b].take().unwrap();
+        let taken = groups[b].take().unwrap();
         let merged = groups[a].as_mut().unwrap();
-        for (x, y) in merged.0.iter_mut().zip(sum) {
+        for (x, y) in merged.weighted_sum.iter_mut().zip(taken.weighted_sum) {
             *x += y;
         }
-        merged.1.extend(members);
+        merged.total_weight += taken.total_weight;
+        merged.members.extend(taken.members);
+        if merged.ui_speaker.is_none() {
+            merged.ui_speaker = taken.ui_speaker;
+        } else if taken.ui_speaker.is_some() && merged.ui_speaker != taken.ui_speaker {
+            merged.ui_speaker = None;
+        }
         live -= 1;
         for other in 0..n {
             if other != a {
-                if let Some((sum, _)) = &groups[other] {
-                    let s = cosine(&groups[a].as_ref().unwrap().0, sum);
+                if let Some(go) = &groups[other] {
+                    let s = avg_pairwise_cosine(groups[a].as_ref().unwrap(), go);
                     similarity[a][other] = s;
                     similarity[other][a] = s;
+                    let worst = min_pair_sim[a][other].min(min_pair_sim[b][other]);
+                    min_pair_sim[a][other] = worst;
+                    min_pair_sim[other][a] = worst;
                 }
             }
         }
     }
-    let mut groups: Vec<(Vec<f32>, Vec<usize>)> = groups.into_iter().flatten().collect();
+    let mut groups: Vec<AnchorGroup> = groups.into_iter().flatten().collect();
 
     // Number groups by first appearance.
-    groups.sort_by_key(|(_, members)| members.iter().copied().min());
+    groups.sort_by_key(|g| g.members.iter().copied().min());
     let mut labels: Vec<Option<usize>> = vec![None; voices.len()];
-    for (label, (_, members)) in groups.iter().enumerate() {
-        for &i in members {
+    for (label, g) in groups.iter().enumerate() {
+        for &i in &g.members {
             labels[i] = Some(label);
         }
     }
@@ -1428,7 +1817,8 @@ pub fn group_voices(voices: &[Voice], speakers: u32, same_speaker: f32) -> Vec<u
                     .iter()
                     .enumerate()
                     .max_by(|x, y| {
-                        cosine(&x.1 .0, embedding).total_cmp(&cosine(&y.1 .0, embedding))
+                        cosine(&x.1.weighted_sum, embedding)
+                            .total_cmp(&cosine(&y.1.weighted_sum, embedding))
                     })
                     .map(|(label, _)| label);
             }
@@ -1584,8 +1974,79 @@ const MIN_TURN_OVERLAP_SECONDS: f32 = 0.30;
 /// participant speaks unambiguously for at least 4 seconds.
 const MIN_MONOLOGUE_OVERLAP_SECONDS: f32 = 4.0;
 /// Minimum share of a cluster's total UI-observed active time that must
-/// belong to the winning participant name.
-const MIN_CLUSTER_OVERLAP_RATIO: f32 = 0.30;
+/// belong to the winning participant name so a multi-speaker clumped cluster
+/// isn't misattributed to one participant.
+const MIN_CLUSTER_OVERLAP_RATIO: f32 = 0.55;
+
+/// Precomputes `[start_sec, end_sec]` intervals for state-change observations.
+/// Each observation holds until the next one (capped at 15s, or 1.5s for the
+/// final observation in the log).
+fn observation_spans(
+    observations: &[crate::speaker_poller::SpeakerObservation],
+) -> Vec<(f32, f32, &crate::speaker_poller::SpeakerObservation)> {
+    observations
+        .iter()
+        .enumerate()
+        .map(|(i, obs)| {
+            let start = obs.offset_ms as f32 / 1000.0;
+            let end = observations
+                .get(i + 1)
+                .map(|next| (next.offset_ms as f32 / 1000.0).min(start + 15.0))
+                .unwrap_or(start + 1.5)
+                .max(start);
+            (start, end, obs)
+        })
+        .collect()
+}
+
+/// Returns the participant name when Accessibility unambiguously observed one
+/// non-muted active speaker dominating `[start, end]`.
+fn dominant_ui_speaker<'a>(
+    start: f32,
+    end: f32,
+    spans: &[(f32, f32, &'a crate::speaker_poller::SpeakerObservation)],
+) -> Option<&'a str> {
+    let dur = end - start;
+    if dur < 0.7 {
+        return None;
+    }
+    let mut active_by_name: std::collections::BTreeMap<&'a str, f32> =
+        std::collections::BTreeMap::new();
+    let mut muted_by_name: std::collections::BTreeMap<&'a str, f32> =
+        std::collections::BTreeMap::new();
+    for &(obs_start, obs_end, obs) in spans {
+        let ov_start = start.max(obs_start);
+        let ov_end = end.min(obs_end);
+        if ov_end <= ov_start {
+            continue;
+        }
+        let dt = ov_end - ov_start;
+        for muted in &obs.muted_names {
+            *muted_by_name.entry(muted.as_str()).or_insert(0.0) += dt;
+        }
+        if obs.speaking_names.len() == 1 {
+            let active = obs.speaking_names[0].as_str();
+            if !obs.muted_names.iter().any(|m| m == active) {
+                *active_by_name.entry(active).or_insert(0.0) += dt;
+            }
+        }
+    }
+    let total_active: f32 = active_by_name.values().sum();
+    if total_active < 0.7 {
+        return None;
+    }
+    let (best_name, &best_dt) = active_by_name.iter().max_by(|a, b| a.1.total_cmp(b.1))?;
+    let muted_dt = muted_by_name.get(best_name).copied().unwrap_or(0.0);
+    if best_dt >= 0.7
+        && best_dt >= 0.65 * total_active
+        && best_dt >= 0.35 * dur
+        && muted_dt <= 0.25 * dur
+    {
+        Some(*best_name)
+    } else {
+        None
+    }
+}
 
 /// "You" for the enrolled voice, the rest "Speaker 1", "Speaker 2", ... in
 /// the order they first speak.
@@ -1608,10 +2069,12 @@ pub fn speaker_names(turns: &[Turn], you: Option<i32>) -> std::collections::Hash
 /// and muted-tile negative evidence.
 ///
 /// Any cluster that does not meet the promotion threshold (`>= 3`
-/// corroborated turns or `>= 4.0s` unambiguous overlap, and `>= 30%` share
+/// corroborated turns or `>= 4.0s` unambiguous overlap, and `>= 55%` share
 /// of observed speaking time for that cluster) retains its default
-/// `"Speaker N"` label from [`speaker_names`]. The `you` cluster always
-/// remains `"You"`.
+/// `"Speaker N"` label from [`speaker_names`] — unless UI observations show
+/// multiple distinct participants each speaking significantly inside that
+/// cluster without a majority winner, in which case it is labeled `"Group"`.
+/// The `you` cluster always remains `"You"`.
 pub fn resolve_cluster_names(
     turns: &[Turn],
     observations: &[crate::speaker_poller::SpeakerObservation],
@@ -1622,22 +2085,7 @@ pub fn resolve_cluster_names(
         return names;
     }
 
-    // Precompute observation intervals [start_sec, end_sec]. Each state-change
-    // observation holds until the next observation (capped at 15s, or 1.5s for
-    // the final observation in the log).
-    let spans: Vec<(f32, f32, &crate::speaker_poller::SpeakerObservation)> = observations
-        .iter()
-        .enumerate()
-        .map(|(i, obs)| {
-            let start = obs.offset_ms as f32 / 1000.0;
-            let end = observations
-                .get(i + 1)
-                .map(|next| (next.offset_ms as f32 / 1000.0).min(start + 15.0))
-                .unwrap_or(start + 1.5)
-                .max(start);
-            (start, end, obs)
-        })
-        .collect();
+    let spans = observation_spans(observations);
 
     // BTreeMaps throughout: deterministic iteration (and float sums), so
     // re-transcribing the same meeting always picks the same names.
@@ -1711,18 +2159,30 @@ pub fn resolve_cluster_names(
     // greedily in descending order of score so two voice clusters never collide on
     // the same participant name.
     let mut candidates: Vec<(i32, String, f32, usize)> = Vec::new();
+    let mut mixed_group_speakers = std::collections::HashSet::new();
     for (speaker, by_name) in &cluster_scores {
         let total_cluster_active: f32 = by_name.values().map(|(s, _)| *s).sum();
         if total_cluster_active <= 0.0 {
             continue;
         }
+        let significant_participants = by_name
+            .values()
+            .filter(|&&(score_sec, corr_turns)| {
+                (score_sec >= 1.2 || corr_turns >= 2) && score_sec / total_cluster_active >= 0.20
+            })
+            .count();
+        let mut any_eligible = false;
         for (name, &(score_sec, corr_turns)) in by_name {
             let ratio = score_sec / total_cluster_active;
             let promoted =
                 corr_turns >= SPEAKER_PROMOTE_TURNS || score_sec >= MIN_MONOLOGUE_OVERLAP_SECONDS;
             if promoted && ratio >= MIN_CLUSTER_OVERLAP_RATIO {
                 candidates.push((*speaker, name.clone(), score_sec, corr_turns));
+                any_eligible = true;
             }
+        }
+        if !any_eligible && significant_participants >= 2 {
+            mixed_group_speakers.insert(*speaker);
         }
     }
 
@@ -1744,6 +2204,13 @@ pub fn resolve_cluster_names(
         assigned_names.insert(name);
     }
 
+    for &speaker in &mixed_group_speakers {
+        if !assigned_speakers.contains(&speaker) {
+            names.insert(speaker, "Group".to_string());
+            assigned_speakers.insert(speaker);
+        }
+    }
+
     // Re-number remaining unpromoted non-`you` clusters sequentially ("Speaker 1",
     // "Speaker 2", ...) in first-appearance order so promoting earlier clusters
     // never leaves a gap like "You", "Alice", "Speaker 2".
@@ -1759,6 +2226,63 @@ pub fn resolve_cluster_names(
     }
 
     names
+}
+
+/// Relabels a single unpromoted remote voice bucket as `"Group"` instead of
+/// `"Speaker 1"` when automatic speaker counting (`speakers == 0`) could not
+/// confirm a single individual voice (or when UI tile observations saw
+/// multiple active remote speakers).
+///
+/// Prevents a group stand-up or call whose voices couldn't be separated from
+/// misleadingly reading as one person (`"Speaker 1"`).
+pub fn apply_remote_group_fallback(
+    names: &mut std::collections::HashMap<i32, String>,
+    turns: &[Turn],
+    observations: &[crate::speaker_poller::SpeakerObservation],
+    configured_speakers: u32,
+    confirmed_single_voice: bool,
+) {
+    if configured_speakers > 0 {
+        return;
+    }
+    let remote_ids: Vec<i32> = first_appearance_order(turns)
+        .into_iter()
+        .filter(|&id| id != YOU_SPEAKER_ID)
+        .collect();
+    let [only_remote] = remote_ids.as_slice() else {
+        return;
+    };
+    let is_generic_label = names
+        .get(only_remote)
+        .is_some_and(|label| label.starts_with("Speaker "));
+    if !is_generic_label {
+        return;
+    }
+    let spans = observation_spans(observations);
+    let mut ui_overlap_by_speaker: std::collections::HashMap<&str, f32> =
+        std::collections::HashMap::new();
+    for turn in turns.iter().filter(|t| t.speaker == *only_remote) {
+        for &(obs_start, obs_end, obs) in &spans {
+            let dt = (turn.end.min(obs_end) - turn.start.max(obs_start)).max(0.0);
+            if dt <= 0.0 {
+                continue;
+            }
+            for speaking in &obs.speaking_names {
+                if !obs.muted_names.iter().any(|m| m == speaking) {
+                    *ui_overlap_by_speaker
+                        .entry(speaking.as_str())
+                        .or_insert(0.0) += dt;
+                }
+            }
+        }
+    }
+    let active_ui_speakers = ui_overlap_by_speaker
+        .values()
+        .filter(|&&secs| secs >= MIN_TURN_OVERLAP_SECONDS)
+        .count();
+    if active_ui_speakers >= 2 || !confirmed_single_voice {
+        names.insert(*only_remote, "Group".to_string());
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1798,14 +2322,36 @@ fn timestamp(seconds: f32) -> String {
 
 pub fn meeting_detail(duration_seconds: f32, lines: &[Line]) -> String {
     let minutes = (duration_seconds / 60.0).round().max(1.0) as u64;
-    let mut speakers: Vec<&str> = lines.iter().map(|l| l.speaker.as_str()).collect();
+    let speakers: Vec<&str> = lines.iter().map(|l| l.speaker.as_str()).collect();
+    let people = people_label_from_speakers(&speakers);
+    format!("{minutes} min · {people}")
+}
+
+fn people_label_from_speakers(raw_speakers: &[&str]) -> String {
+    let mut speakers = raw_speakers.to_vec();
     speakers.sort_unstable();
     speakers.dedup();
-    let people = match speakers.len() {
-        1 => "1 speaker".to_string(),
-        n => format!("{n} speakers"),
-    };
-    format!("{minutes} min · {people}")
+    let has_group = speakers.contains(&"Group");
+    if has_group {
+        let individuals = speakers.iter().filter(|&&s| s != "Group").count();
+        match individuals {
+            0 => "group".to_string(),
+            1 => {
+                let solo = speakers
+                    .iter()
+                    .copied()
+                    .find(|&s| s != "Group")
+                    .unwrap_or("You");
+                format!("{solo} + group")
+            }
+            n => format!("{}+ speakers", n + 1),
+        }
+    } else {
+        match speakers.len() {
+            0 | 1 => "1 speaker".to_string(),
+            n => format!("{n} speakers"),
+        }
+    }
 }
 
 /// The transcript: one paragraph per turn, with consecutive turns from the
@@ -1829,6 +2375,193 @@ pub fn render_markdown(title: &str, detail: &str, lines: &[Line]) -> String {
     }
     out.push('\n');
     out
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedTurn {
+    pub speaker: String,
+    pub timestamp: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParsedMeetingDoc {
+    pub title: String,
+    pub detail: String,
+    pub notes: Option<String>,
+    pub turns: Vec<ParsedTurn>,
+}
+
+fn parse_turn_header(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix("**")?;
+    let sep = rest.rfind("** · ")?;
+    let speaker = rest[..sep].trim();
+    let ts = rest[sep + "** · ".len()..].trim();
+    if speaker.is_empty() || ts.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = ts.split(':').collect();
+    if !(2..=3).contains(&parts.len())
+        || parts[0].is_empty()
+        || !parts[0].chars().all(|c| c.is_ascii_digit())
+        || !parts[1..]
+            .iter()
+            .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some((speaker.to_string(), ts.to_string()))
+}
+
+pub fn parse_meeting_markdown(markdown: &str) -> ParsedMeetingDoc {
+    let mut title = String::from("Meeting");
+    let mut detail = String::new();
+    let mut notes_lines: Vec<String> = Vec::new();
+    let mut turns: Vec<ParsedTurn> = Vec::new();
+    let mut current_turn: Option<ParsedTurn> = None;
+    let mut saw_title = false;
+    let mut saw_detail = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if !saw_title {
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(t) = trimmed.strip_prefix("# ") {
+                title = t.trim().to_string();
+                saw_title = true;
+                continue;
+            }
+            saw_title = true;
+        }
+        if !saw_detail && current_turn.is_none() && notes_lines.is_empty() {
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed.starts_with("## ") && parse_turn_header(trimmed).is_none() {
+                detail = trimmed.to_string();
+                saw_detail = true;
+                continue;
+            }
+            saw_detail = true;
+        }
+
+        if let Some((speaker, timestamp)) = parse_turn_header(trimmed) {
+            if let Some(mut finished) = current_turn.take() {
+                finished.text = finished.text.trim().to_string();
+                if !finished.text.is_empty() {
+                    turns.push(finished);
+                }
+            }
+            current_turn = Some(ParsedTurn {
+                speaker,
+                timestamp,
+                text: String::new(),
+            });
+            continue;
+        }
+
+        if let Some(ref mut turn) = current_turn {
+            if !turn.text.is_empty() {
+                turn.text.push('\n');
+            }
+            turn.text.push_str(line);
+        } else if trimmed != "## Notes" && (!trimmed.is_empty() || !notes_lines.is_empty()) {
+            notes_lines.push(line.to_string());
+        }
+    }
+
+    if let Some(mut finished) = current_turn.take() {
+        finished.text = finished.text.trim().to_string();
+        if !finished.text.is_empty() {
+            turns.push(finished);
+        }
+    }
+
+    let notes_joined = notes_lines.join("\n").trim().to_string();
+    let notes = (!notes_joined.is_empty()).then_some(notes_joined);
+
+    ParsedMeetingDoc {
+        title,
+        detail,
+        notes,
+        turns,
+    }
+}
+
+impl ParsedMeetingDoc {
+    pub fn to_markdown(&self) -> String {
+        let mut out = format!("# {}\n\n{}", self.title, self.detail);
+        if let Some(notes) = self
+            .notes
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            out.push_str(&format!("\n\n## Notes\n{notes}"));
+        }
+        for turn in &self.turns {
+            out.push_str(&format!(
+                "\n\n**{}** · {}\n{}",
+                turn.speaker,
+                turn.timestamp,
+                turn.text.trim()
+            ));
+        }
+        out.push('\n');
+        out
+    }
+
+    pub fn transcript_only(&self) -> String {
+        self.turns
+            .iter()
+            .map(|t| format!("{} ({}): {}", t.speaker, t.timestamp, t.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn rename_speaker(&mut self, old_speaker: &str, new_speaker: &str) -> bool {
+        let old_trimmed = old_speaker.trim();
+        let new_trimmed: String = new_speaker
+            .trim()
+            .chars()
+            .filter(|&c| c != '\n' && c != '\r' && c != '*')
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if old_trimmed.is_empty() || new_trimmed.is_empty() || old_trimmed == new_trimmed {
+            return false;
+        }
+        let mut changed = false;
+        for turn in &mut self.turns {
+            if turn.speaker == old_trimmed {
+                turn.speaker = new_trimmed.clone();
+                changed = true;
+            }
+        }
+        if !changed {
+            return false;
+        }
+        let mut merged: Vec<ParsedTurn> = Vec::with_capacity(self.turns.len());
+        for turn in self.turns.drain(..) {
+            if let Some(prev) = merged.last_mut().filter(|p| p.speaker == turn.speaker) {
+                if !prev.text.ends_with(' ') && !turn.text.is_empty() {
+                    prev.text.push(' ');
+                }
+                prev.text.push_str(turn.text.trim());
+            } else {
+                merged.push(turn);
+            }
+        }
+        self.turns = merged;
+        if let Some((duration_prefix, _)) = self.detail.split_once(" · ") {
+            let speakers: Vec<&str> = self.turns.iter().map(|t| t.speaker.as_str()).collect();
+            let people = people_label_from_speakers(&speakers);
+            self.detail = format!("{duration_prefix} · {people}");
+        }
+        true
+    }
 }
 
 // --------------------------------------------------------------- listing
@@ -1864,7 +2597,9 @@ fn summarize(dir: &Path, id: &str, status: &MeetingStatus) -> MeetingSummary {
         .and_then(|l| l.strip_prefix("# ").map(str::to_string))
         .or_else(|| started_at(id).map(meeting_title))
         .unwrap_or_else(|| id.to_string());
-    let detail = lines.next();
+    let detail = lines
+        .next()
+        .filter(|l| !l.starts_with("## ") && parse_turn_header(l).is_none());
     MeetingSummary {
         id: id.to_string(),
         title,
@@ -1920,6 +2655,87 @@ pub async fn read_meeting(app: AppHandle, id: String) -> Result<String, String> 
     crate::privacy::require_history_unlocked(&app)?;
     let path = meetings_dir(&app)?.join(format!("{}.md", checked_id(&id)?));
     std::fs::read_to_string(path).map_err(|_| "That meeting has no transcript yet.".to_string())
+}
+
+#[tauri::command]
+pub async fn rename_meeting_title(
+    app: AppHandle,
+    id: String,
+    title: String,
+) -> Result<MeetingSummary, String> {
+    crate::privacy::require_history_unlocked(&app)?;
+    let id = checked_id(&id)?;
+    let clean_title: String = title
+        .trim()
+        .chars()
+        .filter(|&c| c != '\n' && c != '\r')
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if clean_title.is_empty() {
+        return Err("Meeting title cannot be empty.".into());
+    }
+    let dir = meetings_dir(&app)?;
+    let path = dir.join(format!("{id}.md"));
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|_| "That meeting has no transcript yet.".to_string())?;
+    let mut doc = parse_meeting_markdown(&raw);
+    doc.title = clean_title;
+    write_private(&path, &doc.to_markdown())?;
+    Ok(summarize(&dir, id, &status(&app)))
+}
+
+#[tauri::command]
+pub async fn rename_meeting_speaker(
+    app: AppHandle,
+    id: String,
+    old_speaker: String,
+    new_speaker: String,
+) -> Result<String, String> {
+    crate::privacy::require_history_unlocked(&app)?;
+    let id = checked_id(&id)?;
+    let dir = meetings_dir(&app)?;
+    let path = dir.join(format!("{id}.md"));
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|_| "That meeting has no transcript yet.".to_string())?;
+    let mut doc = parse_meeting_markdown(&raw);
+    if !doc.rename_speaker(&old_speaker, &new_speaker) {
+        return Ok(raw);
+    }
+    let updated = doc.to_markdown();
+    write_private(&path, &updated)?;
+    announce(&app);
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn summarize_meeting(app: AppHandle, id: String) -> Result<String, String> {
+    crate::privacy::require_history_unlocked(&app)?;
+    let id = checked_id(&id)?.to_string();
+    let dir = meetings_dir(&app)?;
+    let path = dir.join(format!("{id}.md"));
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|_| "That meeting has no transcript yet.".to_string())?;
+    let doc = parse_meeting_markdown(&raw);
+    if doc.turns.is_empty() {
+        return Err("This meeting has no speaker turns to summarize.".into());
+    }
+    let cfg = crate::config::load(&app);
+    let transcript_text = doc.transcript_only();
+    let notes = tauri::async_runtime::spawn_blocking(move || {
+        crate::llm::summarize_meeting_transcript(&transcript_text, &cfg.llm_model, &cfg.vocabulary)
+    })
+    .await
+    .map_err(|e| format!("Summarization task failed: {e}"))??;
+
+    // Re-read the file before writing in case the user renamed a speaker or
+    // title while the LLM was generating.
+    let latest_raw = std::fs::read_to_string(&path).unwrap_or(raw);
+    let mut latest_doc = parse_meeting_markdown(&latest_raw);
+    latest_doc.notes = Some(notes);
+    let updated = latest_doc.to_markdown();
+    write_private(&path, &updated)?;
+    Ok(updated)
 }
 
 /// Opens the transcript in the default text editor (TextEdit unless
@@ -1986,7 +2802,7 @@ pub fn get_meeting_speakers(app: AppHandle) -> u32 {
 #[tauri::command]
 pub fn set_meeting_speakers(app: AppHandle, speakers: u32) -> Result<(), String> {
     let mut cfg = crate::config::load(&app);
-    cfg.meeting_speakers = speakers.min(10);
+    cfg.meeting_speakers = speakers.min(16);
     crate::config::save(&app, &cfg)
 }
 
@@ -2776,5 +3592,349 @@ mod tests {
             dt_energy > 100.0,
             "loud local double-talk must not be suppressed (energy={dt_energy})"
         );
+    }
+
+    #[test]
+    fn group_voices_resists_centroid_snowball_across_six_biased_call_speakers() {
+        // Six distinct speakers sharing a strong WebRTC/codec channel component
+        // (`alpha^2 = 0.72` cross-speaker cosine, `~0.96` same-speaker cosine).
+        // Summing centroids without UPGMA normalization inflates cross-cluster
+        // cosine from 0.72 -> 0.79 -> 0.82 -> 0.84 and collapses all 6 into 1.
+        let alpha = 0.72f32.sqrt();
+        let residual = (1.0 - 0.72f32).sqrt();
+        let make_speaker_vec = |spk: usize, jitter: f32| -> Vec<f32> {
+            let mut v = vec![0.0f32; 16];
+            v[0] = alpha; // shared call-channel direction
+            v[1 + spk] = residual;
+            v[8 + spk] = jitter;
+            v
+        };
+        let mut voices = Vec::new();
+        for round in 0..2 {
+            for spk in 0..6 {
+                let jitter = if round == 0 { 0.06 } else { -0.06 };
+                voices.push(voice(&make_speaker_vec(spk, jitter), 2.5 + round as f32));
+            }
+        }
+        let labels = group_voices(&voices, 0, SAME_SPEAKER_SIMILARITY);
+        assert_eq!(
+            labels,
+            vec![0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5],
+            "all 6 biased call speakers must stay distinct across both rounds"
+        );
+    }
+
+    #[test]
+    fn group_voices_complete_linkage_blocks_bridge_chaining() {
+        // Speaker A and Speaker C are orthogonal (cosine 0.0), with a blended
+        // handoff segment B right between them (~0.707 cosine to both).
+        let a = [1.0, 0.0, 0.0];
+        let b = [1.0, 1.0, 0.0];
+        let c = [0.0, 1.0, 0.0];
+        let voices = [voice(&a, 3.0), voice(&b, 2.0), voice(&c, 3.0)];
+        let labels = group_voices(&voices, 0, 0.65);
+        assert_ne!(
+            labels[0], labels[2],
+            "complete-linkage guard must prevent bridge segment B from merging A and C: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn group_voices_with_hints_respects_ui_cannot_link_for_close_voices() {
+        // Two very similar voices (~0.94 cosine) that would merge acoustically,
+        // but Accessibility unambiguously observed two different active tiles.
+        let v1 = [1.0, 0.1, 0.0];
+        let v2 = [0.98, 0.25, 0.0];
+        let voices = [voice(&v1, 3.0), voice(&v2, 3.0)];
+        let hints = [Some("Alice".to_string()), Some("Carol".to_string())];
+        assert_eq!(
+            group_voices_with_hints(&voices, Some(&hints), 0, SAME_SPEAKER_SIMILARITY),
+            vec![0, 1]
+        );
+        // An explicit speaker count override (`speakers = 1`) still merges when requested.
+        assert_eq!(
+            group_voices_with_hints(&voices, Some(&hints), 1, SAME_SPEAKER_SIMILARITY),
+            vec![0, 0]
+        );
+    }
+
+    #[test]
+    fn split_segments_at_ui_changes_cuts_at_quiet_pause_valley() {
+        use crate::speaker_poller::SpeakerObservation;
+        let mut samples = vec![0.25f32; 16_000 * 6];
+        // Quiet 40ms breath pause centered around 2.82s (near the 3.0s UI handoff).
+        let valley_start = (2.80 * 16_000.0) as usize;
+        let valley_end = (2.84 * 16_000.0) as usize;
+        samples[valley_start..valley_end].fill(0.0);
+
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 0,
+                speaking_names: vec!["Alice".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 3000,
+                speaking_names: vec!["Bob".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 5900,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let spans = observation_spans(&observations);
+        let split = split_segments_at_ui_changes(&samples, &[(0.0, 6.0)], &spans);
+        assert_eq!(split.len(), 2, "{split:?}");
+        assert!(
+            (split[0].1 - 2.82).abs() < 0.03,
+            "expected split in the 2.82s pause valley, got {:?}",
+            split[0].1
+        );
+        assert_eq!(split[0].1, split[1].0);
+
+        // Multi-handoff (Alice 0..2.2s -> Bob 2.2..4.4s -> Alice 4.4..7.0s) in a single segment:
+        // local windowing around each handoff splits all 3 turns cleanly.
+        let samples_multi = vec![0.25f32; 16_000 * 7];
+        let multi_obs = vec![
+            SpeakerObservation {
+                offset_ms: 0,
+                speaking_names: vec!["Alice".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 2200,
+                speaking_names: vec!["Bob".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 4400,
+                speaking_names: vec!["Alice".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 6900,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let multi_spans = observation_spans(&multi_obs);
+        let multi_split = split_segments_at_ui_changes(&samples_multi, &[(0.0, 7.0)], &multi_spans);
+        assert_eq!(multi_split.len(), 3, "{multi_split:?}");
+    }
+
+    #[test]
+    fn resolve_cluster_names_marks_multi_speaker_clump_as_group() {
+        use crate::speaker_poller::SpeakerObservation;
+        // Cluster 0 has both Alice (4.5s) and Bob (4.5s) clumped together (50% each < 55%);
+        // Cluster 1 is unambiguously Carol (5.0s); Cluster 2 has no UI observations.
+        let turns = vec![
+            Turn {
+                start: 0.0,
+                end: 4.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 5.0,
+                end: 9.5,
+                speaker: 0,
+            },
+            Turn {
+                start: 10.0,
+                end: 15.0,
+                speaker: 1,
+            },
+            Turn {
+                start: 16.0,
+                end: 18.0,
+                speaker: 2,
+            },
+        ];
+        let observations = vec![
+            SpeakerObservation {
+                offset_ms: 0,
+                speaking_names: vec!["Alice".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 4500,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 5000,
+                speaking_names: vec!["Bob".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 9500,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 10_000,
+                speaking_names: vec!["Carol".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 15_000,
+                speaking_names: vec![],
+                muted_names: vec![],
+            },
+        ];
+        let names = resolve_cluster_names(&turns, &observations, None);
+        assert_eq!(names[&0], "Group");
+        assert_eq!(names[&1], "Carol");
+        assert_eq!(names[&2], "Speaker 1");
+    }
+
+    #[test]
+    fn remote_group_fallback_and_meeting_detail_handle_clumped_vs_single_voice() {
+        use crate::speaker_poller::SpeakerObservation;
+        let turns = vec![
+            Turn {
+                start: 0.0,
+                end: 2.0,
+                speaker: YOU_SPEAKER_ID,
+            },
+            Turn {
+                start: 3.0,
+                end: 12.0,
+                speaker: 0,
+            },
+        ];
+
+        // 1. Unconfirmed single remote bucket with `speakers = 0` -> "Group"
+        let mut names = resolve_cluster_names(&turns, &[], Some(YOU_SPEAKER_ID));
+        apply_remote_group_fallback(&mut names, &turns, &[], 0, false);
+        assert_eq!(names[&YOU_SPEAKER_ID], "You");
+        assert_eq!(names[&0], "Group");
+
+        let lines = vec![
+            Line {
+                start: 0.0,
+                speaker: "You".into(),
+                text: "Quick stand-up?".into(),
+            },
+            Line {
+                start: 3.0,
+                speaker: "Group".into(),
+                text: "All good on our end.".into(),
+            },
+        ];
+        assert_eq!(meeting_detail(600.0, &lines), "10 min · You + group");
+        assert_eq!(meeting_detail(600.0, &lines[1..]), "10 min · group");
+        let mixed_lines = vec![
+            lines[0].clone(),
+            Line {
+                start: 2.5,
+                speaker: "Alice".into(),
+                text: "Shipped auth.".into(),
+            },
+            lines[1].clone(),
+        ];
+        assert_eq!(meeting_detail(600.0, &mixed_lines), "10 min · 3+ speakers");
+
+        // 2. Confirmed single voice on a 1:1 call (`confirmed_single_voice = true`, <=1 UI speaker)
+        //    -> stays "Speaker 1"
+        let mut one_on_one = resolve_cluster_names(&turns, &[], Some(YOU_SPEAKER_ID));
+        apply_remote_group_fallback(&mut one_on_one, &turns, &[], 0, true);
+        assert_eq!(one_on_one[&0], "Speaker 1");
+
+        // 3. Even if `confirmed_single_voice = true`, UI seeing >= 2 active remote names -> "Group"
+        let multi_ui = vec![
+            SpeakerObservation {
+                offset_ms: 3100,
+                speaking_names: vec!["Alice".into()],
+                muted_names: vec![],
+            },
+            SpeakerObservation {
+                offset_ms: 4000,
+                speaking_names: vec!["Bob".into()],
+                muted_names: vec![],
+            },
+        ];
+        let mut ui_override = resolve_cluster_names(&turns, &multi_ui, Some(YOU_SPEAKER_ID));
+        apply_remote_group_fallback(&mut ui_override, &turns, &multi_ui, 0, true);
+        assert_eq!(ui_override[&0], "Group");
+
+        // 4. Explicit `speakers = 2` (user configured a 2-person call) -> keeps "Speaker 1"
+        let mut explicit_two = resolve_cluster_names(&turns, &[], Some(YOU_SPEAKER_ID));
+        apply_remote_group_fallback(&mut explicit_two, &turns, &[], 2, false);
+        assert_eq!(explicit_two[&0], "Speaker 1");
+
+        // 5. Direct check of `single_voice_consistent_from_embeddings`
+        let tight = [voice(&[1.0, 0.0, 0.0], 2.5), voice(&[0.98, 0.15, 0.0], 2.5)];
+        assert!(single_voice_consistent_from_embeddings(&tight, None));
+        let loose = [voice(&[1.0, 0.0, 0.0], 2.5), voice(&[0.70, 0.71, 0.0], 2.5)];
+        assert!(!single_voice_consistent_from_embeddings(&loose, None));
+        let short_only = [voice(&[1.0, 0.0, 0.0], 0.7), voice(&[1.0, 0.0, 0.0], 0.8)];
+        assert!(!single_voice_consistent_from_embeddings(&short_only, None));
+        let single_long = [voice(&[1.0, 0.0, 0.0], 5.0)];
+        assert!(single_voice_consistent_from_embeddings(
+            &single_long,
+            Some(0.86)
+        ));
+        assert!(!single_voice_consistent_from_embeddings(
+            &single_long,
+            Some(0.65)
+        ));
+    }
+
+    #[test]
+    fn parse_and_rename_meeting_markdown_roundtrips_notes_and_merges_turns() {
+        let lines = vec![
+            Line {
+                start: 0.0,
+                speaker: "You".into(),
+                text: "Good morning.".into(),
+            },
+            Line {
+                start: 5.0,
+                speaker: "Speaker 1".into(),
+                text: "Shipped the API.".into(),
+            },
+            Line {
+                start: 12.0,
+                speaker: "Speaker 2".into(),
+                text: "Also fixed the tests.".into(),
+            },
+        ];
+        let md = render_markdown("Morning Stand-up", "15 min · 3 speakers", &lines);
+        let mut doc = parse_meeting_markdown(&md);
+        assert_eq!(doc.title, "Morning Stand-up");
+        assert_eq!(doc.detail, "15 min · 3 speakers");
+        assert_eq!(doc.notes, None);
+        assert_eq!(doc.turns.len(), 3);
+        assert_eq!(doc.to_markdown(), md);
+
+        // Attach notes and rename Speaker 1 -> Alex.
+        doc.notes = Some("- **Summary**: Stand-up updates.\n- **Action items**: Deploy.".into());
+        assert!(doc.rename_speaker("Speaker 1", "Alex"));
+        assert_eq!(doc.turns[1].speaker, "Alex");
+        assert_eq!(doc.detail, "15 min · 3 speakers");
+
+        // Rename Speaker 2 -> Alex as well; adjacent Alex turns merge and detail updates to 2 speakers.
+        assert!(doc.rename_speaker("Speaker 2", "Alex"));
+        assert_eq!(doc.turns.len(), 2);
+        assert_eq!(doc.turns[1].speaker, "Alex");
+        assert_eq!(doc.turns[1].text, "Shipped the API. Also fixed the tests.");
+        assert_eq!(doc.detail, "15 min · 2 speakers");
+
+        let rendered = doc.to_markdown();
+        let reparsed = parse_meeting_markdown(&rendered);
+        assert_eq!(reparsed, doc);
+
+        // Freeform notes before the first turn (without `## Notes`) and bold text in a turn body
+        // are preserved without being mistaken for turn headers or dropped.
+        let freeform = "# Stand-up\n\n10 min · 2 speakers\n\nManual context note.\n\n**You** · 00:00\n**Note** · check status.\n";
+        let parsed_freeform = parse_meeting_markdown(freeform);
+        assert_eq!(
+            parsed_freeform.notes.as_deref(),
+            Some("Manual context note.")
+        );
+        assert_eq!(parsed_freeform.turns.len(), 1);
+        assert_eq!(parsed_freeform.turns[0].text, "**Note** · check status.");
     }
 }

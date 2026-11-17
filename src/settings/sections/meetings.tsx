@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { notifyError } from "../../ui/toast";
@@ -24,7 +24,7 @@ export type DetectedCall = {
   pid: number;
 };
 
-const SPEAKER_OPTIONS = [0, 2, 3, 4, 5, 6, 7, 8];
+const SPEAKER_OPTIONS = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12];
 
 export function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -194,17 +194,327 @@ function SpeakerCount() {
   );
 }
 
-function MeetingList({ status }: { status: MeetingStatus | null }) {
+type ParsedTurn = {
+  speaker: string;
+  timestamp: string;
+  text: string;
+};
+
+type ParsedMeetingDoc = {
+  title: string;
+  detail: string;
+  notes: string | null;
+  turns: ParsedTurn[];
+  speakers: string[];
+};
+
+function parseTurnHeader(trimmed: string): { speaker: string; timestamp: string } | null {
+  if (!trimmed.startsWith("**")) return null;
+  const rest = trimmed.slice(2);
+  const sep = rest.lastIndexOf("** · ");
+  if (sep <= 0) return null;
+  const speaker = rest.slice(0, sep).trim();
+  const timestamp = rest.slice(sep + 5).trim();
+  if (!speaker || !timestamp || !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(timestamp)) return null;
+  return { speaker, timestamp };
+}
+
+function parseMeetingMarkdown(markdown: string): ParsedMeetingDoc {
+  let title = "Meeting";
+  let detail = "";
+  const notesLines: string[] = [];
+  const turns: ParsedTurn[] = [];
+  let currentTurn: ParsedTurn | null = null;
+  let sawTitle = false;
+  let sawDetail = false;
+
+  for (const rawLine of markdown.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!sawTitle) {
+      if (!trimmed) continue;
+      if (trimmed.startsWith("# ")) {
+        title = trimmed.slice(2).trim();
+        sawTitle = true;
+        continue;
+      }
+      sawTitle = true;
+    }
+    if (!sawDetail && !currentTurn) {
+      if (!trimmed) continue;
+      if (!trimmed.startsWith("## ") && !parseTurnHeader(trimmed)) {
+        detail = trimmed;
+        sawDetail = true;
+        continue;
+      }
+      sawDetail = true;
+    }
+
+    const header = parseTurnHeader(trimmed);
+    if (header) {
+      if (currentTurn && currentTurn.text.trim()) {
+        turns.push({ ...currentTurn, text: currentTurn.text.trim() });
+      }
+      currentTurn = { speaker: header.speaker, timestamp: header.timestamp, text: "" };
+      continue;
+    }
+
+    if (currentTurn) {
+      currentTurn.text += (currentTurn.text ? "\n" : "") + rawLine;
+    } else if (trimmed === "## Notes") {
+      // Notes heading; subsequent lines before the first turn are captured in notesLines.
+    } else if (sawDetail) {
+      notesLines.push(rawLine);
+    }
+  }
+
+  if (currentTurn && currentTurn.text.trim()) {
+    turns.push({ ...currentTurn, text: currentTurn.text.trim() });
+  }
+
+  const speakers: string[] = [];
+  for (const t of turns) {
+    if (!speakers.includes(t.speaker)) {
+      speakers.push(t.speaker);
+    }
+  }
+
+  const notesJoined = notesLines.join("\n").trim();
+  return {
+    title,
+    detail,
+    notes: notesJoined.length > 0 ? notesJoined : null,
+    turns,
+    speakers,
+  };
+}
+
+function renderInlineBold(line: string) {
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+      <strong key={idx} className="font-semibold text-base-content">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      <span key={idx}>{part}</span>
+    ),
+  );
+}
+
+function MeetingNotesBody({
+  id,
+  markdown,
+  onUpdated,
+}: {
+  id: string;
+  markdown: string;
+  onUpdated: (nextMarkdown: string) => void;
+}) {
+  const doc = parseMeetingMarkdown(markdown);
+  const [renamingSpeaker, setRenamingSpeaker] = useState<string | null>(null);
+  const [speakerDraft, setSpeakerDraft] = useState("");
+  const [savingSpeaker, setSavingSpeaker] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+
+  function startRenameSpeaker(speaker: string) {
+    setRenamingSpeaker(speaker);
+    setSpeakerDraft(speaker);
+  }
+
+  function submitSpeakerRename(e: React.FormEvent) {
+    e.preventDefault();
+    if (!renamingSpeaker) return;
+    const trimmed = speakerDraft.trim();
+    if (!trimmed || trimmed === renamingSpeaker) {
+      setRenamingSpeaker(null);
+      return;
+    }
+    setSavingSpeaker(true);
+    invoke<string>("rename_meeting_speaker", {
+      id,
+      oldSpeaker: renamingSpeaker,
+      newSpeaker: trimmed,
+    })
+      .then((updated) => {
+        onUpdated(updated);
+        setRenamingSpeaker(null);
+      })
+      .catch((err) => notifyError("Couldn't rename speaker", err))
+      .finally(() => setSavingSpeaker(false));
+  }
+
+  function summarize() {
+    setSummarizing(true);
+    invoke<string>("summarize_meeting", { id })
+      .then((updated) => onUpdated(updated))
+      .catch((err) => notifyError("Couldn't summarize the meeting", err))
+      .finally(() => setSummarizing(false));
+  }
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-md bg-base-200 p-2.5 text-xs" data-testid="meeting-notes-body">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-content/10 pb-2">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="mr-0.5 text-[11px] opacity-60">Speakers:</span>
+          {doc.speakers.map((speaker) => (
+            <button
+              key={speaker}
+              type="button"
+              className={`badge badge-sm cursor-pointer gap-1 hover:brightness-95 ${
+                speaker === "You"
+                  ? "badge-primary"
+                  : speaker === "Group"
+                    ? "badge-secondary"
+                    : "badge-outline opacity-85"
+              }`}
+              onClick={() => startRenameSpeaker(speaker)}
+              disabled={savingSpeaker || summarizing}
+              title={`Click to rename "${speaker}" across this transcript`}
+              data-testid="meeting-speaker-chip"
+            >
+              <span>{speaker}</span>
+              <span className="text-[10px] opacity-60" aria-hidden="true">
+                ✎
+              </span>
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs h-6 min-h-0 gap-1 border border-base-content/15 px-2 text-[11px]"
+          onClick={summarize}
+          disabled={summarizing || savingSpeaker || doc.turns.length === 0}
+          title="Generate summary & action items locally using your configured LLM"
+          data-testid="meeting-summarize"
+        >
+          {summarizing ? (
+            <>
+              <span className="loading loading-spinner loading-xs" />
+              Summarizing…
+            </>
+          ) : doc.notes ? (
+            "Regenerate summary"
+          ) : (
+            "Summarize"
+          )}
+        </button>
+      </div>
+
+      {renamingSpeaker && (
+        <form
+          onSubmit={submitSpeakerRename}
+          className="flex items-center gap-1.5 rounded bg-base-100 px-2 py-1.5"
+          data-testid="meeting-speaker-rename-form"
+        >
+          <span className="text-[11px] opacity-70">Rename &ldquo;{renamingSpeaker}&rdquo; to:</span>
+          <input
+            type="text"
+            className="input input-xs input-bordered h-6 flex-1 text-xs"
+            value={speakerDraft}
+            onChange={(e) => setSpeakerDraft(e.target.value)}
+            placeholder="e.g. Sarah"
+            autoFocus
+            disabled={savingSpeaker || summarizing}
+          />
+          <button type="submit" className="btn btn-primary btn-xs h-6 min-h-0" disabled={savingSpeaker || summarizing}>
+            Save
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs h-6 min-h-0"
+            onClick={() => setRenamingSpeaker(null)}
+            disabled={savingSpeaker || summarizing}
+          >
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {doc.notes && (
+        <div
+          className="rounded-md border border-primary/20 bg-base-100 p-2.5 leading-relaxed"
+          data-testid="meeting-summary-box"
+        >
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-primary">Meeting Notes</div>
+          <div className="flex flex-col gap-1 text-xs opacity-90">
+            {doc.notes.split("\n").map((line, i) => (
+              <p key={i} className="whitespace-pre-wrap">
+                {renderInlineBold(line)}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="dw-scroll flex max-h-72 flex-col gap-2 overflow-y-auto pr-1" data-testid="meeting-turns">
+        {doc.turns.length > 0 ? (
+          doc.turns.map((turn, idx) => (
+            <div key={idx} className="rounded bg-base-100/70 px-2.5 py-1.5 leading-relaxed">
+              <div className="mb-0.5 flex items-baseline gap-1.5">
+                <button
+                  type="button"
+                  className={`font-semibold hover:underline ${
+                    turn.speaker === "You"
+                      ? "text-primary"
+                      : turn.speaker === "Group"
+                        ? "text-secondary"
+                        : "text-base-content"
+                  }`}
+                  onClick={() => startRenameSpeaker(turn.speaker)}
+                  title={`Click to rename "${turn.speaker}"`}
+                >
+                  {turn.speaker}
+                </button>
+                <span className="text-[11px] tabular-nums opacity-50">· {turn.timestamp}</span>
+              </div>
+              <pre className="whitespace-pre-wrap font-sans text-xs opacity-90">{turn.text}</pre>
+            </div>
+          ))
+        ) : (
+          <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed">{markdown}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MeetingList({
+  status,
+  focusMeetingId,
+  focusNonce,
+}: {
+  status: MeetingStatus | null;
+  focusMeetingId?: string | null;
+  focusNonce?: number;
+}) {
   const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null);
   const [open, setOpen] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
   // Delete asks once more (the transcript is gone for good).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLLIElement | null>>({});
+  const lastHandledFocusNonce = useRef(0);
+
   useEffect(() => {
     if (!confirmDelete) return;
     const timer = setTimeout(() => setConfirmDelete(null), 4000);
     return () => clearTimeout(timer);
   }, [confirmDelete]);
+
+  function openAndLoad(id: string, scrollIntoView = false) {
+    invoke<string>("read_meeting", { id })
+      .then((text) => {
+        setOpen((current) => ({ ...current, [id]: text }));
+        if (scrollIntoView) {
+          setTimeout(() => {
+            rowRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }, 50);
+        }
+      })
+      .catch((err) => notifyError("Couldn't read the transcript", err));
+  }
 
   function refresh() {
     invoke<MeetingSummary[]>("list_meetings")
@@ -216,14 +526,67 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
   const listKey = `${status?.recording?.id ?? ""}|${status?.queued.join(",") ?? ""}`;
   useEffect(refresh, [listKey]);
 
+  // Also refresh and expand immediately if a meeting finishes transcribing while
+  // the user already has the Meetings page open.
+  useEffect(() => {
+    const unlisten = listen<MeetingSummary | string>("meeting-saved", (e) => {
+      refresh();
+      const savedId = typeof e.payload === "string" ? null : e.payload.id;
+      if (savedId) {
+        openAndLoad(savedId, true);
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  // Deep-link focus from the widget ("Meeting transcript saved · View") or menu bar ("View Meeting Notes…").
+  useEffect(() => {
+    if (
+      !focusMeetingId ||
+      !focusNonce ||
+      focusNonce === lastHandledFocusNonce.current ||
+      !meetings ||
+      meetings.length === 0
+    ) {
+      return;
+    }
+    const target =
+      focusMeetingId === "latest"
+        ? meetings.find((m) => m.state === "ready")
+        : meetings.find((m) => m.id === focusMeetingId && m.state === "ready") ??
+          meetings.find((m) => m.state === "ready");
+    if (target) {
+      lastHandledFocusNonce.current = focusNonce;
+      openAndLoad(target.id, true);
+    }
+  }, [focusMeetingId, focusNonce, meetings]);
+
   function toggleView(id: string) {
     if (open[id] !== undefined) {
       setOpen(({ [id]: _, ...rest }) => rest);
       return;
     }
-    invoke<string>("read_meeting", { id })
-      .then((text) => setOpen((current) => ({ ...current, [id]: text })))
-      .catch((err) => notifyError("Couldn't read the transcript", err));
+    openAndLoad(id, false);
+  }
+
+  function saveTitle(id: string, e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = titleDraft.trim();
+    if (!trimmed) {
+      setEditingTitleId(null);
+      return;
+    }
+    invoke<MeetingSummary>("rename_meeting_title", { id, title: trimmed })
+      .then((updated) => {
+        setMeetings((prev) => prev?.map((m) => (m.id === id ? updated : m)) ?? null);
+        setEditingTitleId(null);
+        if (open[id] !== undefined) {
+          openAndLoad(id, false);
+        }
+      })
+      .catch((err) => notifyError("Couldn't rename the meeting", err));
   }
 
   function copy(id: string) {
@@ -247,10 +610,55 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
   return (
     <ul className="flex flex-col gap-1 rounded-md bg-base-100 p-1.5" data-testid="meeting-list">
       {meetings.map((m) => (
-        <li key={m.id} className="group rounded px-1.5 py-1.5 text-xs hover:bg-base-200" data-testid="meeting-row">
+        <li
+          key={m.id}
+          ref={(el) => {
+            rowRefs.current[m.id] = el;
+          }}
+          className="group rounded px-1.5 py-1.5 text-xs hover:bg-base-200"
+          data-testid="meeting-row"
+        >
           <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0">
-              <span className="block truncate font-medium">{m.title}</span>
+            <span className="min-w-0 flex-1">
+              {editingTitleId === m.id ? (
+                <form onSubmit={(e) => saveTitle(m.id, e)} className="mb-0.5 flex items-center gap-1">
+                  <input
+                    type="text"
+                    className="input input-xs input-bordered h-6 flex-1 text-xs"
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    autoFocus
+                  />
+                  <button type="submit" className="btn btn-primary btn-xs h-6 min-h-0">
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs h-6 min-h-0"
+                    onClick={() => setEditingTitleId(null)}
+                  >
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <span className="truncate font-medium">{m.title}</span>
+                  {m.state === "ready" && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs h-4 min-h-0 px-1 text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                      onClick={() => {
+                        setEditingTitleId(m.id);
+                        setTitleDraft(m.title);
+                      }}
+                      title="Rename meeting"
+                      aria-label={`Rename ${m.title}`}
+                    >
+                      ✎
+                    </button>
+                  )}
+                </span>
+              )}
               <span className="block opacity-60">
                 {m.state === "recording"
                   ? "Recording…"
@@ -266,7 +674,11 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
             <span className="flex shrink-0 items-center gap-1">
               {m.state === "ready" && (
                 <>
-                  <button className="btn btn-ghost btn-xs" onClick={() => toggleView(m.id)} aria-expanded={open[m.id] !== undefined}>
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => toggleView(m.id)}
+                    aria-expanded={open[m.id] !== undefined}
+                  >
                     {open[m.id] !== undefined ? "Hide" : "View"}
                   </button>
                   <button className="btn btn-ghost btn-xs" onClick={() => copy(m.id)}>
@@ -306,9 +718,14 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
             </span>
           </div>
           {open[m.id] !== undefined && (
-            <pre className="dw-scroll mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap rounded bg-base-200 p-2 font-sans text-xs leading-relaxed">
-              {open[m.id]}
-            </pre>
+            <MeetingNotesBody
+              id={m.id}
+              markdown={open[m.id]}
+              onUpdated={(nextMarkdown) => {
+                setOpen((current) => ({ ...current, [m.id]: nextMarkdown }));
+                refresh();
+              }}
+            />
           )}
         </li>
       ))}
@@ -316,7 +733,13 @@ function MeetingList({ status }: { status: MeetingStatus | null }) {
   );
 }
 
-export function MeetingsSection() {
+export function MeetingsSection({
+  focusMeetingId,
+  focusNonce,
+}: {
+  focusMeetingId?: string | null;
+  focusNonce?: number;
+} = {}) {
   const status = useMeetingStatus();
   const lock = useHistoryLock();
   return (
@@ -330,7 +753,7 @@ export function MeetingsSection() {
       ) : lock.status.locked ? (
         <LockedHistory lock={lock} />
       ) : (
-        <MeetingList status={status} />
+        <MeetingList status={status} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
       )}
     </>
   );

@@ -703,6 +703,121 @@ pub fn summarize_for_journal(text: &str, model: &str) -> Option<Result<String, S
     }
 }
 
+const MAX_MEETING_PROMPT_CHARS: usize = 24_000;
+
+/// Strips conversational lead-ins ("Here are the meeting notes:") and
+/// `<think>` blocks from a local LLM meeting summary.
+pub fn clean_meeting_summary(raw: &str) -> String {
+    let without_think = crate::local_llm::strip_think(raw);
+    let unfenced = strip_markdown_fences(&without_think);
+    let mut lines = unfenced.lines().peekable();
+    while let Some(first) = lines.peek() {
+        let trimmed = first.trim();
+        if trimmed.is_empty() {
+            lines.next();
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        let is_preamble = (PREAMBLES.iter().any(|p| lower.starts_with(p))
+            || lower.starts_with("here are"))
+            && lower.ends_with(':');
+        let is_notes_heading = matches!(lower.as_str(), "# notes" | "## notes" | "### notes");
+        if is_preamble || is_notes_heading {
+            lines.next();
+        } else {
+            break;
+        }
+    }
+    lines.collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// Generates concise bullet-point meeting notes (Summary, Key points,
+/// Action items) from a meeting transcript using the user's configured
+/// local LLM (Ollama, LM Studio, llama.cpp, or Jan).
+pub fn summarize_meeting_transcript(
+    transcript: &str,
+    model: &str,
+    vocabulary: &[String],
+) -> Result<String, String> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("Choose a local AI model in Settings → Refinement first.".to_string());
+    }
+    require_local(model)?;
+    let trimmed = transcript.trim();
+    if trimmed.is_empty() {
+        return Err("This meeting transcript is empty.".to_string());
+    }
+
+    let char_count = trimmed.chars().count();
+    let excerpt = if char_count <= MAX_MEETING_PROMPT_CHARS {
+        trimmed.to_string()
+    } else {
+        let half = MAX_MEETING_PROMPT_CHARS / 2;
+        let head: String = trimmed.chars().take(half).collect();
+        let tail: String = trimmed.chars().skip(char_count - half).collect();
+        format!("{head}\n\n[…middle of meeting omitted for length…]\n\n{tail}")
+    };
+
+    let mut prompt = String::from(
+        "Write concise meeting notes from the transcript below using markdown bullet points:\n\
+         - **Summary**: 1-2 sentences on what the meeting covered.\n\
+         - **Key points**: main updates, decisions, or blockers mentioned (attribute to speaker names when clear).\n\
+         - **Action items**: concrete follow-ups or next steps (omit if none were stated).\n\
+         Use ONLY facts stated in the transcript. Never invent names, tasks, or details. \
+         Output ONLY the markdown bullet points, with no introductory preamble.",
+    );
+    let terms: Vec<&str> = vocabulary
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !terms.is_empty() {
+        prompt.push_str(&format!(
+            "\n\nPreferred spelling for terms used in this workspace: {}",
+            terms.join(", ")
+        ));
+    }
+    prompt.push_str(&format!("\n\nMeeting transcript:\n{excerpt}"));
+
+    if let Some((server, id)) = crate::local_llm::parse(model) {
+        let started = Instant::now();
+        let answer =
+            crate::local_llm::complete(server, id, &prompt, std::time::Duration::from_secs(90))?;
+        record_latency(model, started.elapsed().as_millis() as u64);
+        let summary = clean_meeting_summary(&answer);
+        return if summary.is_empty() {
+            Err("The local AI model returned an empty summary.".to_string())
+        } else {
+            Ok(summary)
+        };
+    }
+
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "stream": false,
+        "keep_alive": KEEP_ALIVE,
+        "think": false,
+    });
+    let started = Instant::now();
+    let resp = ureq::post(OLLAMA_GENERATE_URL)
+        .timeout(std::time::Duration::from_secs(90))
+        .send_json(body)
+        .map_err(|e| format!("Ollama request failed (is `ollama serve` running?): {e}"))?;
+    let parsed: GenerateResponse = resp
+        .into_json()
+        .map_err(|e| format!("Failed to parse Ollama response: {e}"))?;
+    record_latency(model, started.elapsed().as_millis() as u64);
+
+    let summary = clean_meeting_summary(&parsed.response);
+    if summary.is_empty() {
+        Err("Ollama returned an empty summary.".to_string())
+    } else {
+        Ok(summary)
+    }
+}
+
 /// Small models often ignore "no markdown fences" instructions and wrap
 /// the response in a fenced code block anyway — strip one leading/trailing
 /// fence if present so the output pastes as raw code, not fenced markdown.

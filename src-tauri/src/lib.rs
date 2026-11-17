@@ -234,6 +234,35 @@ fn ui_ready(window: tauri::Window) {
     crate::applog!("ui: {} window ready", window.label());
 }
 
+#[derive(Clone, serde::Serialize, Debug)]
+pub struct SettingsNavigation {
+    pub page: String,
+    pub meeting_id: Option<String>,
+}
+
+#[derive(Default)]
+pub struct PendingSettingsNav(pub Mutex<Option<SettingsNavigation>>);
+
+#[tauri::command]
+fn open_meeting_in_settings(app: tauri::AppHandle, id: Option<String>) -> tauri::Result<()> {
+    let nav = SettingsNavigation {
+        page: "meetings".to_string(),
+        meeting_id: id,
+    };
+    if let Some(pending) = app.try_state::<PendingSettingsNav>() {
+        *pending.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(nav.clone());
+    }
+    open_settings(app.clone())?;
+    let _ = app.emit("navigate-settings", nav);
+    Ok(())
+}
+
+#[tauri::command]
+fn take_settings_navigation(app: tauri::AppHandle) -> Option<SettingsNavigation> {
+    app.try_state::<PendingSettingsNav>()
+        .and_then(|p| p.0.lock().unwrap_or_else(|e| e.into_inner()).take())
+}
+
 #[tauri::command]
 fn open_settings(app: tauri::AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("settings") {
@@ -380,6 +409,8 @@ pub fn run() {
             ambient::set_ambient_enabled,
             ambient::get_ambient_phase,
             open_settings,
+            open_meeting_in_settings,
+            take_settings_navigation,
             get_autostart_enabled,
             set_autostart_enabled,
             list_input_devices,
@@ -498,6 +529,9 @@ pub fn run() {
             meeting::get_meeting_status,
             meeting::list_meetings,
             meeting::read_meeting,
+            meeting::rename_meeting_title,
+            meeting::rename_meeting_speaker,
+            meeting::summarize_meeting,
             meeting::open_meeting,
             meeting::delete_meeting,
             meeting::transcribe_meeting,
@@ -541,6 +575,7 @@ pub fn run() {
             logging::set_log_transcripts(saved_config.log_transcripts);
             app.manage(privacy::PrivacyState::default());
             app.manage(discard::DiscardState::default());
+            app.manage(PendingSettingsNav::default());
             app.manage(meeting::MeetingState::default());
             meeting::spawn_auto_detect(app.handle().clone());
             history::make_private(app.handle());
@@ -777,6 +812,13 @@ pub fn run() {
             let meeting_item =
                 MenuItem::with_id(app, "toggle_meeting", "Start Meeting", true, None::<&str>)?;
             app.manage(MeetingMenuItem(meeting_item.clone()));
+            let open_meetings_item = MenuItem::with_id(
+                app,
+                "open_meetings",
+                "View Meeting Notes…",
+                true,
+                None::<&str>,
+            )?;
             let toggle_widget =
                 MenuItem::with_id(app, "toggle_widget", "Show/Hide Widget", true, None::<&str>)?;
             let open_settings_item =
@@ -808,6 +850,7 @@ pub fn run() {
                 &[
                     &toggle_recording_item,
                     &meeting_item,
+                    &open_meetings_item,
                     &toggle_widget,
                     &style_menu,
                     &open_settings_item,
@@ -834,6 +877,9 @@ pub fn run() {
                             crate::applog!("meeting: from the menu bar: {err}");
                             let _ = app.emit("meeting-failed", err);
                         }
+                    }
+                    "open_meetings" => {
+                        let _ = open_meeting_in_settings(app.clone(), None);
                     }
                     "toggle_widget" => {
                         if let Some(window) = app.get_webview_window("widget") {

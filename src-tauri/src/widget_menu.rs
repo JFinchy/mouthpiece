@@ -13,6 +13,7 @@ const MIC_MODE: &str = "micmode:";
 const NEXT: &str = "next:";
 const NEXT_AUTO: &str = "next-auto";
 const STYLE: &str = "widget-style:";
+const MEETINGS: &str = "widget-meetings";
 const SETTINGS: &str = "widget-settings";
 const AGENT_REPLY: &str = "agent-reply:";
 const AGENT_FOCUS: &str = "agent-focus:";
@@ -235,6 +236,11 @@ pub fn show_widget_menu(window: tauri::Window) -> Result<(), String> {
     menu.append(&style_menu).map_err(err)?;
     menu.append(&separator(app)?).map_err(err)?;
     menu.append(
+        &MenuItem::with_id(app, MEETINGS, "View Meeting Notes…", true, None::<&str>)
+            .map_err(err)?,
+    )
+    .map_err(err)?;
+    menu.append(
         &MenuItem::with_id(app, SETTINGS, "Open Settings…", true, None::<&str>).map_err(err)?,
     )
     .map_err(err)?;
@@ -289,6 +295,8 @@ pub fn handle(app: &AppHandle, id: &str) {
         });
     } else if let Some(session) = id.strip_prefix(AGENT_DISMISS) {
         crate::agents::dismiss_waiting_agent(app.clone(), session.to_string());
+    } else if id == MEETINGS {
+        let _ = crate::open_meeting_in_settings(app.clone(), None);
     } else if id == SETTINGS {
         let _ = crate::open_settings(app.clone());
     }

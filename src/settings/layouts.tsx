@@ -1,4 +1,6 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ReadinessPanel } from "./ReadinessPanel";
 import { type ReadinessFix } from "./readiness";
 import { IconAgent, IconBook, IconChart, IconClock, IconCpu, IconGear, IconInfo, IconMic, IconPalette, IconPeople, IconPlug, IconWave, IconWindow } from "./icons";
@@ -98,8 +100,49 @@ export const FIX_NODE: Partial<Record<ReadinessFix, NodeId>> = {
   pull_llm_model: "refinement",
 };
 
-export function SidebarLayout({ appearance }: { appearance: ReactElement }) {
-  const [page, setPage] = useState<PageId>("dictation");
+export type SettingsNavigation = {
+  page: string;
+  meeting_id: string | null;
+};
+
+export function useSettingsNavigation(onNavigate: (nav: SettingsNavigation) => void) {
+  const callbackRef = useRef(onNavigate);
+  callbackRef.current = onNavigate;
+
+  useEffect(() => {
+    invoke<SettingsNavigation | null>("take_settings_navigation")
+      .then((nav) => {
+        if (nav) callbackRef.current(nav);
+      })
+      .catch(() => {});
+
+    const unlisten = listen<SettingsNavigation>("navigate-settings", (e) => {
+      invoke<SettingsNavigation | null>("take_settings_navigation")
+        .then((pending) => callbackRef.current(pending ?? e.payload))
+        .catch(() => callbackRef.current(e.payload));
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+}
+
+export function SidebarLayout({
+  appearance,
+  focusMeetingId = null,
+  focusNonce = 0,
+}: {
+  appearance: ReactElement;
+  focusMeetingId?: string | null;
+  focusNonce?: number;
+}) {
+  const [page, setPage] = useState<PageId>(focusNonce > 0 ? "meetings" : "dictation");
+
+  useEffect(() => {
+    if (focusNonce > 0) {
+      setPage("meetings");
+    }
+  }, [focusNonce]);
 
   return (
     <main className="dw-shell h-screen">
@@ -159,7 +202,7 @@ export function SidebarLayout({ appearance }: { appearance: ReactElement }) {
             {page === "llm" && <LlmSection />}
             {page === "insights" && <InsightsSection />}
             {page === "history" && <HistorySection />}
-            {page === "meetings" && <MeetingsSection />}
+            {page === "meetings" && <MeetingsSection focusMeetingId={focusMeetingId} focusNonce={focusNonce} />}
             {page === "integrations" && (
               <>
                 <DeliverySection />
@@ -221,8 +264,22 @@ export function ChainNode({
   );
 }
 
-export function ChainLayout({ appearance }: { appearance: ReactElement }) {
-  const [active, setActive] = useState<ActiveNode>("input");
+export function ChainLayout({
+  appearance,
+  focusMeetingId = null,
+  focusNonce = 0,
+}: {
+  appearance: ReactElement;
+  focusMeetingId?: string | null;
+  focusNonce?: number;
+}) {
+  const [active, setActive] = useState<ActiveNode>(focusNonce > 0 ? "output" : "input");
+
+  useEffect(() => {
+    if (focusNonce > 0) {
+      setActive("output");
+    }
+  }, [focusNonce]);
 
   function toggle(id: ActiveNode) {
     setActive((current) => (current === id ? null : id));
@@ -286,7 +343,7 @@ export function ChainLayout({ appearance }: { appearance: ReactElement }) {
               <HistorySection />
               <div className="mb-4 border-t border-base-content/10 pt-3">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Meetings</h3>
-                <MeetingsSection />
+                <MeetingsSection focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
               </div>
               <div className="mb-4 border-t border-base-content/10 pt-3">
                 <InsightsSection />

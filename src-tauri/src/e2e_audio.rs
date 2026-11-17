@@ -624,3 +624,130 @@ fn meeting_separates_three_speakers_when_told_how_many() {
         3,
     );
 }
+
+/// Stand-up diarization with `speakers = 0` ("Work it out"): verifies that
+/// compressed WebRTC-like call audio with rapid 150ms handoffs separates a
+/// 6-person mixed stand-up, a 5-person all-male stand-up, and a 5-person
+/// all-female stand-up without over-splitting a 1-person multi-turn monologue.
+#[test]
+#[ignore = "needs macOS `say` and bundled diarization models; run with `bun run test:audio`"]
+fn meeting_separates_standup_voices_on_its_own() {
+    let dir = std::env::temp_dir().join(format!("dw-standup-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+    let models = crate::meeting::DiarizationModels {
+        segmentation: resources.join("pyannote_segmentation_3_0.onnx"),
+        embedding: resources.join("wespeaker_en_voxceleb_resnet34_LM.onnx"),
+    };
+
+    let build_audio = |name: &str,
+                       lines: &[(&str, &str)],
+                       gap_ms: usize,
+                       call_codec: bool|
+     -> (Vec<f32>, Vec<(f32, f32, String)>) {
+        let mut samples = Vec::new();
+        let mut truth = Vec::new();
+        for (i, (voice, text)) in lines.iter().enumerate() {
+            let wav = dir.join(format!("{name}_{i}.wav"));
+            speak_as(voice, text, &wav).unwrap();
+            let start = samples.len() as f32 / 16_000.0;
+            let clip = crate::stt::load_samples_16k_mono(&wav).unwrap();
+            samples.extend(&clip);
+            let end = samples.len() as f32 / 16_000.0;
+            truth.push((start, end, (*voice).to_string()));
+            samples.extend(std::iter::repeat_n(0.0f32, 16 * gap_ms));
+        }
+        if call_codec {
+            let (mut hp_y, mut hp_x, mut lp_y) = (0.0f32, 0.0f32, 0.0f32);
+            for x in &mut samples {
+                let raw = *x;
+                hp_y = 0.91 * (hp_y + raw - hp_x);
+                hp_x = raw;
+                lp_y += 0.55 * (hp_y - lp_y);
+                *x = (lp_y * 2.2).tanh() * 0.4;
+            }
+        }
+        (samples, truth)
+    };
+
+    let solo: &[(&str, &str)] = &[
+        ("Daniel", "Okay, let me walk through the architecture changes from yesterday and what still needs review."),
+        ("Daniel", "First, we moved the stereo writer onto a single frame counter so clock drift never shifts echo phase."),
+        ("Daniel", "Second, the accessibility poller now caches participant tile handles and only refreshes every five seconds."),
+        ("Daniel", "Finally, I will run the full regression suite this afternoon and tag the release candidate."),
+    ];
+    let standup6: &[(&str, &str)] = &[
+        ("Samantha", "Morning everyone. Yesterday I finished the database migration and fixed the flaky login test. Today I am reviewing pull requests, no blockers."),
+        ("Daniel", "Hey team. Yesterday I worked on the payment webhook retry queue and deployed it to staging. Today I will load test it before the Friday release."),
+        ("Tessa", "Hi all. I wrapped up the accessibility audit on the settings screen yesterday. Today I am pairing with Rishi on the onboarding flow."),
+        ("Rishi", "Thanks Tessa. Yesterday I refactored the audio capture buffer so device switches do not drop frames. Today we are finishing onboarding."),
+        ("Moira", "Good morning. I spent yesterday investigating the memory spike on long recordings and found the leak. Today I am writing regression tests."),
+        ("Reed (English (US))", "Morning! Yesterday I updated the release notes and notarization scripts. Today I am cutting the release candidate build, no blockers from me."),
+    ];
+    let male5: &[(&str, &str)] = &[
+        ("Daniel", "Yesterday I deployed the webhook retry queue to staging and verified metrics. Today I am running load tests."),
+        ("Rishi", "Yesterday I fixed the CoreAudio device switch race condition. Today I am pairing on the onboarding UI."),
+        ("Reed (English (US))", "Yesterday I updated notarization scripts and CI caches. Today I am cutting the release candidate."),
+        ("Ralph", "Yesterday I migrated the billing table indexes in staging. Today I am checking query plans in production."),
+        ("Aman", "Yesterday I finished the dark mode contrast fixes on all dialogs. Today I am adding keyboard navigation tests."),
+    ];
+    let female5: &[(&str, &str)] = &[
+        ("Samantha", "Yesterday I finished the database migration and fixed the flaky login test. Today I am reviewing pull requests."),
+        ("Karen", "Yesterday I wrapped up the accessibility audit on settings. Today I am working on onboarding."),
+        ("Moira", "Yesterday I found the memory leak on long recordings. Today I am adding regression tests."),
+        ("Tessa", "Yesterday I tuned the echo cancellation threshold on speakerphone calls. Today I am testing room reverb."),
+        ("Flo (English (US))", "Yesterday I wrote documentation for the local API hooks. Today I am triaging user feedback."),
+    ];
+
+    let scenarios = [
+        ("solo_daniel_codec", solo, 2500usize, true, 1usize),
+        ("standup6_codec_150ms", standup6, 150, true, 6),
+        ("male5_codec_150ms", male5, 150, true, 5),
+        ("female5_codec_150ms", female5, 150, true, 5),
+    ];
+
+    for (name, script, gap_ms, codec, expected_speakers) in scenarios {
+        let (samples, truth) = build_audio(name, script, gap_ms, codec);
+        let turns = crate::meeting::diarize(&samples, &models, 0).unwrap();
+        let mut voice_to_clusters: std::collections::HashMap<String, Vec<i32>> = Default::default();
+        for (start, end, voice) in &truth {
+            let mut overlap: std::collections::HashMap<i32, f32> = Default::default();
+            for t in &turns {
+                let o = end.min(t.end) - start.max(t.start);
+                if o > 0.0 {
+                    *overlap.entry(t.speaker).or_default() += o;
+                }
+            }
+            let best = overlap
+                .into_iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(s, _)| s)
+                .unwrap_or(-1);
+            println!("  [{name}] {voice:<20} {start:>5.1}-{end:>5.1}s -> speaker {best}");
+            voice_to_clusters
+                .entry(voice.clone())
+                .or_default()
+                .push(best);
+        }
+        let mut distinct = Vec::new();
+        for (voice, assigned) in &voice_to_clusters {
+            assert!(
+                assigned.iter().all(|&s| s == assigned[0] && s >= 0),
+                "{name}: {voice}'s turns split across multiple clusters: {assigned:?}"
+            );
+            distinct.push(assigned[0]);
+        }
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            expected_speakers,
+            "{name}: expected {expected_speakers} distinct speakers with speakers=0, got {} ({voice_to_clusters:?})",
+            distinct.len()
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -8,7 +8,7 @@
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// How long History stays open after unlocking.
 const UNLOCK_FOR: Duration = Duration::from_secs(5 * 60);
@@ -97,7 +97,7 @@ pub fn authenticate(_reason: &str) -> Result<(), String> {
     Err("Not supported on this platform.".to_string())
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct HistoryLock {
     pub enabled: bool,
     pub locked: bool,
@@ -109,6 +109,12 @@ pub fn get_history_lock(app: AppHandle) -> HistoryLock {
         enabled: crate::config::load(&app).history_lock_enabled,
         locked: history_locked(&app),
     }
+}
+
+fn emit_lock(app: &AppHandle) -> HistoryLock {
+    let status = get_history_lock(app.clone());
+    let _ = app.emit("history-lock-changed", status.clone());
+    status
 }
 
 /// Turning the lock on needs nothing; turning it off needs the same
@@ -128,7 +134,7 @@ pub fn set_history_lock_enabled(app: AppHandle, enabled: bool) -> Result<History
         "privacy: history lock {}",
         if enabled { "on" } else { "off" }
     );
-    Ok(get_history_lock(app))
+    Ok(emit_lock(&app))
 }
 
 #[tauri::command(async)]
@@ -138,13 +144,13 @@ pub fn unlock_history(app: AppHandle) -> Result<HistoryLock, String> {
         app.state::<PrivacyState>().set_unlocked(true);
         crate::applog!("privacy: history unlocked");
     }
-    Ok(get_history_lock(app))
+    Ok(emit_lock(&app))
 }
 
 #[tauri::command]
 pub fn lock_history(app: AppHandle) -> HistoryLock {
     app.state::<PrivacyState>().set_unlocked(false);
-    get_history_lock(app)
+    emit_lock(&app)
 }
 
 #[tauri::command]

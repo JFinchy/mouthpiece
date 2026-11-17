@@ -89,7 +89,7 @@ function initialState(scenario: Scenario) {
         title: "Meeting, Mon 26 Oct 2026, 09:30",
         detail: "24 min · 3 speakers",
         state: "ready",
-        text: "# Meeting, Mon 26 Oct 2026, 09:30\n\n24 min · 3 speakers\n\n**You** · 00:00\nLet's get started.\n",
+        text: "# Meeting, Mon 26 Oct 2026, 09:30\n\n24 min · 3 speakers\n\n**You** · 00:00\nLet's get started.\n\n**Speaker 1** · 00:05\nSounds good.\n\n**Speaker 2** · 00:12\nI'll share the launch timeline.\n",
       },
       {
         id: "2026-10-25-161500",
@@ -216,6 +216,12 @@ export function installMockBackend() {
     },
     hide_idle_widget: () => null,
     open_settings: () => null,
+    open_meeting_in_settings: (args) => {
+      const nav = { page: "meetings", meeting_id: (args.id as string | null) ?? null };
+      void emit("navigate-settings", nav);
+      return null;
+    },
+    take_settings_navigation: () => null,
     get_theme: () => state.theme,
     set_theme: setter("theme", "theme"),
     get_layout: () => state.layout,
@@ -424,15 +430,52 @@ export function installMockBackend() {
         ? Promise.reject("History is locked.")
         : state.meetings.map(({ text: _, ...m }) => m),
     read_meeting: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
       const m = state.meetings.find((x) => x.id === args.id);
       return m?.text ?? Promise.reject("That meeting has no transcript yet.");
     },
-    open_meeting: () => null,
+    rename_meeting_title: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
+      const m = state.meetings.find((x) => x.id === args.id);
+      if (!m) return Promise.reject("That meeting has no transcript yet.");
+      m.title = String(args.title);
+      if (m.text) {
+        m.text = m.text.replace(/^# .*/m, `# ${m.title}`);
+      }
+      const { text: _, ...summary } = m;
+      return summary;
+    },
+    rename_meeting_speaker: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
+      const m = state.meetings.find((x) => x.id === args.id);
+      if (!m || !m.text) return Promise.reject("That meeting has no transcript yet.");
+      const oldSpeaker = String(args.oldSpeaker);
+      const newSpeaker = String(args.newSpeaker);
+      m.text = m.text.split(`**${oldSpeaker}** · `).join(`**${newSpeaker}** · `);
+      return m.text;
+    },
+    summarize_meeting: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
+      const m = state.meetings.find((x) => x.id === args.id);
+      if (!m || !m.text) return Promise.reject("That meeting has no transcript yet.");
+      const notes =
+        "## Notes\n- **Summary**: Reviewed the launch timeline.\n- **Action items**: Ship the release.";
+      if (!m.text.includes("## Notes")) {
+        const firstTurnIdx = m.text.indexOf("\n\n**");
+        if (firstTurnIdx >= 0) {
+          m.text = `${m.text.slice(0, firstTurnIdx)}\n\n${notes}${m.text.slice(firstTurnIdx)}`;
+        }
+      }
+      return m.text;
+    },
+    open_meeting: () => (historyLocked() ? Promise.reject("History is locked.") : null),
     delete_meeting: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
       state.meetings = state.meetings.filter((x) => x.id !== args.id);
       return null;
     },
     transcribe_meeting: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
       state.meetingStatus = { ...state.meetingStatus, queued: [...state.meetingStatus.queued, String(args.id)] };
       void emit("meeting-changed", state.meetingStatus);
       return null;
@@ -461,15 +504,21 @@ export function installMockBackend() {
     set_history_lock_enabled: (args) => {
       state.historyLockEnabled = Boolean(args.enabled);
       state.historyUnlocked = !state.historyLockEnabled;
-      return lockStatus();
+      const status = lockStatus();
+      void emit("history-lock-changed", status);
+      return status;
     },
     unlock_history: () => {
       state.historyUnlocked = true;
-      return lockStatus();
+      const status = lockStatus();
+      void emit("history-lock-changed", status);
+      return status;
     },
     lock_history: () => {
       state.historyUnlocked = false;
-      return lockStatus();
+      const status = lockStatus();
+      void emit("history-lock-changed", status);
+      return status;
     },
     get_log_transcripts: () => state.logTranscripts,
     set_log_transcripts: setter("logTranscripts", "enabled"),
