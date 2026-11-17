@@ -146,8 +146,14 @@ function Addressing() {
         .catch((err) => notifyError("get_known_agents", err));
     load();
     const unlisten = listen("agents-changed", load);
+    // Agents age out after 6 hours without an event, which emits nothing,
+    // so also re-ask now and then and whenever the window comes back.
+    const timer = setInterval(load, 60_000);
+    window.addEventListener("focus", load);
     return () => {
       unlisten.then((f) => f());
+      clearInterval(timer);
+      window.removeEventListener("focus", load);
     };
   }, []);
 
@@ -290,12 +296,12 @@ function HookSnippet() {
       <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide opacity-60">Connect an agent</h3>
       {setups && setup ? (
         <>
-          <div className="mb-2 flex flex-wrap gap-1" role="tablist" aria-label="Coding agent">
+          <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Coding agent">
             {setups.map((s) => (
               <button
                 key={s.id}
-                role="tab"
-                aria-selected={s.id === setup.id}
+                type="button"
+                aria-pressed={s.id === setup.id}
                 className={`btn btn-xs ${s.id === setup.id ? "btn-primary" : "btn-ghost"}`}
                 onClick={() => setPicked(s.id)}
                 data-testid={`agent-setup-${s.id}`}

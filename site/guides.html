@@ -58,7 +58,7 @@
             <li><a href="#local-llm">Local LLM cleanup</a></li>
             <li><a href="#modes">Modes and app rules</a></li>
             <li><a href="#vocabulary">Vocabulary and snippets</a></li>
-            <li><a href="#claude-code">Reply to Claude Code</a></li>
+            <li><a href="#claude-code">Reply to coding agents</a></li>
             <li><a href="#deep-links">Deep links</a></li>
             <li><a href="#webhook">Output webhook</a></li>
             <li><a href="#meetings">Meetings</a></li>
@@ -235,21 +235,27 @@
           </ol>
         </article>
 
-        <!-- Claude Code -->
+        <!-- Coding agents -->
         <article class="guide" id="claude-code" aria-labelledby="claude-code-h">
-          <h2 id="claude-code-h">Reply to a waiting Claude Code agent</h2>
+          <h2 id="claude-code-h">Reply to a waiting coding agent</h2>
           <p class="guide-meta"><span>About 2 minutes</span><span class="path"><span>Settings</span><i>›</i><span>Coding agents</span></span></p>
-          <p>When an agent finishes or asks for permission, the widget shows
-            "Claude is waiting · <em>folder</em>". Press the reply shortcut, answer out loud, and
-            the text is pasted into that agent's window, then you're back where you were.</p>
+          <p>Works with Claude Code, Codex, Gemini CLI, OpenCode and Aider. When an agent finishes
+            or asks for permission, the widget shows "Claude is waiting · <em>folder</em>" (or
+            Codex, Gemini and so on). Press the reply shortcut, answer out loud, and the text goes
+            to that agent's terminal, then you're back where you were. With several waiting, the
+            pill shows "+2" and clicking it lets you pick one.</p>
           <ol class="howto">
-            <li><span>Open <span class="path"><span>Coding agents</span><i>›</i><span>Claude Code hook</span></span>
-              and click <span class="ui-btn">Copy hook config</span>. The snippet points at a small
-              script Mouthpiece keeps in its app data folder, which carries this install's secret
+            <li><span>Open <span class="path"><span>Coding agents</span><i>›</i><span>Connect an agent</span></span>
+              and pick your agent's button: <span class="ui-btn">Claude Code</span>,
+              <span class="ui-btn">Codex</span>, <span class="ui-btn">Gemini CLI</span>,
+              <span class="ui-btn">OpenCode</span> or <span class="ui-btn">Aider</span>. Each shows
+              which file to edit and a snippet to copy. The snippet points at a small script
+              Mouthpiece keeps in its app data folder, which carries this install's secret
               token.</span></li>
-            <li><span>Merge it into the <code>hooks</code> in <code>~/.claude/settings.json</code>,
-              alongside any hooks you already have. Its shape (copy yours from Settings, it has
-              your home folder in the path):</span>
+            <li><span>Add the snippet to that file. For Claude Code, click
+              <span class="ui-btn">Copy hook config</span> and merge it into the <code>hooks</code>
+              in <code>~/.claude/settings.json</code>, alongside any hooks you already have. Its
+              shape (copy yours from Settings, it has your home folder in the path):</span>
               <div class="codeblock">
                 <div class="codeblock-head"><span>~/.claude/settings.json</span><button type="button" class="copy" data-copy aria-label="Copy the example hook config">Copy</button></div>
                 <pre data-cmd>{
@@ -261,7 +267,11 @@
 }</pre>
               </div>
               <span>Notification and Stop tell Mouthpiece an agent is waiting; UserPromptSubmit
-                clears it when you answer in the terminal yourself.</span></li>
+                clears it when you answer in the terminal yourself. Codex takes one
+                <code>notify</code> line in <code>~/.codex/config.toml</code>, Gemini CLI takes
+                hooks in <code>~/.gemini/settings.json</code>, OpenCode takes a new plugin file
+                (restart OpenCode after saving it), and Aider takes lines in
+                <code>~/.aider.conf.yml</code>.</span></li>
             <li><span>Check the <span class="ui">Reply shortcut</span> (<kbd>⌃⌥R</kbd> by default;
               click it to record a new one). Optionally turn on
               <span class="ui">Play a soft sound when an agent starts waiting</span>.</span></li>
@@ -269,16 +279,30 @@
               <span class="ui">Say "press enter" to submit — presses Enter after pasting</span>
               under <span class="path"><span>Integrations</span><i>›</i><span>Delivery</span></span>.
               Then end a reply with "send it" or "press enter".</span></li>
-            <li><span>Start a Claude Code session and let it finish a task. The pill appears and
+            <li><span>Start an agent session and let it finish a task. The pill appears and
               the agent shows under <span class="ui">Waiting now</span>. Press <kbd>⌃⌥R</kbd>, speak,
               press it again.</span></li>
           </ol>
-          <div class="note warn"><strong>Which terminals work best.</strong> Mouthpiece finds the
-            agent's window by its folder name in the window title. Terminal, VS Code and Cursor
-            usually show it; iTerm, Orca and Warp often don't. If it can't be sure, the reply is
-            copied to the clipboard instead, and it never pastes into a different app. Enter is
-            only pressed when the window title names the agent's terminal; otherwise the text is
-            pasted for you to check and press Return.</div>
+          <h3>Talk to an agent by its folder name</h3>
+          <p>Turn on <span class="ui">Send a dictation to an agent when it starts with the agent's
+            folder name</span> under <span class="path"><span>Coding agents</span><i>›</i><span>Talk to an agent by name</span></span>.
+            Then, with your normal dictation shortcut and from any app, say "to esc pause, rerun
+            the tests, send it", "tell api to commit" or "hey web: what's left?". The dictation
+            goes to the agent working in that folder instead of the cursor. The end of the folder
+            name is enough when it's unique, and dashes are said as spaces
+            (<code>dev-whisper-esc-pause</code> is "esc pause"). "To" and "hey" only count when
+            a comma or colon follows the name, so ordinary sentences aren't sent. An agent can be named
+            for 6 hours after its hook last fired, whether or not it's waiting; the card lists the
+            names you can say right now.</p>
+          <div class="note warn"><strong>Which terminals work best.</strong> In Orca, the reply is
+            typed straight into the agent's pane through Orca's command-line tool, and your window
+            doesn't change. In iTerm2 and Terminal, the agent's own tab is selected by its terminal
+            device; macOS asks once to let Mouthpiece control the app (Privacy &amp; Security &gt;
+            Automation). Elsewhere it looks for the agent's folder name in window titles: VS Code
+            and Cursor usually show it, Warp and others often don't. If it can't be sure, the reply
+            is copied to the clipboard instead, and it never pastes into a different app. Enter is
+            only pressed when Mouthpiece is sure it has the agent's own terminal; otherwise the
+            text is pasted for you to check and press Return.</div>
         </article>
 
         <!-- Deep links -->

@@ -1026,13 +1026,14 @@ pub struct RepoFileStatus {
 }
 
 fn repo_file_status(
-    project: &Project,
+    root_path: &Path,
+    repo: Option<&Result<crate::repo_config::Loaded, String>>,
     trusted: &[crate::repo_config::Trusted],
 ) -> Option<RepoFileStatus> {
-    let root = project.root.to_string_lossy().to_string();
-    Some(match project.repo.as_ref()? {
+    let root = root_path.to_string_lossy().to_string();
+    Some(match repo? {
         Ok(loaded) => RepoFileStatus {
-            trusted: crate::repo_config::is_trusted(trusted, &project.root, &loaded.hash),
+            trusted: crate::repo_config::is_trusted(trusted, root_path, &loaded.hash),
             root,
             hash: Some(loaded.hash.clone()),
             vocabulary: loaded.config.vocabulary.clone(),
@@ -1053,13 +1054,19 @@ fn repo_file_status(
 /// The last project Mouthpiece found names for, for the Settings line.
 #[tauri::command]
 pub fn get_project_status(app: tauri::AppHandle) -> Option<ProjectStatus> {
-    let st = state().lock().unwrap();
-    let (name, names) = st.last.clone()?;
+    let (name, names, root) = {
+        let st = state().lock().unwrap();
+        let (name, names) = st.last.clone()?;
+        let root = st.last_project.as_ref().map(|p| p.root.clone());
+        (name, names, root)
+    };
     let trusted = crate::config::load(&app).trusted_repo_configs;
-    let repo_file = st
-        .last_project
-        .as_ref()
-        .and_then(|p| repo_file_status(p, &trusted));
+    // Read the file from disk again rather than showing the copy cached at
+    // the last dictation: "Allow" checks against the file as it is now.
+    let repo_file = root.and_then(|root| {
+        let repo = crate::repo_config::load(&root);
+        repo_file_status(&root, repo.as_ref(), &trusted)
+    });
     Some(ProjectStatus {
         name,
         names,

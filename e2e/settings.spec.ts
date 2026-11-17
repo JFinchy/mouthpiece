@@ -250,11 +250,11 @@ test("a repo's .mouthpiece.json shows its terms and asks before using its replac
   });
   await page.locator(".dw-sidebar").getByRole("button", { name: "Vocabulary", exact: true }).click();
   const card = page.getByTestId("repo-file");
-  await expect(card).toContainText("2 vocabulary terms, used automatically. 1 replacements, off until you allow them");
+  await expect(card).toContainText("2 vocabulary terms, used automatically. 1 replacement, off until you allow them");
   await expect(page.getByTestId("repo-replacements")).toContainText("“post gress” → Postgres");
   await page.getByTestId("allow-repo-replacements").click();
   await expect
     .poll(() => calls(page, "set_repo_config_trusted"))
     .toEqual([{ root: "/work/api", hash: "abc", trusted: true }]);
-  await expect(card).toContainText("1 replacements, allowed.");
+  await expect(card).toContainText("1 replacement, allowed.");
 });

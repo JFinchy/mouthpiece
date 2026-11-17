@@ -61,7 +61,11 @@ function RepoFile({ status, onChange }: { status: RepoFileStatus; onChange: () =
   function setTrusted(trusted: boolean) {
     invoke("set_repo_config_trusted", { root: status.root, hash: status.hash ?? "", trusted })
       .then(onChange)
-      .catch((err) => notifyError("Couldn't change the repo file setting", err));
+      .catch((err) => {
+        notifyError("Couldn't change the repo file setting", err);
+        // The file may have changed on disk; show its current contents.
+        onChange();
+      });
   }
   if (status.error) {
     return (
@@ -70,6 +74,7 @@ function RepoFile({ status, onChange }: { status: RepoFileStatus; onChange: () =
       </p>
     );
   }
+  const replacementCount = `${status.replacements.length} ${status.replacements.length === 1 ? "replacement" : "replacements"}`;
   return (
     <div className="mt-2 rounded border border-base-content/10 p-2 text-xs" data-testid="repo-file">
       <p className="font-medium">Team settings from .mouthpiece.json</p>
@@ -77,8 +82,8 @@ function RepoFile({ status, onChange }: { status: RepoFileStatus; onChange: () =
         {status.vocabulary.length} vocabulary {status.vocabulary.length === 1 ? "term" : "terms"}, used automatically.
         {status.replacements.length > 0 &&
           (status.trusted
-            ? ` ${status.replacements.length} replacements, allowed.`
-            : ` ${status.replacements.length} replacements, off until you allow them:`)}
+            ? ` ${replacementCount}, allowed.`
+            : ` ${replacementCount}, off until you allow them:`)}
       </p>
       {status.replacements.length > 0 && !status.trusted && (
         <ul className="my-1 list-disc pl-4 font-mono text-[11px]" data-testid="repo-replacements">
