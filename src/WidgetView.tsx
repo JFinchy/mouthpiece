@@ -1261,8 +1261,9 @@ function WidgetView() {
             className="shrink-0 rounded-full bg-success/20 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-success/30"
             onClick={() => {
               const id = savedMeeting.id;
-              invoke<string>("read_meeting", { id })
-                .then((text) => navigator.clipboard.writeText(text))
+              // Rust writes the clipboard: this window never takes focus, so
+              // navigator.clipboard would be refused.
+              invoke("copy_meeting", { id })
                 .then(() => {
                   setSavedMeetingCopied(true);
                   setTimeout(() => setSavedMeeting((cur) => (cur?.id === id ? null : cur)), 1200);

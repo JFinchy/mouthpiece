@@ -1211,17 +1211,36 @@ fn pieces(clip: &[f32]) -> std::slice::Chunks<'_, f32> {
     clip.chunks(clip.len().div_ceil(count).max(1))
 }
 
+/// Writes via a temp file in the same folder and renames it over `path`,
+/// so a crash or full disk mid-write never leaves a half-written
+/// transcript: renames and notes overwrite the only copy.
 fn write_private(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(text.as_bytes()).map_err(|e| e.to_string())
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("not a file path")?;
+    // A counter too, so a rename and a summary saving at once don't share
+    // one temp file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.map_err(|e| e.to_string())
 }
 
 fn resource_path(app: &AppHandle, file: &str) -> Result<PathBuf, String> {
@@ -1399,7 +1418,11 @@ fn extract_embedding(
     stream.accept_waveform(WHISPER_SAMPLE_RATE as i32, &samples[a..b]);
     stream.input_finished();
     extractor.is_ready(&stream).then_some(())?;
-    extractor.compute(&stream)
+    // A NaN or infinite value poisons every similarity it touches (NaN
+    // never compares below the threshold), so treat it as no voice print.
+    extractor
+        .compute(&stream)
+        .filter(|v| v.iter().all(|x| x.is_finite()))
 }
 
 /// Finds the center timestamp (in seconds) of the quietest 20ms frame near
@@ -1611,7 +1634,9 @@ const MAX_PAIR_SPREAD: f32 = 0.14;
 const SINGLE_VOICE_MIN_COSINE: f32 = 0.78;
 /// Long segments are checked for missed mid-segment speaker handoffs and split
 /// at a local pause valley when the two halves score below this similarity.
-const MIN_SPLIT_SEGMENT_SECONDS: f32 = 3.6;
+/// Twice the shortest piece, so both halves can reach it; any shorter and
+/// `quietest_split_time`'s clamp would hand back a sub-2 s piece.
+const MIN_SPLIT_SEGMENT_SECONDS: f32 = 2.0 * MIN_SPLIT_PIECE_SECONDS;
 const VOICE_CHANGE_SPLIT_SIMILARITY: f32 = 0.72;
 /// Shortest piece a voice-change split may leave on either side.
 const MIN_SPLIT_PIECE_SECONDS: f32 = 2.0;
@@ -2358,23 +2383,39 @@ fn people_label_from_speakers(raw_speakers: &[&str]) -> String {
 /// same speaker joined.
 pub fn render_markdown(title: &str, detail: &str, lines: &[Line]) -> String {
     let mut out = format!("# {title}\n\n{detail}");
-    let mut previous: Option<&str> = None;
+    let mut previous: Option<String> = None;
     for line in lines {
-        if previous == Some(line.speaker.as_str()) {
+        // Names can come from the call app's window; a `*` or line break
+        // in one would break the `**Name** · 0:00` turn header.
+        let mut speaker = clean_speaker_name(&line.speaker);
+        if speaker.is_empty() {
+            speaker = "Speaker".to_string();
+        }
+        if previous.as_deref() == Some(speaker.as_str()) {
             out.push(' ');
             out.push_str(&line.text);
         } else {
             out.push_str(&format!(
                 "\n\n**{}** · {}\n{}",
-                line.speaker,
+                speaker,
                 timestamp(line.start),
                 line.text
             ));
-            previous = Some(line.speaker.as_str());
+            previous = Some(speaker);
         }
     }
     out.push('\n');
     out
+}
+
+/// A speaker name safe to put in a `**Name** · 0:00` turn header: no `*`,
+/// line breaks or other control characters.
+fn clean_speaker_name(name: &str) -> String {
+    name.chars()
+        .filter(|&c| c != '*' && !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2523,13 +2564,7 @@ impl ParsedMeetingDoc {
 
     pub fn rename_speaker(&mut self, old_speaker: &str, new_speaker: &str) -> bool {
         let old_trimmed = old_speaker.trim();
-        let new_trimmed: String = new_speaker
-            .trim()
-            .chars()
-            .filter(|&c| c != '\n' && c != '\r' && c != '*')
-            .collect::<String>()
-            .trim()
-            .to_string();
+        let new_trimmed = clean_speaker_name(new_speaker);
         if old_trimmed.is_empty() || new_trimmed.is_empty() || old_trimmed == new_trimmed {
             return false;
         }
@@ -2682,6 +2717,7 @@ pub async fn rename_meeting_title(
     let mut doc = parse_meeting_markdown(&raw);
     doc.title = clean_title;
     write_private(&path, &doc.to_markdown())?;
+    announce(&app);
     Ok(summarize(&dir, id, &status(&app)))
 }
 
@@ -2730,12 +2766,27 @@ pub async fn summarize_meeting(app: AppHandle, id: String) -> Result<String, Str
 
     // Re-read the file before writing in case the user renamed a speaker or
     // title while the LLM was generating.
-    let latest_raw = std::fs::read_to_string(&path).unwrap_or(raw);
+    // If it's gone, the user deleted it meanwhile; writing the notes would
+    // bring it back.
+    let latest_raw =
+        std::fs::read_to_string(&path).map_err(|_| "That meeting was deleted.".to_string())?;
     let mut latest_doc = parse_meeting_markdown(&latest_raw);
     latest_doc.notes = Some(notes);
     let updated = latest_doc.to_markdown();
     write_private(&path, &updated)?;
+    announce(&app);
     Ok(updated)
+}
+
+/// Copies the transcript from here, not the webview: the widget window is
+/// never focused, so the browser clipboard API refuses it.
+#[tauri::command]
+pub async fn copy_meeting(app: AppHandle, id: String) -> Result<(), String> {
+    crate::privacy::require_history_unlocked(&app)?;
+    let path = meetings_dir(&app)?.join(format!("{}.md", checked_id(&id)?));
+    let text = std::fs::read_to_string(path)
+        .map_err(|_| "That meeting has no transcript yet.".to_string())?;
+    crate::paste::copy_text(&text)
 }
 
 /// Opens the transcript in the default text editor (TextEdit unless
@@ -3880,6 +3931,43 @@ mod tests {
             &single_long,
             Some(0.65)
         ));
+    }
+
+    #[test]
+    fn render_markdown_cleans_call_app_speaker_names() {
+        let lines = vec![
+            Line {
+                start: 0.0,
+                speaker: "**Dana\n(Host)\u{7}".into(),
+                text: "Welcome.".into(),
+            },
+            Line {
+                start: 4.0,
+                speaker: "You".into(),
+                text: "Thanks.".into(),
+            },
+        ];
+        let md = render_markdown("Call", "1 min · 2 speakers", &lines);
+        assert!(md.contains("**Dana(Host)** · 00:00\nWelcome."), "{md}");
+        let doc = parse_meeting_markdown(&md);
+        assert_eq!(doc.turns.len(), 2);
+        assert_eq!(doc.turns[0].speaker, "Dana(Host)");
+    }
+
+    #[test]
+    fn write_private_replaces_the_file_whole_and_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("mp-meeting-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("2026-10-26-174005.md");
+        std::fs::write(&path, "old transcript, much longer than the new one").unwrap();
+        write_private(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        // No temp file left behind.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

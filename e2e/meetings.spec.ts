@@ -69,6 +69,51 @@ test.describe("meetings page", () => {
     expect(await calls(page, "set_meeting_auto_detect")).toEqual([{ enabled: false }]);
   });
 
+  test("renames a meeting title; Escape cancels the edit", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    await goTo(page, "Meetings");
+    const row = page.getByTestId("meeting-row").first();
+    await row.hover();
+    await row.getByTestId("meeting-title-edit").click();
+    await row.getByTestId("meeting-title-input").fill("Throwaway");
+    await row.getByTestId("meeting-title-input").press("Escape");
+    await expect(row.getByTestId("meeting-title-input")).toHaveCount(0);
+    expect(await calls(page, "rename_meeting_title")).toHaveLength(0);
+
+    await row.hover();
+    await row.getByTestId("meeting-title-edit").click();
+    await row.getByTestId("meeting-title-input").fill("Launch sync");
+    await row.getByTestId("meeting-title-input").press("Enter");
+    await expect(row).toContainText("Launch sync");
+    expect(await calls(page, "rename_meeting_title")).toEqual([{ id: "2026-10-26-093000", title: "Launch sync" }]);
+  });
+
+  test("renaming a speaker onto an existing one asks before merging", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    await goTo(page, "Meetings");
+    const row = page.getByTestId("meeting-row").first();
+    await row.getByRole("button", { name: "View" }).click();
+    await row.getByTestId("meeting-speaker-chip").filter({ hasText: "Speaker 2" }).click();
+    await row.getByTestId("meeting-speaker-rename-input").fill("Speaker 1");
+    await row.getByTestId("meeting-speaker-rename-save").click();
+    await expect(row.getByTestId("meeting-speaker-merge-confirm")).toBeVisible();
+    expect(await calls(page, "rename_meeting_speaker")).toHaveLength(0);
+    await row.getByTestId("meeting-speaker-rename-save").click();
+    expect(await calls(page, "rename_meeting_speaker")).toEqual([
+      { id: "2026-10-26-093000", oldSpeaker: "Speaker 2", newSpeaker: "Speaker 1" },
+    ]);
+  });
+
+  test("a deep-linked meeting opens once, not on every return to Meetings", async ({ page, consoleErrors: _ }) => {
+    await open(page, "settings");
+    await emit(page, "navigate-settings", { page: "meetings", meeting_id: "2026-10-26-093000" });
+    await expect(page.getByTestId("meeting-notes-body")).toBeVisible();
+    await goTo(page, "Dictation");
+    await goTo(page, "Meetings");
+    await expect(page.getByTestId("meeting-row")).toHaveCount(2);
+    await expect(page.getByTestId("meeting-notes-body")).toHaveCount(0);
+  });
+
   test("transcripts stay hidden behind the History lock", async ({ page, consoleErrors: _ }) => {
     await open(page, "settings", { historyLock: true });
     await goTo(page, "Meetings");
@@ -182,6 +227,22 @@ test.describe("meeting in the widget", () => {
     await expect(page.getByTestId("meeting-saved-copy")).toBeVisible();
     await page.getByTestId("meeting-saved-view").click();
     expect(await calls(page, "open_meeting_in_settings")).toEqual([{ id: "2026-10-26-174005" }]);
+  });
+
+  test("Copy on the saved-meeting prompt copies through the backend", async ({ page, consoleErrors: _ }) => {
+    await open(page, "widget");
+    await emit(page, "meeting-saved", {
+      id: "2026-10-26-093000",
+      title: "Meeting, Mon 26 Oct 2026, 09:30",
+      detail: "24 min · 3 speakers",
+      state: "ready",
+    });
+    // The widget window is never focused, so navigator.clipboard would be
+    // refused; Rust writes the clipboard instead.
+    await page.getByTestId("meeting-saved-copy").click();
+    await expect(page.getByTestId("meeting-saved-copy")).toHaveText("Copied");
+    expect(await calls(page, "copy_meeting")).toEqual([{ id: "2026-10-26-093000" }]);
+    expect(await calls(page, "read_meeting")).toHaveLength(0);
   });
 
   test("prompts to record a detected call, allows dismissal, and prompts when the call ends", async ({

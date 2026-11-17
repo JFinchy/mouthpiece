@@ -131,10 +131,12 @@ export function SidebarLayout({
   appearance,
   focusMeetingId = null,
   focusNonce = 0,
+  onFocusHandled,
 }: {
   appearance: ReactElement;
   focusMeetingId?: string | null;
   focusNonce?: number;
+  onFocusHandled?: () => void;
 }) {
   const [page, setPage] = useState<PageId>(focusNonce > 0 ? "meetings" : "dictation");
 
@@ -202,7 +204,7 @@ export function SidebarLayout({
             {page === "llm" && <LlmSection />}
             {page === "insights" && <InsightsSection />}
             {page === "history" && <HistorySection />}
-            {page === "meetings" && <MeetingsSection focusMeetingId={focusMeetingId} focusNonce={focusNonce} />}
+            {page === "meetings" && <MeetingsSection focusMeetingId={focusMeetingId} onFocusHandled={onFocusHandled} />}
             {page === "integrations" && (
               <>
                 <DeliverySection />
@@ -268,10 +270,12 @@ export function ChainLayout({
   appearance,
   focusMeetingId = null,
   focusNonce = 0,
+  onFocusHandled,
 }: {
   appearance: ReactElement;
   focusMeetingId?: string | null;
   focusNonce?: number;
+  onFocusHandled?: () => void;
 }) {
   const [active, setActive] = useState<ActiveNode>(focusNonce > 0 ? "output" : "input");
 
@@ -343,7 +347,7 @@ export function ChainLayout({
               <HistorySection />
               <div className="mb-4 border-t border-base-content/10 pt-3">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">Meetings</h3>
-                <MeetingsSection focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+                <MeetingsSection focusMeetingId={focusMeetingId} onFocusHandled={onFocusHandled} />
               </div>
               <div className="mb-4 border-t border-base-content/10 pt-3">
                 <InsightsSection />

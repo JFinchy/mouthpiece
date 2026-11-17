@@ -529,6 +529,7 @@ pub fn run() {
             meeting::get_meeting_status,
             meeting::list_meetings,
             meeting::read_meeting,
+            meeting::copy_meeting,
             meeting::rename_meeting_title,
             meeting::rename_meeting_speaker,
             meeting::summarize_meeting,

@@ -705,6 +705,14 @@ pub fn summarize_for_journal(text: &str, model: &str) -> Option<Result<String, S
 
 const MAX_MEETING_PROMPT_CHARS: usize = 24_000;
 
+/// Context window to ask Ollama for: the prompt (about 3 characters per
+/// token, erring high) plus room for the notes, rounded up to a 2k step so
+/// Ollama can reuse the loaded model between meetings of similar length.
+fn meeting_num_ctx(prompt: &str) -> usize {
+    let needed = prompt.chars().count() / 3 + 1_536;
+    needed.div_ceil(2_048).clamp(2, 8) * 2_048
+}
+
 /// Strips conversational lead-ins ("Here are the meeting notes:") and
 /// `<think>` blocks from a local LLM meeting summary.
 pub fn clean_meeting_summary(raw: &str) -> String {
@@ -759,14 +767,13 @@ pub fn summarize_meeting_transcript(
         format!("{head}\n\n[…middle of meeting omitted for length…]\n\n{tail}")
     };
 
-    let mut prompt = String::from(
-        "Write concise meeting notes from the transcript below using markdown bullet points:\n\
+    let instructions = "Write concise meeting notes from the transcript using markdown bullet points:\n\
          - **Summary**: 1-2 sentences on what the meeting covered.\n\
          - **Key points**: main updates, decisions, or blockers mentioned (attribute to speaker names when clear).\n\
          - **Action items**: concrete follow-ups or next steps (omit if none were stated).\n\
          Use ONLY facts stated in the transcript. Never invent names, tasks, or details. \
-         Output ONLY the markdown bullet points, with no introductory preamble.",
-    );
+         Output ONLY the markdown bullet points, with no introductory preamble.";
+    let mut prompt = String::from(instructions);
     let terms: Vec<&str> = vocabulary
         .iter()
         .map(|t| t.trim())
@@ -779,6 +786,10 @@ pub fn summarize_meeting_transcript(
         ));
     }
     prompt.push_str(&format!("\n\nMeeting transcript:\n{excerpt}"));
+    // Repeat the instructions after the transcript: if a server's context
+    // window still cuts the front of a long prompt, the model keeps the
+    // task, and small models follow the most recent instructions best.
+    prompt.push_str(&format!("\n\nEnd of transcript.\n\n{instructions}"));
 
     if let Some((server, id)) = crate::local_llm::parse(model) {
         let started = Instant::now();
@@ -799,6 +810,9 @@ pub fn summarize_meeting_transcript(
         "stream": false,
         "keep_alive": KEEP_ALIVE,
         "think": false,
+        // Ollama's default context (2-4k tokens) silently drops the start
+        // of a long prompt, which is where the instructions are.
+        "options": { "num_ctx": meeting_num_ctx(&prompt) },
     });
     let started = Instant::now();
     let resp = ureq::post(OLLAMA_GENERATE_URL)
@@ -1025,6 +1039,17 @@ pub fn set_llm_model(app: tauri::AppHandle, model: String) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn meeting_num_ctx_fits_the_longest_prompt() {
+        assert_eq!(super::meeting_num_ctx("short"), 4_096);
+        // The longest transcript excerpt plus instructions must fit, with
+        // room left for the notes.
+        let long = "x".repeat(super::MAX_MEETING_PROMPT_CHARS + 2_000);
+        let ctx = super::meeting_num_ctx(&long);
+        assert!(ctx * 3 > long.len() + 3_000, "{ctx}");
+        assert!(ctx <= 16_384);
+    }
 
     /// A one-request fake Ollama that streams `chunks` as NDJSON, pausing
     /// `gap` between them. Returns its URL (leaked to `'static`, test-only).

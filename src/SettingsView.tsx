@@ -42,6 +42,12 @@ function SettingsView() {
     };
   }, []);
 
+  // Once the Meetings list has opened the deep-linked meeting, forget it,
+  // so coming back to Meetings later doesn't open it again.
+  function clearFocusMeeting() {
+    setFocusMeetingId(null);
+  }
+
   function changeTheme(next: ThemeId) {
     setThemeState(next);
     applyTheme(next);
@@ -63,9 +69,19 @@ function SettingsView() {
   return (
     <>
       {layout === "chain" ? (
-        <ChainLayout appearance={appearance} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+        <ChainLayout
+          appearance={appearance}
+          focusMeetingId={focusMeetingId}
+          focusNonce={focusNonce}
+          onFocusHandled={clearFocusMeeting}
+        />
       ) : (
-        <SidebarLayout appearance={appearance} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+        <SidebarLayout
+          appearance={appearance}
+          focusMeetingId={focusMeetingId}
+          focusNonce={focusNonce}
+          onFocusHandled={clearFocusMeeting}
+        />
       )}
       <Toaster />
     </>

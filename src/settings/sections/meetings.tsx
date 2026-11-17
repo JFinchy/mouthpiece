@@ -215,7 +215,9 @@ function parseTurnHeader(trimmed: string): { speaker: string; timestamp: string 
   if (sep <= 0) return null;
   const speaker = rest.slice(0, sep).trim();
   const timestamp = rest.slice(sep + 5).trim();
-  if (!speaker || !timestamp || !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(timestamp)) return null;
+  // Same rule as the Rust parser (parse_turn_header): any number of
+  // leading digits, so a 100+ minute meeting's turns still parse.
+  if (!speaker || !timestamp || !/^\d+:\d{2}(?::\d{2})?$/.test(timestamp)) return null;
   return { speaker, timestamp };
 }
 
@@ -228,7 +230,8 @@ function parseMeetingMarkdown(markdown: string): ParsedMeetingDoc {
   let sawTitle = false;
   let sawDetail = false;
 
-  for (const rawLine of markdown.split("\n")) {
+  // CRLF too, like Rust's `lines()`, in case the file was edited elsewhere.
+  for (const rawLine of markdown.split(/\r?\n/)) {
     const trimmed = rawLine.trim();
     if (!sawTitle) {
       if (!trimmed) continue;
@@ -304,29 +307,47 @@ function renderInlineBold(line: string) {
 function MeetingNotesBody({
   id,
   markdown,
+  summarizing,
+  onSummarize,
   onUpdated,
 }: {
   id: string;
   markdown: string;
+  // Owned by MeetingList so collapsing and re-opening the row can't start
+  // a second summary while one is still running.
+  summarizing: boolean;
+  onSummarize: () => void;
   onUpdated: (nextMarkdown: string) => void;
 }) {
   const doc = parseMeetingMarkdown(markdown);
   const [renamingSpeaker, setRenamingSpeaker] = useState<string | null>(null);
   const [speakerDraft, setSpeakerDraft] = useState("");
   const [savingSpeaker, setSavingSpeaker] = useState(false);
-  const [summarizing, setSummarizing] = useState(false);
+  // Renaming onto a name already in the transcript merges the two
+  // speakers for good, so the first Save only asks.
+  const [confirmMerge, setConfirmMerge] = useState<string | null>(null);
 
   function startRenameSpeaker(speaker: string) {
     setRenamingSpeaker(speaker);
     setSpeakerDraft(speaker);
+    setConfirmMerge(null);
+  }
+
+  function cancelRenameSpeaker() {
+    setRenamingSpeaker(null);
+    setConfirmMerge(null);
   }
 
   function submitSpeakerRename(e: React.FormEvent) {
     e.preventDefault();
-    if (!renamingSpeaker) return;
+    if (!renamingSpeaker || savingSpeaker) return;
     const trimmed = speakerDraft.trim();
     if (!trimmed || trimmed === renamingSpeaker) {
-      setRenamingSpeaker(null);
+      cancelRenameSpeaker();
+      return;
+    }
+    if (doc.speakers.includes(trimmed) && confirmMerge !== trimmed) {
+      setConfirmMerge(trimmed);
       return;
     }
     setSavingSpeaker(true);
@@ -337,18 +358,10 @@ function MeetingNotesBody({
     })
       .then((updated) => {
         onUpdated(updated);
-        setRenamingSpeaker(null);
+        cancelRenameSpeaker();
       })
       .catch((err) => notifyError("Couldn't rename speaker", err))
       .finally(() => setSavingSpeaker(false));
-  }
-
-  function summarize() {
-    setSummarizing(true);
-    invoke<string>("summarize_meeting", { id })
-      .then((updated) => onUpdated(updated))
-      .catch((err) => notifyError("Couldn't summarize the meeting", err))
-      .finally(() => setSummarizing(false));
   }
 
   return (
@@ -382,7 +395,7 @@ function MeetingNotesBody({
         <button
           type="button"
           className="btn btn-ghost btn-xs h-6 min-h-0 gap-1 border border-base-content/15 px-2 text-[11px]"
-          onClick={summarize}
+          onClick={onSummarize}
           disabled={summarizing || savingSpeaker || doc.turns.length === 0}
           title="Generate summary & action items locally using your configured LLM"
           data-testid="meeting-summarize"
@@ -411,23 +424,44 @@ function MeetingNotesBody({
             type="text"
             className="input input-xs input-bordered h-6 flex-1 text-xs"
             value={speakerDraft}
-            onChange={(e) => setSpeakerDraft(e.target.value)}
+            onChange={(e) => {
+              setSpeakerDraft(e.target.value);
+              setConfirmMerge(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !savingSpeaker) {
+                e.preventDefault();
+                cancelRenameSpeaker();
+              }
+            }}
             placeholder="e.g. Sarah"
             autoFocus
             disabled={savingSpeaker || summarizing}
+            data-testid="meeting-speaker-rename-input"
           />
-          <button type="submit" className="btn btn-primary btn-xs h-6 min-h-0" disabled={savingSpeaker || summarizing}>
-            Save
+          <button
+            type="submit"
+            className={`btn btn-xs h-6 min-h-0 ${confirmMerge ? "btn-warning" : "btn-primary"}`}
+            disabled={savingSpeaker || summarizing}
+            data-testid="meeting-speaker-rename-save"
+          >
+            {confirmMerge ? "Merge" : "Save"}
           </button>
           <button
             type="button"
             className="btn btn-ghost btn-xs h-6 min-h-0"
-            onClick={() => setRenamingSpeaker(null)}
+            onClick={cancelRenameSpeaker}
             disabled={savingSpeaker || summarizing}
           >
             Cancel
           </button>
         </form>
+      )}
+      {renamingSpeaker && confirmMerge && (
+        <p className="text-[11px] text-warning" role="alert" data-testid="meeting-speaker-merge-confirm">
+          &ldquo;{confirmMerge}&rdquo; is already a speaker here. Merging joins their lines with &ldquo;
+          {renamingSpeaker}&rdquo;&apos;s and can&apos;t be undone. Click Merge to go ahead.
+        </p>
       )}
 
       {doc.notes && (
@@ -461,6 +495,7 @@ function MeetingNotesBody({
                         : "text-base-content"
                   }`}
                   onClick={() => startRenameSpeaker(turn.speaker)}
+                  disabled={savingSpeaker || summarizing}
                   title={`Click to rename "${turn.speaker}"`}
                 >
                   {turn.speaker}
@@ -481,21 +516,24 @@ function MeetingNotesBody({
 function MeetingList({
   status,
   focusMeetingId,
-  focusNonce,
+  onFocusHandled,
 }: {
   status: MeetingStatus | null;
   focusMeetingId?: string | null;
-  focusNonce?: number;
+  onFocusHandled?: () => void;
 }) {
   const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null);
   const [open, setOpen] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
+  // Ids with a summary running; kept here, not in the row body, so it
+  // survives collapsing the row.
+  const [summarizing, setSummarizing] = useState<string[]>([]);
   // Delete asks once more (the transcript is gone for good).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLLIElement | null>>({});
-  const lastHandledFocusNonce = useRef(0);
 
   useEffect(() => {
     if (!confirmDelete) return;
@@ -542,26 +580,22 @@ function MeetingList({
   }, []);
 
   // Deep-link focus from the widget ("Meeting transcript saved · View") or menu bar ("View Meeting Notes…").
+  // SettingsView clears the request once handled (it outlives this list,
+  // which remounts each time Meetings is shown). A meeting not in the list
+  // yet (still being saved) stays pending until a later refresh has it.
   useEffect(() => {
-    if (
-      !focusMeetingId ||
-      !focusNonce ||
-      focusNonce === lastHandledFocusNonce.current ||
-      !meetings ||
-      meetings.length === 0
-    ) {
+    if (!focusMeetingId || !meetings || meetings.length === 0) {
       return;
     }
     const target =
       focusMeetingId === "latest"
         ? meetings.find((m) => m.state === "ready")
-        : meetings.find((m) => m.id === focusMeetingId && m.state === "ready") ??
-          meetings.find((m) => m.state === "ready");
+        : meetings.find((m) => m.id === focusMeetingId && m.state === "ready");
     if (target) {
-      lastHandledFocusNonce.current = focusNonce;
+      onFocusHandled?.();
       openAndLoad(target.id, true);
     }
-  }, [focusMeetingId, focusNonce, meetings]);
+  }, [focusMeetingId, meetings]);
 
   function toggleView(id: string) {
     if (open[id] !== undefined) {
@@ -573,11 +607,13 @@ function MeetingList({
 
   function saveTitle(id: string, e: React.FormEvent) {
     e.preventDefault();
+    if (savingTitle) return;
     const trimmed = titleDraft.trim();
     if (!trimmed) {
       setEditingTitleId(null);
       return;
     }
+    setSavingTitle(true);
     invoke<MeetingSummary>("rename_meeting_title", { id, title: trimmed })
       .then((updated) => {
         setMeetings((prev) => prev?.map((m) => (m.id === id ? updated : m)) ?? null);
@@ -586,7 +622,25 @@ function MeetingList({
           openAndLoad(id, false);
         }
       })
-      .catch((err) => notifyError("Couldn't rename the meeting", err));
+      .catch((err) => notifyError("Couldn't rename the meeting", err))
+      .finally(() => setSavingTitle(false));
+  }
+
+  // Updates an open row's transcript; a row collapsed meanwhile stays shut.
+  function updateOpen(id: string, nextMarkdown: string) {
+    setOpen((current) => (current[id] === undefined ? current : { ...current, [id]: nextMarkdown }));
+  }
+
+  function summarize(id: string) {
+    if (summarizing.includes(id)) return;
+    setSummarizing((ids) => [...ids, id]);
+    invoke<string>("summarize_meeting", { id })
+      .then((updated) => {
+        updateOpen(id, updated);
+        refresh();
+      })
+      .catch((err) => notifyError("Couldn't summarize the meeting", err))
+      .finally(() => setSummarizing((ids) => ids.filter((x) => x !== id)));
   }
 
   function copy(id: string) {
@@ -627,15 +681,30 @@ function MeetingList({
                     className="input input-xs input-bordered h-6 flex-1 text-xs"
                     value={titleDraft}
                     onChange={(e) => setTitleDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape" && !savingTitle) {
+                        e.preventDefault();
+                        setEditingTitleId(null);
+                      }
+                    }}
                     autoFocus
+                    disabled={savingTitle}
+                    aria-label="Meeting title"
+                    data-testid="meeting-title-input"
                   />
-                  <button type="submit" className="btn btn-primary btn-xs h-6 min-h-0">
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-xs h-6 min-h-0"
+                    disabled={savingTitle}
+                    data-testid="meeting-title-save"
+                  >
                     Save
                   </button>
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs h-6 min-h-0"
                     onClick={() => setEditingTitleId(null)}
+                    disabled={savingTitle}
                   >
                     Cancel
                   </button>
@@ -646,13 +715,14 @@ function MeetingList({
                   {m.state === "ready" && (
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs h-4 min-h-0 px-1 text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                      className="btn btn-ghost btn-xs h-4 min-h-0 px-1 text-[10px] opacity-0 group-hover:opacity-60 hover:!opacity-100 focus-visible:opacity-100"
                       onClick={() => {
                         setEditingTitleId(m.id);
                         setTitleDraft(m.title);
                       }}
                       title="Rename meeting"
                       aria-label={`Rename ${m.title}`}
+                      data-testid="meeting-title-edit"
                     >
                       ✎
                     </button>
@@ -721,8 +791,10 @@ function MeetingList({
             <MeetingNotesBody
               id={m.id}
               markdown={open[m.id]}
+              summarizing={summarizing.includes(m.id)}
+              onSummarize={() => summarize(m.id)}
               onUpdated={(nextMarkdown) => {
-                setOpen((current) => ({ ...current, [m.id]: nextMarkdown }));
+                updateOpen(m.id, nextMarkdown);
                 refresh();
               }}
             />
@@ -735,10 +807,10 @@ function MeetingList({
 
 export function MeetingsSection({
   focusMeetingId,
-  focusNonce,
+  onFocusHandled,
 }: {
   focusMeetingId?: string | null;
-  focusNonce?: number;
+  onFocusHandled?: () => void;
 } = {}) {
   const status = useMeetingStatus();
   const lock = useHistoryLock();
@@ -753,7 +825,7 @@ export function MeetingsSection({
       ) : lock.status.locked ? (
         <LockedHistory lock={lock} />
       ) : (
-        <MeetingList status={status} focusMeetingId={focusMeetingId} focusNonce={focusNonce} />
+        <MeetingList status={status} focusMeetingId={focusMeetingId} onFocusHandled={onFocusHandled} />
       )}
     </>
   );

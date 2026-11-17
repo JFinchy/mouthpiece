@@ -28,9 +28,34 @@ impl PrivacyState {
             .is_some_and(|until| Instant::now() < until)
     }
 
-    fn set_unlocked(&self, unlocked: bool) {
-        *self.unlocked_until.lock().unwrap() = unlocked.then(|| Instant::now() + UNLOCK_FOR);
+    fn set_unlocked(&self, unlocked: bool) -> Option<Instant> {
+        let until = unlocked.then(|| Instant::now() + UNLOCK_FOR);
+        *self.unlocked_until.lock().unwrap() = until;
+        until
     }
+
+    /// Whether this exact unlock is still the current one (not since
+    /// replaced by a re-unlock or a manual lock).
+    fn is_current(&self, until: Instant) -> bool {
+        *self.unlocked_until.lock().unwrap() == Some(until)
+    }
+}
+
+/// Tells open windows when an unlock runs out, so History locks itself on
+/// screen instead of only on the next command. A re-unlock or manual lock
+/// replaces `until`, which turns this timer into a no-op.
+fn emit_when_expired(app: &AppHandle, until: Instant) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(until.saturating_duration_since(Instant::now()));
+        if app
+            .try_state::<PrivacyState>()
+            .is_some_and(|state| state.is_current(until))
+        {
+            crate::applog!("privacy: history unlock expired");
+            emit_lock(&app);
+        }
+    });
 }
 
 /// Whether History can be shown right now.
@@ -128,7 +153,8 @@ pub fn set_history_lock_enabled(app: AppHandle, enabled: bool) -> Result<History
     }
     cfg.history_lock_enabled = enabled;
     crate::config::save(&app, &cfg)?;
-    // Turning it on locks right away.
+    // Turning it on locks right away. Off needs no expiry timer: with the
+    // lock off, the expiry changes nothing.
     app.state::<PrivacyState>().set_unlocked(!enabled);
     crate::applog!(
         "privacy: history lock {}",
@@ -141,7 +167,9 @@ pub fn set_history_lock_enabled(app: AppHandle, enabled: bool) -> Result<History
 pub fn unlock_history(app: AppHandle) -> Result<HistoryLock, String> {
     if history_locked(&app) {
         authenticate("show your Mouthpiece history")?;
-        app.state::<PrivacyState>().set_unlocked(true);
+        if let Some(until) = app.state::<PrivacyState>().set_unlocked(true) {
+            emit_when_expired(&app, until);
+        }
         crate::applog!("privacy: history unlocked");
     }
     Ok(emit_lock(&app))
@@ -200,8 +228,10 @@ mod tests {
         assert!(state.is_unlocked());
         *state.unlocked_until.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
         assert!(!state.is_unlocked());
-        state.set_unlocked(true);
+        let first = state.set_unlocked(true).unwrap();
+        assert!(state.is_current(first));
         state.set_unlocked(false);
         assert!(!state.is_unlocked());
+        assert!(!state.is_current(first));
     }
 }

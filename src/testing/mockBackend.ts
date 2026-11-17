@@ -434,6 +434,11 @@ export function installMockBackend() {
       const m = state.meetings.find((x) => x.id === args.id);
       return m?.text ?? Promise.reject("That meeting has no transcript yet.");
     },
+    copy_meeting: (args) => {
+      if (historyLocked()) return Promise.reject("History is locked.");
+      const m = state.meetings.find((x) => x.id === args.id);
+      return m?.text ? null : Promise.reject("That meeting has no transcript yet.");
+    },
     rename_meeting_title: (args) => {
       if (historyLocked()) return Promise.reject("History is locked.");
       const m = state.meetings.find((x) => x.id === args.id);
