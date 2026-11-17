@@ -54,9 +54,17 @@ pub fn toggle_recording(app: &AppHandle, trigger: Trigger) {
 
 /// The one entry point for starting/stopping dictation from any trigger.
 pub fn request_dictation(app: &AppHandle, request: Request) {
+    request_dictation_started(app, request);
+}
+
+/// Like `request_dictation`, and says whether this request is the one that
+/// started a dictation (not one the user started a moment earlier).
+pub fn request_dictation_started(app: &AppHandle, request: Request) -> bool {
     let state = app.state::<RecordingState>();
     let _op = state.capture_op.lock().unwrap();
-    match state.capture.request(request) {
+    let transition = state.capture.request(request);
+    let started = matches!(transition, Transition::StartedDictation { .. });
+    match transition {
         Transition::StartedDictation { session } => start_dictation(app, &state, session),
         Transition::StoppedDictation { .. } => stop_dictation(app, &state),
         Transition::DiscardedDictation { .. } => discard_dictation(app, &state),
@@ -69,6 +77,7 @@ pub fn request_dictation(app: &AppHandle, request: Request) {
         // nothing to tell the user.
         Transition::Rejected(_) => {}
     }
+    started
 }
 
 fn stop_dictation(app: &AppHandle, state: &RecordingState) {
@@ -635,7 +644,12 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
     );
 
     if undo_last {
-        if ctx.reply_target.is_some() {
+        if ctx.capture.take().is_some() {
+            // Answering an agent's question: "scratch that" withdraws the
+            // answer. Undoing would hit whatever app is in front.
+            crate::applog!("cli: answer withdrawn by \"scratch that\"");
+            let _ = app.emit("transcript-copied", "Answer cancelled".to_string());
+        } else if ctx.reply_target.is_some() {
             // In a reply, "scratch that" cancels the reply. Undoing would
             // hit whatever app is in front, which isn't the agent's.
             crate::applog!("agents: reply cancelled by \"scratch that\"");
@@ -951,11 +965,15 @@ fn append_attachments(
             },
             Kind::Diff | Kind::StagedDiff => {
                 let staged = *kind == Kind::StagedDiff;
-                match ctx
-                    .project
-                    .as_ref()
-                    .map(|p| att::read_diff(&p.root, staged))
-                {
+                // A reply is about the agent's repo, not whichever app is
+                // in front.
+                let root = match &ctx.reply_target {
+                    Some(agent) if !agent.cwd.is_empty() => {
+                        Some(std::path::PathBuf::from(&agent.cwd))
+                    }
+                    _ => ctx.project.as_ref().map(|p| p.root.clone()),
+                };
+                match root.map(|root| att::read_diff(&root, staged)) {
                     Some(Ok(Some(diff))) => {
                         crate::applog!("attach: diff, {} lines", diff.lines().count());
                         text = att::fence(&text, &diff, "diff");

@@ -84,6 +84,7 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<String, Strin
             }
             None if started.elapsed() > timeout => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err("it didn't answer in time".to_string());
             }
             None => std::thread::sleep(Duration::from_millis(20)),
@@ -122,6 +123,38 @@ pub fn orca_switch(handle: &str) -> Result<(), String> {
     let mut cmd = Command::new(cli);
     cmd.args(["terminal", "switch", "--terminal", handle]);
     run_with_timeout(cmd, Duration::from_secs(5)).map(|_| ())
+}
+
+const SHELLS: &[&str] = &[
+    "zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "login",
+];
+
+/// Whether `ps -t <tty> -o stat=,comm=` output shows only a shell in the
+/// foreground: the agent has exited and the prompt is back.
+pub fn only_shell_in_front(ps_output: &str) -> bool {
+    let mut front = ps_output.lines().filter_map(|line| {
+        let (stat, comm) = line.trim().split_once(char::is_whitespace)?;
+        stat.contains('+').then(|| {
+            let name = comm.trim().rsplit('/').next().unwrap_or("");
+            name.trim_start_matches('-').to_string()
+        })
+    });
+    let first = front.next();
+    first.is_some_and(|name| SHELLS.contains(&name.as_str()))
+        && front.all(|name| SHELLS.contains(&name.as_str()))
+}
+
+/// Whether the agent's terminal is back at a plain shell prompt, where
+/// pressing Enter would run the reply as a command. `false` when it can't
+/// tell.
+pub fn agent_gone(tty: &str) -> bool {
+    let Some(device) = tty_device(tty) else {
+        return false;
+    };
+    let name = device.trim_start_matches("/dev/").to_string();
+    let mut cmd = Command::new("/bin/ps");
+    cmd.args(["-t", &name, "-o", "stat=,comm="]);
+    run_with_timeout(cmd, Duration::from_secs(2)).is_ok_and(|out| only_shell_in_front(&out))
 }
 
 /// A tty as `ps` reports it ("ttys003"), checked so it can go into a script.
@@ -201,6 +234,19 @@ pub fn select_tab(bundle_id: &str, tty: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shell_back_in_front_means_the_agent_is_gone() {
+        assert!(only_shell_in_front("Ss+  -zsh\n"));
+        assert!(only_shell_in_front("Ss   login\nS+   /bin/zsh\n"));
+        assert!(!only_shell_in_front("Ss   -zsh\nS+   claude\n"));
+        assert!(!only_shell_in_front("Ss   -zsh\nS+   node\n"));
+        assert!(
+            !only_shell_in_front("Ss   -zsh\n"),
+            "no foreground: can't tell"
+        );
+        assert!(!only_shell_in_front(""));
+    }
 
     #[test]
     fn orca_handles_are_checked() {

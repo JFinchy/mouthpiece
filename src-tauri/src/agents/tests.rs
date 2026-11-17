@@ -587,3 +587,27 @@ fn setups_cover_every_agent_and_quote_the_path() {
     assert!(get("aider").contains(r#"notifications-command: "MOUTHPIECE_AGENT=aider '/Users/me/Library/Application Support/dev.mouthpiece/bin/mouthpiece-hook'""#));
     assert_eq!(toml_string(r#"a"b\c"#), r#""a\"b\\c""#);
 }
+
+#[test]
+fn same_folder_name_in_two_repos_is_not_guessed() {
+    let mut q = AgentQueue::default();
+    let mut work = agent("w", 1_000);
+    work.cwd = "/work/api".into();
+    work.folder = "api".into();
+    let mut oss = agent("o", 2_000);
+    oss.cwd = "/oss/api".into();
+    oss.folder = "api".into();
+    q.upsert(work.clone(), 2_000);
+    q.upsert(oss, 2_000);
+    assert!(q.address("to api, run the migrations", 3_000).is_none());
+
+    // Two sessions in the same repo are still one place.
+    let mut q = AgentQueue::default();
+    let mut again = work.clone();
+    again.session_id = "w2".into();
+    q.upsert(work, 2_000);
+    q.upsert(again, 2_000);
+    let (to, rest) = q.address("to api, run the migrations", 3_000).unwrap();
+    assert_eq!(to.session_id, "w2");
+    assert_eq!(rest, "Run the migrations");
+}

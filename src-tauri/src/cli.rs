@@ -23,6 +23,8 @@ use std::time::Duration;
 pub const FLAG: &str = "--mouthpiece-cli";
 const APP_ID: &str = "dev.mouthpiece";
 const MCP_PROTOCOL: &str = "2025-06-18";
+/// Versions whose shape this server's replies fit; anything else gets ours.
+const SUPPORTED_PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const USAGE: &str = "Usage: mouthpiece <command>
 
@@ -91,7 +93,7 @@ fn listen(prompt: Option<&str>, timeout_s: Option<u64>) -> Result<String, String
     let reply = request(
         &json!({"cmd": "listen", "prompt": prompt, "timeout_s": timeout}),
         // Room for transcribing and cleanup after the recording stops.
-        Duration::from_secs(timeout + 120),
+        Duration::from_secs(timeout.min(900).saturating_add(150)),
     )?;
     Ok(reply["text"].as_str().unwrap_or_default().to_string())
 }
@@ -273,7 +275,10 @@ pub fn mcp_handle(msg: &Value) -> Option<Value> {
     let method = msg["method"].as_str().unwrap_or_default();
     let result = match method {
         "initialize" => Ok(json!({
-            "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(MCP_PROTOCOL),
+            "protocolVersion": msg["params"]["protocolVersion"]
+                .as_str()
+                .filter(|v| SUPPORTED_PROTOCOLS.contains(v))
+                .unwrap_or(MCP_PROTOCOL),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "mouthpiece", "version": env!("CARGO_PKG_VERSION")},
             "instructions": "Mouthpiece is the user's local dictation app. Use ask_user to ask the user something out loud \

@@ -64,7 +64,7 @@ struct Token {
 }
 
 fn tokens(text: &str) -> Vec<Token> {
-    let mut out = Vec::new();
+    let mut out: Vec<Token> = Vec::new();
     let mut offset = 0;
     for raw in text.split_inclusive(char::is_whitespace) {
         let start = offset;
@@ -73,9 +73,19 @@ fn tokens(text: &str) -> Vec<Token> {
         if trimmed.is_empty() {
             continue;
         }
-        let clause_break = trimmed.ends_with([',', ':', ';', '—', '-']) && trimmed.len() > 1;
+        let clause_break = trimmed.ends_with([',', ':', ';', '—', '–', '-']) && trimmed.len() > 1;
         let words = folder_words(trimmed);
         if words.is_empty() {
+            // A dash on its own ("to api — run the tests") still ends the
+            // name before it.
+            if trimmed
+                .chars()
+                .all(|c| matches!(c, '—' | '–' | '-' | ',' | ':' | ';'))
+            {
+                if let Some(prev) = out.last_mut() {
+                    prev.clause_break = true;
+                }
+            }
             continue;
         }
         out.push(Token {
@@ -226,6 +236,14 @@ mod tests {
                 rest: "Rerun the tests.".into()
             }
         );
+    }
+
+    #[test]
+    fn a_spaced_dash_ends_the_name() {
+        let f = folders(&["api"]);
+        let hit = find("To api — run the tests", &f).unwrap();
+        assert_eq!((hit.index, hit.rest.as_str()), (0, "Run the tests"));
+        assert!(find("To api run the tests", &f).is_none());
     }
 
     #[test]

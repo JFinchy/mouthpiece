@@ -256,7 +256,16 @@ impl AgentQueue {
         }
         let folders: Vec<String> = known.iter().map(|a| a.folder.clone()).collect();
         let hit = address::find(text, &folders)?;
-        Some((known[hit.index].clone(), hit.rest))
+        let agent = &known[hit.index];
+        // Two different repos with the same folder name (~/work/api and
+        // ~/oss/api): the name doesn't say which, so don't guess.
+        if known
+            .iter()
+            .any(|a| a.folder == agent.folder && a.cwd != agent.cwd)
+        {
+            return None;
+        }
+        Some((agent.clone(), hit.rest))
     }
 
     pub fn list(&mut self, now_ms: u64) -> Vec<WaitingAgent> {
@@ -744,8 +753,27 @@ pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
             return;
         }
     };
+    // Handled one at a time, in the order they arrived, on one thread: a
+    // "waiting" link spends a moment looking up the agent's app, and a
+    // "resumed" link right behind it mustn't be applied first (that would
+    // leave a busy agent showing as waiting).
+    static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<(AppHandle, LinkEvent)>> =
+        std::sync::OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(AppHandle, LinkEvent)>();
+        std::thread::spawn(move || {
+            for (app, event) in rx {
+                apply_link(&app, event);
+            }
+        });
+        tx
+    });
+    let _ = worker.send((app.clone(), event));
+}
+
+fn apply_link(app: &AppHandle, event: LinkEvent) {
     let app = app.clone();
-    std::thread::spawn(move || match event {
+    match event {
         LinkEvent::Resumed { session_id } => {
             let removed = {
                 let state = app.state::<AgentState>();
@@ -799,7 +827,7 @@ pub fn handle_link(app: &AppHandle, url: &tauri::Url) {
                 play_sound();
             }
         }
-    });
+    }
 }
 
 fn play_sound() {
@@ -931,9 +959,24 @@ pub fn deliver_reply(
     if copy_only {
         return copied(text, "Copy only is on, so nothing was sent.".into());
     }
+    // The agent may have exited since it was last heard from, leaving a
+    // shell in its place: there, Enter would run the reply as a command.
+    let agent_gone = press_enter && target.tty.as_deref().is_some_and(targets::agent_gone);
+    if agent_gone {
+        crate::applog!(
+            "agents: {} has a shell in front, not pressing Enter",
+            target.folder
+        );
+    }
+    let press_enter = press_enter && !agent_gone;
     // In Orca the reply is typed straight into the agent's pane: exact, and
-    // focus never moves.
-    if let Some(handle) = &target.orca_terminal {
+    // focus never moves. Not for text with line breaks: Orca types those as
+    // keys, and the first would submit half the reply. Pasting keeps them.
+    if let Some(handle) = target
+        .orca_terminal
+        .as_ref()
+        .filter(|_| !text.trim().contains('\n'))
+    {
         match targets::orca_send(handle, text, press_enter) {
             Ok(()) => {
                 crate::applog!(
@@ -1053,7 +1096,7 @@ pub fn deliver_reply(
         crate::paste::paste_text(text)
     };
     let tab_confirmed = matches!(kind, WindowChoice::Tty(_));
-    let hold = press_enter && !tab_confirmed;
+    let hold = (press_enter && !tab_confirmed) || agent_gone;
     let delivered = delivered.and_then(|()| {
         if press_enter && !hold {
             crate::paste::press_enter()
