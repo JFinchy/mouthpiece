@@ -17,6 +17,7 @@ place with a one-line note.
 - [ ] Dictation deep links require the install token; webhook URLs kept out of logs - see `deep-link-token.md`
 - [ ] Hardened runtime on release builds (mic, models, taps, updater still work) - see `hardened-runtime.md`
 - [ ] Paste never arrives as a bare "v" (Cmd flag on the V itself, also Cmd+Z) - see `paste-cmd-v-race.md`
+- [ ] 0.6.1 audit fixes: Enter held at a bare shell, attach phrases out of prose, listen cancel - see `release-audit-fixes.md`
 
 ## Important
 
