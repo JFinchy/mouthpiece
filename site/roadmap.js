@@ -43,21 +43,21 @@ const NODES = [
   },
   {
     id: "fleet", label: "Many agents at once", title: "Several agents at once",
-    lane: 0, col: 3, status: "progress", order: 1,
+    lane: 0, col: 3, status: "testing", order: 1,
     what: "Address an agent by its folder name (“to esc-pause: rerun the tests, send it”), a menu of waiting agents instead of a single pill, replies into Orca terminals through <code>orca terminal send</code>, and the right iTerm or Terminal tab picked by its tty.",
     why: "Running several coding agents in parallel is becoming normal; the voice layer has to know which one you mean.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "ROADMAP.md",
   },
   {
     id: "mcp", label: "CLI + MCP server", title: "mouthpiece CLI and MCP server",
-    lane: 0, col: 3, status: "progress", order: 2,
+    lane: 0, col: 3, status: "testing", order: 2,
     what: "<code>mouthpiece listen</code> prints a transcript to stdout. An MCP <code>ask_user</code> tool lets an agent ask you a question by voice, and <code>add_vocabulary</code> lets it teach Mouthpiece project terms.",
     why: "Lets agents and scripts use Mouthpiece directly, instead of only receiving pasted text.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "ROADMAP.md",
   },
   {
     id: "more-hooks", label: "Hooks for more agents", title: "Hooks for more agents",
-    lane: 0, col: 3, status: "progress", order: 4,
+    lane: 0, col: 3, status: "testing", order: 4,
     what: "The waiting pill and reply shortcut for Codex, Gemini CLI, OpenCode and Aider, not just Claude Code.",
     why: "Reply-to-agent shouldn't depend on which agent you use.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "ROADMAP.md",
@@ -94,28 +94,28 @@ const NODES = [
   },
   {
     id: "point", label: "Point at context", title: "Context you can point at",
-    lane: 1, col: 3, status: "progress", order: 3,
+    lane: 1, col: 3, status: "testing", order: 3,
     what: "“This” means the selected text, “look at this” attaches a screenshot of the front window, “attach the diff” adds your changes, and “line 42 of the paste file” becomes <code>@src-tauri/src/paste.rs:42</code>.",
     why: "Half of a good prompt is the context; you should be able to point at it instead of copying it.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "BACKLOG.md",
   },
   {
     id: "structured", label: "Structured prompts", title: "Structured prompts from long rambles",
-    lane: 1, col: 4, status: "progress", order: 5,
+    lane: 1, col: 4, status: "testing", order: 5,
     what: "Long dictations to a coding agent get a light structure (goal, context, constraints, done when), keeping every requirement and adding nothing.",
     why: "Thinking out loud is fast; agents work better with a tidy brief.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "BACKLOG.md",
   },
   {
     id: "repo-config", label: "Per-repo config", title: "Per-repo .mouthpiece.json",
-    lane: 1, col: 4, status: "progress", order: 6,
+    lane: 1, col: 4, status: "testing", order: 6,
     what: "A <code>.mouthpiece.json</code> committed to a repo with team vocabulary and spoken replacements, picked up whenever you work in that repo. Vocabulary applies on its own; replacements only once you allow that exact file. Your own settings win.",
     why: "Shares a team's terms, and every repo carrying the file tells whoever clones it about Mouthpiece.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "BACKLOG.md",
   },
   {
     id: "commit-msg", label: "Commit-message help", title: "Commit-message help",
-    lane: 1, col: 4, status: "progress", order: 7,
+    lane: 1, col: 4, status: "testing", order: 7,
     what: "Draft a commit message from the staged diff and what you say about it.",
     why: "A small, frequent chore that already has all its context in the repo.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "ROADMAP.md",
@@ -152,7 +152,7 @@ const NODES = [
   },
   {
     id: "punctuation", label: "Spoken punctuation", title: "Spoken code punctuation",
-    lane: 2, col: 4, status: "progress", order: 7,
+    lane: 2, col: 4, status: "testing", order: 7,
     what: "Say “open paren”, “fat arrow”, “double colon” or “triple equals” and get <code>(</code>, <code>=&gt;</code>, <code>::</code>, <code>===</code>. Only phrases nobody says in ordinary prose.",
     why: "Some code is easier to say than to describe.",
     note: "Built on 2026-11-06; waiting for a hands-on check before release.", source: "ROADMAP.md",
@@ -715,12 +715,19 @@ if (graph && panel) {
 
   panel.querySelector("[data-p-close]").addEventListener("click", closePanel);
   scrim.addEventListener("click", closePanel);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && openId) {
-      e.preventDefault();
-      closePanel();
-    }
-  });
+  // Captured first, so Escape closes only the panel and not also the
+  // header's phone menu underneath it (main.js).
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && openId) {
+        e.preventDefault();
+        e.stopPropagation();
+        closePanel();
+      }
+    },
+    true,
+  );
 
   // Status filters in the legend.
   document.querySelectorAll("[data-filter]").forEach((b) => {

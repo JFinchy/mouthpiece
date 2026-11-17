@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyTheme, type ThemeId } from "./theme";
 import { getReadiness, type ReadinessCheck } from "./settings/readiness";
 import { shortcutLabel, skipVariant, type ShortcutConfig } from "./shortcut";
-import { type WaitingAgent } from "./settings/sections/agents";
+import { spokenFolder, type WaitingAgent } from "./settings/sections/agents";
 import { useMeetingStatus, type DetectedCall } from "./settings/sections/meetings";
 
 type Phase = "idle" | "recording" | "transcribing" | "refining";
@@ -508,13 +508,25 @@ function WidgetView() {
     };
   }, []);
   const [replyKey, setReplyKey] = useState<string | null>(null);
+  // Whether "to <folder>, ..." is on, for the pill's hint. Changing it
+  // emits nothing, so it's re-read along with the list.
+  const [addressing, setAddressing] = useState(false);
   useEffect(() => {
-    const refresh = () =>
+    const loadAddressing = () =>
+      invoke<boolean>("get_agent_addressing_enabled")
+        .then(setAddressing)
+        .catch((err) => console.error("get_agent_addressing_enabled failed:", err));
+    const refresh = () => {
+      loadAddressing();
       invoke<WaitingAgent[]>("get_waiting_agents")
         .then(setWaiting)
         .catch((err) => console.error("get_waiting_agents failed:", err));
+    };
     refresh();
-    const unlisten = listen<WaitingAgent[]>("agents-changed", (e) => setWaiting(e.payload));
+    const unlisten = listen<WaitingAgent[]>("agents-changed", (e) => {
+      setWaiting(e.payload);
+      loadAddressing();
+    });
     const interval = setInterval(refresh, 30_000);
     const loadKey = () =>
       invoke<ShortcutConfig>("get_agent_reply_shortcut")
@@ -1087,7 +1099,7 @@ function WidgetView() {
         newestAgent.app_name ? ` (${newestAgent.app_name})` : ""
       }. ${waiting.length > 1 ? `${waiting.length} agents are waiting. Click to pick one` : "Click to go to it"}${
         replyKey ? `, or press ${replyKey} to reply to the newest by voice` : ""
-      }. Start any dictation with "to ${newestAgent.folder}," to send it there.`
+      }.${addressing ? ` Start any dictation with "to ${spokenFolder(newestAgent.folder)}," to send it there.` : ""}`
     : undefined;
   const agentPill =
     newestAgent && phase === "idle" && !flashing ? (

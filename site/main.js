@@ -30,7 +30,7 @@ if (navToggle) {
   };
   navToggle.addEventListener("click", () => setOpen(!header.classList.contains("open")));
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && header.classList.contains("open")) {
+    if (e.key === "Escape" && !e.defaultPrevented && header.classList.contains("open")) {
       setOpen(false);
       navToggle.focus();
     }
