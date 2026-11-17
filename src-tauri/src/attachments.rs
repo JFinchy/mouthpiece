@@ -90,9 +90,18 @@ pub fn extract(text: &str) -> (String, Vec<Kind>) {
     }
 }
 
+/// Words that make an attach phrase a request to a person ("could you
+/// attach the screenshot?"), not a command to Mouthpiece.
+const ASKING: &[&str] = &["could you", "can you", "please", "will you"];
+
 /// Removes one trailing attach phrase: what's left before it, and which.
 fn strip_one(text: &str) -> Option<(String, Kind)> {
-    let body = text.trim().trim_end_matches(['.', '!', '?']).trim_end();
+    // Commas too: "attach the diff, paste clipboard" leaves "attach the
+    // diff," once the clipboard phrase is stripped.
+    let body = text
+        .trim()
+        .trim_end_matches(['.', '!', '?', ',', ';'])
+        .trim_end();
     let candidates = TRIGGERS
         .iter()
         .map(|t| (t, false))
@@ -106,6 +115,13 @@ fn strip_one(text: &str) -> Option<(String, Kind)> {
         }
         let head = prefix.trim_end();
         if guarded && !head.is_empty() && !head.ends_with([',', '.', ';', '!', '?', ':']) {
+            continue;
+        }
+        let asked = head.to_lowercase();
+        if ASKING
+            .iter()
+            .any(|a| asked == *a || asked.ends_with(&format!(" {a}")))
+        {
             continue;
         }
         return Some((head.trim_end_matches([' ', ',', ';']).to_string(), kind));
@@ -154,8 +170,15 @@ pub fn cap_selection(text: &str) -> String {
     format!("{cut}\n... (selection cut short)")
 }
 
+/// Most of a diff read from git, in bytes: far more than `MAX_DIFF_LINES`
+/// needs, so a huge diff (a lockfile, generated code) can't fill memory.
+const MAX_DIFF_BYTES: u64 = 2_000_000;
+/// A slow repo (huge working tree, network drive) mustn't hold up the paste.
+const DIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// `git diff` in the project folder. `Ok(None)` when there are no changes.
 pub fn read_diff(root: &Path, staged: bool) -> Result<Option<String>, String> {
+    use std::io::Read;
     let mut cmd = Command::new("/usr/bin/git");
     cmd.arg("-C")
         .arg(root)
@@ -165,11 +188,37 @@ pub fn read_diff(root: &Path, staged: bool) -> Result<Option<String>, String> {
     } else {
         cmd.arg("HEAD");
     }
-    let out = cmd.output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    // Read on another thread so the timeout below applies while git is
+    // still writing.
+    let stdout = child.stdout.take().ok_or("git gave no output")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.take(MAX_DIFF_BYTES).read_to_end(&mut bytes);
+        let _ = tx.send(bytes);
+    });
+    let Ok(bytes) = rx.recv_timeout(DIFF_TIMEOUT) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("git took too long to read the changes".to_string());
+    };
+    // At the byte cap git may still be writing the rest, which isn't needed.
+    let status = if bytes.len() as u64 >= MAX_DIFF_BYTES {
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    } else {
+        child.wait().ok()
+    };
+    if status.is_some_and(|s| !s.success()) {
         return Err("git couldn't read the changes".to_string());
     }
-    let diff = String::from_utf8_lossy(&out.stdout).to_string();
+    let diff = String::from_utf8_lossy(&bytes).to_string();
     Ok((!diff.trim().is_empty()).then(|| cap_lines(&diff, MAX_DIFF_LINES)))
 }
 
@@ -371,6 +420,26 @@ mod tests {
         assert_eq!(
             extract("refactor it, attach the selection and attach the diff"),
             ("refactor it".into(), vec![Kind::Selection, Kind::Diff])
+        );
+    }
+
+    #[test]
+    fn requests_to_a_person_dont_count() {
+        assert_eq!(
+            extract("Could you attach the screenshot?"),
+            ("Could you attach the screenshot?".into(), vec![])
+        );
+        assert_eq!(
+            extract("please attach the diff"),
+            ("please attach the diff".into(), vec![])
+        );
+    }
+
+    #[test]
+    fn a_trailing_comma_is_tolerated() {
+        assert_eq!(
+            extract("Fix this, attach the diff,"),
+            ("Fix this".into(), vec![Kind::Diff])
         );
     }
 

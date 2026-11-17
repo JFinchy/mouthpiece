@@ -35,7 +35,11 @@ const GUARDED_TRIGGERS: &[&str] = &["with the error message", "with the error"];
 /// `clipboard::try_extract_trigger`.
 pub fn try_extract_trigger(text: &str) -> (String, bool) {
     let trimmed = text.trim();
-    let without_trailing_punct = trimmed.trim_end_matches(['.', '!', '?']).trim_end();
+    // Commas too: stripping a later "paste clipboard" leaves "attach the
+    // error," behind.
+    let without_trailing_punct = trimmed
+        .trim_end_matches(['.', '!', '?', ',', ';'])
+        .trim_end();
 
     for phrase in TRIGGERS.iter().chain(GUARDED_TRIGGERS) {
         let guarded = GUARDED_TRIGGERS.contains(phrase);

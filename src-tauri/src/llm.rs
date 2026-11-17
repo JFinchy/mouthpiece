@@ -706,7 +706,7 @@ pub fn summarize_for_journal(text: &str, model: &str) -> Option<Result<String, S
 /// Small models often ignore "no markdown fences" instructions and wrap
 /// the response in a fenced code block anyway — strip one leading/trailing
 /// fence if present so the output pastes as raw code, not fenced markdown.
-fn strip_markdown_fences(text: &str) -> String {
+pub(crate) fn strip_markdown_fences(text: &str) -> String {
     let trimmed = text.trim();
     if !trimmed.starts_with("```") {
         return trimmed.to_string();
@@ -742,9 +742,13 @@ pub fn generate_boilerplate(request: &str, model: &str) -> Result<String, String
 
 /// Reorganises a long dictation into Goal / Context / Constraints / Done
 /// when (see `structure.rs`, which checks the answer).
-pub fn structure_prompt(text: &str, model: &str) -> Result<String, String> {
+pub fn structure_prompt(
+    text: &str,
+    model: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
     let prompt = format!("{}\n\nRequest:\n{text}", crate::structure::INSTRUCTION);
-    let answer = strip_markdown_fences(&complete(&prompt, model, 45)?);
+    let answer = strip_markdown_fences(&complete_cancellable(prompt, model, 45, cancel)?);
     if answer.trim().is_empty() {
         Err("the model returned an empty response".to_string())
     } else {
@@ -752,18 +756,69 @@ pub fn structure_prompt(text: &str, model: &str) -> Result<String, String> {
     }
 }
 
+/// Most of a diff sent for a commit message, in characters. Ollama's
+/// default context is a few thousand tokens and it silently drops the
+/// start of a longer prompt, so a big diff must be cut here instead.
+const MAX_COMMIT_DIFF_CHARS: usize = 12_000;
+
 /// A commit message for `diff`, steered by the spoken `notes`.
-pub fn commit_message(notes: &str, diff: &str, model: &str) -> Result<String, String> {
+pub fn commit_message(
+    notes: &str,
+    diff: &str,
+    model: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
     let notes = if notes.is_empty() { "(none)" } else { notes };
+    let diff = if diff.chars().count() > MAX_COMMIT_DIFF_CHARS {
+        let cut: String = diff.chars().take(MAX_COMMIT_DIFF_CHARS).collect();
+        format!("{cut}\n... (rest of the diff not shown)")
+    } else {
+        diff.to_string()
+    };
+    // The instruction goes last, so it's the part a model keeps in view
+    // even when the diff is long.
     let prompt = format!(
-        "{}\n\nDeveloper's notes: {notes}\n\nStaged changes:\n{diff}",
+        "Staged changes:\n{diff}\n\nDeveloper's notes: {notes}\n\n{}",
         crate::commit_message::INSTRUCTION
     );
-    let message = crate::commit_message::clean(&complete(&prompt, model, 45)?);
+    let message = crate::commit_message::clean(&complete_cancellable(prompt, model, 45, cancel)?);
     if message.is_empty() {
         Err("the model returned an empty message".to_string())
     } else {
         Ok(message)
+    }
+}
+
+/// [`complete`] on its own thread, so the widget's "paste as-is" (`cancel`)
+/// takes effect straight away instead of after the whole answer: the
+/// caller gets an error and pastes the text it already had. The request
+/// itself runs on until its timeout and its answer is dropped.
+fn complete_cancellable(
+    prompt: String,
+    model: &str,
+    timeout_secs: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("skipped by the user".into());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread_model = model.to_string();
+    std::thread::spawn(move || {
+        let _ = tx.send(complete(&prompt, &thread_model, timeout_secs));
+    });
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("skipped by the user".into());
+        }
+        match rx.recv_timeout(std::time::Duration::from_millis(40)) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("the model request ended unexpectedly".into())
+            }
+        }
     }
 }
 
@@ -929,6 +984,19 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_millis(500),
             "didn't stop early"
+        );
+    }
+
+    #[test]
+    fn structuring_and_commit_messages_honour_a_skip() {
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            structure_prompt("text", "some-model", &cancel).unwrap_err(),
+            "skipped by the user"
+        );
+        assert_eq!(
+            commit_message("", "+a", "some-model", &cancel).unwrap_err(),
+            "skipped by the user"
         );
     }
 

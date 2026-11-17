@@ -113,12 +113,16 @@ const COMMANDS: &[(&str, &str, Spacing)] = &[
     ("double equals", "==", Spacing::Spaced),
     ("triple equals", "===", Spacing::Spaced),
     ("not equals", "!=", Spacing::Spaced),
+    ("greater or equal to", ">=", Spacing::Spaced),
     ("greater or equal", ">=", Spacing::Spaced),
+    ("less or equal to", "<=", Spacing::Spaced),
     ("less or equal", "<=", Spacing::Spaced),
     ("double ampersand", "&&", Spacing::Spaced),
     ("double pipe", "||", Spacing::Spaced),
     ("pipe symbol", "|", Spacing::Spaced),
-    ("dollar sign", "$", Spacing::Glued),
+    // Opening, not Glued: "with a dollar sign" is "a $", but "dollar sign
+    // HOME" is still "$HOME".
+    ("dollar sign", "$", Spacing::Opening),
     ("new paragraph", "\n\n", Spacing::LineBreak(2)),
     ("new line", "\n", Spacing::LineBreak(1)),
     ("next line", "\n", Spacing::LineBreak(1)),
@@ -129,7 +133,7 @@ const QUOTE_PHRASE: &str = "quotation mark";
 
 /// Longest phrase in `COMMANDS`/`QUOTE_PHRASE`, in words — bounds how far
 /// ahead `match_at` looks.
-const MAX_PHRASE_WORDS: usize = 3;
+const MAX_PHRASE_WORDS: usize = 4;
 
 fn normalize(token: &str) -> String {
     token
@@ -145,6 +149,14 @@ fn match_at(
     quote_open: &mut bool,
 ) -> Option<(usize, &'static str, Spacing)> {
     for len in (1..=MAX_PHRASE_WORDS.min(tokens.len() - i)).rev() {
+        // A phrase never runs across a sentence or clause break: "That was
+        // close. Brace yourself" has no "close brace" in it.
+        if tokens[i..i + len - 1]
+            .iter()
+            .any(|t| t.ends_with(['.', ',', '!', '?', ';', ':']))
+        {
+            continue;
+        }
         let phrase = tokens[i..i + len]
             .iter()
             .map(|t| normalize(t))
@@ -880,6 +892,23 @@ mod tests {
             "fn main {}"
         );
         assert_eq!(expand_punctuation("fn f thin arrow u32"), "fn f -> u32");
+    }
+
+    #[test]
+    fn symbol_phrases_space_and_stop_like_words() {
+        assert_eq!(
+            expand_punctuation("prefix it with a dollar sign"),
+            "prefix it with a $"
+        );
+        assert_eq!(expand_punctuation("echo dollar sign HOME"), "echo $HOME");
+        assert_eq!(
+            expand_punctuation("if x greater or equal to 3"),
+            "if x >= 3"
+        );
+        assert_eq!(
+            expand_punctuation("That was close. Brace yourself"),
+            "That was close. Brace yourself"
+        );
     }
 
     #[test]

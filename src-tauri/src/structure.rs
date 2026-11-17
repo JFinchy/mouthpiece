@@ -166,6 +166,31 @@ fn content_stems(text: &str) -> Vec<String> {
         .collect()
 }
 
+const NEGATIONS: &[&str] = &[
+    "not",
+    "no",
+    "never",
+    "don't",
+    "doesn't",
+    "can't",
+    "won't",
+    "shouldn't",
+    "isn't",
+    "aren't",
+    "without",
+];
+
+/// How often each negation word appears, sorted.
+fn negations(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = tokens(&text.replace('\u{2019}', "'"))
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .filter(|t| NEGATIONS.contains(&t.as_str()))
+        .collect();
+    found.sort();
+    found
+}
+
 /// Whether `structured` is a faithful reorganisation of `original`.
 pub fn check(original: &str, structured: &str) -> Result<(), String> {
     let lower = structured.to_lowercase();
@@ -191,9 +216,20 @@ pub fn check(original: &str, structured: &str) -> Result<(), String> {
         .filter(|t| is_identifier_like(t))
     {
         let bare = name.trim_matches('`');
-        if !out_tokens.iter().any(|t| t.trim_matches('`') == bare) && !structured.contains(bare) {
+        // A plain number must appear as itself: "5" inside "50" or "429"
+        // is a changed number, not a kept one.
+        let number = bare.chars().all(|c| c.is_ascii_digit());
+        if !out_tokens.iter().any(|t| t.trim_matches('`') == bare)
+            && (number || !structured.contains(bare))
+        {
             return Err(format!("dropped a name ({} chars)", bare.chars().count()));
         }
+    }
+
+    // One lost "don't" flips a requirement but is a single short word, well
+    // within the dropped-words allowance below, so negations are counted.
+    if negations(original) != negations(structured) {
+        return Err("changed a negation".to_string());
     }
 
     let before: HashSet<String> = content_stems(original).into_iter().collect();

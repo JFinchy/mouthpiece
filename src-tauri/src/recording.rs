@@ -466,6 +466,14 @@ fn transcribe_and_paste(
             } else {
                 text
             };
+            let agent_app = reply.is_some()
+                || capture.is_some()
+                || state
+                    .active_app
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|info| crate::project::is_terminal_or_editor(&info.bundle_id));
             process_transcript(
                 app,
                 text,
@@ -480,6 +488,7 @@ fn transcribe_and_paste(
                     project: crate::project::current(),
                     reply_target: reply,
                     capture,
+                    agent_app,
                 },
             );
         }
@@ -588,6 +597,9 @@ pub(crate) struct TranscriptContext<'a> {
     /// A `mouthpiece listen` caller (an agent asking a question) waiting for
     /// this text: sent there instead of pasted.
     pub capture: Option<crate::cli_server::Capture>,
+    /// The text goes to a terminal or editor (or an agent), where "attach
+    /// the diff" and "look at this" are commands rather than prose.
+    pub agent_app: bool,
 }
 
 fn ms_or_dash(ms: Option<u64>) -> String {
@@ -623,6 +635,7 @@ pub(crate) fn process_transcript(app: &AppHandle, text: String, mut ctx: Transcr
         cfg,
         settings,
         ctx.project.as_deref(),
+        ctx.agent_app,
         &pipeline::OllamaRefiner {
             on_progress: &|percent| {
                 let _ = app.emit("refine-progress", percent);

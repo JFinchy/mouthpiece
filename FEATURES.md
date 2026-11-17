@@ -413,7 +413,8 @@ built yet.
   "attach a screenshot" (the window you're looking at, or the one
   behind your terminal/editor; Screen Recording asked the first time;
   saved under `$TMPDIR` and referenced as `@path`). They combine with
-  each other and with "attach the error" (`attachments.rs`).
+  each other and with "attach the error" (`attachments.rs`). Only in a
+  terminal or editor, and not after "could you" / "can you" / "please".
 - **File and line references** — "line 42 of the paste file" and "the
   paste file, line 7" become `@src-tauri/src/paste.rs:42` / `:7`;
   "lines 10 to 20" gives `:10-20`.

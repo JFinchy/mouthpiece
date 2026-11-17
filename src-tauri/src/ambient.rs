@@ -394,6 +394,9 @@ fn handle_segment(app: &AppHandle, audio: Vec<f32>) {
                     settings: &settings,
                     app_name: frontmost.map(|(_, name)| name),
                     duration_ms: Some((seconds * 1000.0) as u64),
+                    agent_app: bundle_id
+                        .as_deref()
+                        .is_some_and(crate::project::is_terminal_or_editor),
                     // Unknown frontmost app → an id that never matches, so
                     // the text is copied rather than pasted somewhere blind.
                     paste_guard: Some(bundle_id.unwrap_or_default()),
