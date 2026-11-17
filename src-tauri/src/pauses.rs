@@ -13,9 +13,11 @@
 //! - at the end, a trailing-off "..." becomes a period.
 //!
 //! Dashes count only when followed by a space or the end, so command-line
-//! flags (`--amend`) and hyphenated words are never touched.
+//! flags (`--amend`) and hyphenated words are never touched. A lone "-"
+//! isn't a pause mark at all: it's far more often meaning ("i - 1",
+//! "pages 10 - 20", "Monday - Friday").
 
-const MARKS: &[&str] = &["...", "…", "--", "—", "–", "-"];
+const MARKS: &[&str] = &["...", "…", "--", "—", "–"];
 
 /// Words after which a sentence can't end: articles, prepositions,
 /// conjunctions, auxiliaries, possessives.
@@ -192,8 +194,7 @@ fn remove_in_line(line: &str) -> String {
 }
 
 /// Byte range of the first pause mark: one of `MARKS`, followed by
-/// whitespace or the end of the line. A lone "-" counts only with spaces
-/// on both sides ("a - b"), never inside a word.
+/// whitespace or the end of the line.
 fn find_mark(line: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < line.len() {
@@ -204,15 +205,10 @@ fn find_mark(line: &str) -> Option<(usize, usize)> {
             }
             let end = i + mark.len();
             let followed_ok = line[end..].chars().next().is_none_or(char::is_whitespace);
-            let preceded_by_space = line[..i]
-                .chars()
-                .next_back()
-                .is_none_or(char::is_whitespace);
             // Part of a longer run of dots/dashes ("....", "---"): leave it.
             let longer = matches!(line[end..].chars().next(), Some('.' | '-'))
                 || matches!(line[..i].chars().next_back(), Some('.' | '-'));
-            let lone_hyphen_ok = *mark != "-" || preceded_by_space;
-            if followed_ok && !longer && lone_hyphen_ok {
+            if followed_ok && !longer {
                 return Some((i, end));
             }
             break;
@@ -393,6 +389,13 @@ mod tests {
         assert_eq!(clean("a range 1..5"), "a range 1..5");
         assert_eq!(clean("wait...."), "wait....");
         assert_eq!(clean("a --- b"), "a --- b");
+    }
+
+    #[test]
+    fn a_lone_hyphen_is_meaning_not_a_pause() {
+        assert_eq!(clean("use i - 1"), "use i - 1");
+        assert_eq!(clean("pages 10 - 20"), "pages 10 - 20");
+        assert_eq!(clean("Monday - Friday"), "Monday - Friday");
     }
 
     #[test]

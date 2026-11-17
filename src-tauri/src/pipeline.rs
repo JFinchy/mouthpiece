@@ -77,7 +77,7 @@ impl Refiner for OllamaRefiner<'_> {
     }
 
     fn structure(&self, text: &str, model: &str) -> Result<String, String> {
-        crate::llm::structure_prompt(text, model)
+        crate::llm::structure_prompt(text, model, self.cancel)
     }
 
     fn commit_message(
@@ -88,7 +88,7 @@ impl Refiner for OllamaRefiner<'_> {
     ) -> Result<String, String> {
         let root = root.ok_or("no project found")?;
         let diff = crate::attachments::read_diff(root, true)?.ok_or("nothing is staged")?;
-        crate::llm::commit_message(notes, &diff, model)
+        crate::llm::commit_message(notes, &diff, model, self.cancel)
     }
 
     fn skipped(&self) -> bool {
@@ -245,18 +245,21 @@ pub fn format(
     refiner: &dyn Refiner,
     on_refining: &mut dyn FnMut(&str),
 ) -> Formatted {
-    format_in_project(text, cfg, settings, None, refiner, on_refining)
+    format_in_project(text, cfg, settings, None, true, refiner, on_refining)
 }
 
 /// [`format`] with the names from the project being dictated into (see
 /// `project.rs`): spoken names in the transcript become the real
 /// identifiers and file paths before mode formatting, and the project's top
-/// names go to the LLM so refinement doesn't "correct" them.
+/// names go to the LLM so refinement doesn't "correct" them. `agent_app`
+/// is whether the dictation goes to a terminal or editor (or an agent
+/// reply), the only places attach phrases are commands.
 pub fn format_in_project(
     text: String,
     cfg: &AppConfig,
     settings: &ResolvedSettings,
     project: Option<&crate::project::Project>,
+    agent_app: bool,
     refiner: &dyn Refiner,
     on_refining: &mut dyn FnMut(&str),
 ) -> Formatted {
@@ -357,16 +360,37 @@ pub fn format_in_project(
     // "Attach the error": stripped the same way, after "press enter" (the
     // later-spoken phrase goes first). Always on: the phrases are
     // deliberate, and nothing happens beyond appending a block.
-    // Other attachments ("look at this, attach the diff") can sit on
-    // either side of "attach the error", so strip them before and after.
-    let (text, mut attachments) = crate::attachments::extract(&text);
-    let (text, should_attach_error) = crate::error_context::try_extract_trigger(&text);
-    let (text, earlier) = crate::attachments::extract(&text);
-    let earlier: Vec<_> = earlier
-        .into_iter()
-        .filter(|k| !attachments.contains(k))
-        .collect();
-    attachments.splice(0..0, earlier);
+    // Other attachments ("look at this, attach the diff") and "append
+    // clipboard" can come in any order, so all three are stripped in turn
+    // until none is left. The other attachments only count in a terminal
+    // or editor: elsewhere "Could you attach the screenshot?" or "Haha,
+    // look at this." is a message to a person.
+    let mut text = text;
+    let mut attachments: Vec<crate::attachments::Kind> = Vec::new();
+    let mut should_attach_error = false;
+    let mut should_append_clipboard = false;
+    loop {
+        let before = text.clone();
+        if agent_app {
+            let (rest, earlier) = crate::attachments::extract(&text);
+            let earlier: Vec<_> = earlier
+                .into_iter()
+                .filter(|k| !attachments.contains(k))
+                .collect();
+            attachments.splice(0..0, earlier);
+            text = rest;
+        }
+        let (rest, error) = crate::error_context::try_extract_trigger(&text);
+        should_attach_error |= error;
+        // "Append clipboard": always on, unlike "press enter" — the trigger
+        // phrases are multi-word and deliberate.
+        let (rest, clipboard) = crate::clipboard::try_extract_trigger(&rest);
+        should_append_clipboard |= clipboard;
+        text = rest;
+        if text == before {
+            break;
+        }
+    }
     if should_attach_error {
         features_used.push("attach_error".to_string());
     }
@@ -382,14 +406,6 @@ pub fn format_in_project(
     // boilerplate) rather than derived from `formatted` below —
     // see the doc comment on `HistoryEntry::spoken_words` for why.
     let spoken_words = Some(text.split_whitespace().count() as u32);
-
-    // "Append clipboard": stripped the same way as "press enter"
-    // above (and checked after it, so "...append clipboard press
-    // enter" strips the later-spoken phrase first). Always on,
-    // unlike "press enter" — the trigger phrases are multi-word and
-    // deliberate, not something said by accident the way a bare
-    // Enter keystroke risk would warrant an opt-in.
-    let (text, should_append_clipboard) = crate::clipboard::try_extract_trigger(&text);
 
     // Snippets ("pr checklist", "standup update") are the most
     // explicit, intentional signal of the pre-LLM checks — a
@@ -441,11 +457,19 @@ pub fn format_in_project(
                     (formatted, format!("{:?}", settings.mode))
                 }
             }
-        } else if let Some(notes) = crate::commit_message::try_extract(&text) {
-            on_refining(&cfg.llm_model);
+        } else if let Some((notes, model)) = crate::commit_message::try_extract(&text)
+            // Only where the mode allows the LLM, and not once the user
+            // asked to paste as-is.
+            .filter(|_| !refiner.skipped())
+            .and_then(|notes| match &settings.llm_refinement {
+                crate::modes::LlmRefinement::Off => None,
+                crate::modes::LlmRefinement::Global => Some((notes, cfg.llm_model.as_str())),
+                crate::modes::LlmRefinement::Model(id) => Some((notes, id.as_str())),
+            })
+        {
+            on_refining(model);
             let started = Instant::now();
-            let result =
-                refiner.commit_message(&notes, project.map(|p| p.root.as_path()), &cfg.llm_model);
+            let result = refiner.commit_message(&notes, project.map(|p| p.root.as_path()), model);
             llm_ms = Some(started.elapsed().as_millis() as u64);
             match result {
                 Ok(message) => {
@@ -633,6 +657,9 @@ mod golden {
         /// Turns on "Structure long prompts" for the case's mode.
         #[serde(default)]
         structure: bool,
+        /// Dictating into a terminal or editor (the default) rather than,
+        /// say, Mail; attach phrases only count there.
+        agent_app: Option<bool>,
         llm: Option<ScriptedLlm>,
         expect: Option<String>,
         expect_prefix: Option<String>,
@@ -804,6 +831,7 @@ mod golden {
                 &cfg,
                 &settings,
                 project.as_ref(),
+                case.agent_app.unwrap_or(true),
                 &refiner,
                 &mut |_| refining_events += 1,
             );

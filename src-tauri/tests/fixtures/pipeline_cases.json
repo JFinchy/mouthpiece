@@ -638,5 +638,75 @@
     },
     "expect": "Commit message: fixed the race in paste.",
     "expect_llm_called": true
+  },
+  {
+    "name": "attach phrase outside a terminal or editor is prose",
+    "input": "Could you attach the screenshot?",
+    "mode": "plain",
+    "agent_app": false,
+    "expect": "Could you attach the screenshot?",
+    "expect_attachments": []
+  },
+  {
+    "name": "look at this in a chat app is prose",
+    "input": "Haha, look at this.",
+    "mode": "plain",
+    "agent_app": false,
+    "expect": "Haha, look at this.",
+    "expect_attachments": []
+  },
+  {
+    "name": "a polite request to attach is prose even in a terminal",
+    "input": "Can you attach the screenshot?",
+    "mode": "plain",
+    "expect": "Can you attach the screenshot?",
+    "expect_attachments": []
+  },
+  {
+    "name": "attachments before paste clipboard are stripped too",
+    "input": "Fix this, attach the diff, paste clipboard.",
+    "mode": "plain",
+    "expect": "Fix this",
+    "expect_attachments": ["diff"],
+    "expect_append_clipboard": true
+  },
+  {
+    "name": "asking an agent to write a commit message isn't a commit message command",
+    "input": "Write a commit message for these changes and commit them",
+    "mode": "cli",
+    "llm": {"returns": "Fix the race in paste"},
+    "expect_label": "Cli",
+    "expect_llm_called": false
+  },
+  {
+    "name": "commit message with LLM refinement off pastes the words",
+    "input": "Commit message: fixed the race in paste.",
+    "mode": "plain",
+    "expect": "Commit message: fixed the race in paste.",
+    "expect_llm_called": false
+  },
+  {
+    "name": "a lone spaced hyphen is kept",
+    "input": "Use i - 1 for pages 10 - 20, Monday - Friday.",
+    "mode": "plain",
+    "expect": "Use i - 1 for pages 10 - 20, Monday - Friday."
+  },
+  {
+    "name": "dollar sign is spaced like a word before it",
+    "input": "Prefix it with a dollar sign",
+    "mode": "plain",
+    "expect": "Prefix it with a $"
+  },
+  {
+    "name": "greater or equal to is one symbol",
+    "input": "if count greater or equal to 3",
+    "mode": "plain",
+    "expect": "if count >= 3"
+  },
+  {
+    "name": "symbol phrases don't run across a sentence break",
+    "input": "That was close. Brace yourself.",
+    "mode": "plain",
+    "expect": "That was close. Brace yourself."
   }
 ]
