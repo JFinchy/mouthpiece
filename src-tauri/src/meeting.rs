@@ -3504,9 +3504,7 @@ mod tests {
         let staggered_file = std::fs::File::create(&staggered_path).unwrap();
         let (m_tx, m_rx) = mpsc::channel();
         let (s_tx, s_rx) = mpsc::channel();
-        let staggered_writer =
-            std::thread::spawn(move || write_meeting_stereo(staggered_file, m_rx, s_rx));
-        for step in 0..20 {
+        let send_step = |step: usize| {
             // Mic sends 800 samples (50ms) first; system sends 800 samples on
             // odd steps (1,600 samples every 2 steps) so `mic_to16k` crosses
             // each 1,600-sample boundary before `sys_to16k`.
@@ -3524,17 +3522,37 @@ mod tests {
                 })
                 .unwrap();
             }
+        };
+        let staggered_writer =
+            std::thread::spawn(move || write_meeting_stereo(staggered_file, m_rx, s_rx));
+        for step in 0..20 {
+            send_step(step);
         }
         drop(s_tx);
         drop(m_tx);
         staggered_writer.join().unwrap().unwrap();
         let staggered = load_recording_channels(&staggered_path).unwrap();
         let staggered_sys = staggered.system.unwrap();
-        assert_eq!(staggered.mic.len(), 16_000);
-        assert_eq!(staggered_sys.len(), 16_000);
+        // The writer may see a mic chunk before the system chunk sent right
+        // after it, and then (by design) treats the system stream as starting
+        // late and writes that mic audio against silence. So silence is
+        // allowed at either end; a gap in the middle of a channel isn't.
+        let unbroken_run = |samples: &[f32], value: f32| -> usize {
+            let first = samples.iter().position(|&s| s.abs() > 1e-3).unwrap();
+            let last = samples.iter().rposition(|&s| s.abs() > 1e-3).unwrap();
+            assert!(
+                samples[first..=last]
+                    .iter()
+                    .all(|&s| (s - value).abs() < 1e-3),
+                "staggered block arrivals must not insert 0.0 gaps into a channel"
+            );
+            last - first + 1
+        };
+        assert_eq!(unbroken_run(&staggered.mic, 0.35), 16_000);
+        assert_eq!(unbroken_run(&staggered_sys, -0.45), 16_000);
         assert!(
-            staggered_sys.iter().all(|&s| (s + 0.45).abs() < 1e-3),
-            "staggered block arrivals must not insert 0.0 gaps into system audio"
+            staggered.mic.len() <= 16_000 + 1_600,
+            "only a startup offset, not a growing one"
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
