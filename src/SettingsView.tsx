@@ -97,17 +97,30 @@ function SettingsView() {
   }
 
   const waveformSeqRef = useRef(0);
+  const waveformSaveTimerRef = useRef<number | undefined>(undefined);
+  const waveformBeforeEditRef = useRef<WaveformConfig | null>(null);
 
+  // Sliders call this on every tick of a drag. The preview follows each
+  // tick, but the config is only saved (and the widget told) once the
+  // slider rests, instead of a disk write per tick.
   function changeWaveform(next: WaveformConfig) {
     const seq = ++waveformSeqRef.current;
-    const previous = waveform;
+    if (waveformSaveTimerRef.current === undefined) {
+      waveformBeforeEditRef.current = waveform;
+    } else {
+      window.clearTimeout(waveformSaveTimerRef.current);
+    }
     setWaveformState(next);
-    invoke("set_waveform_config", { config: next }).catch((err) => {
-      notifyError("set_waveform_config", err);
-      if (seq === waveformSeqRef.current) {
-        setWaveformState(previous);
-      }
-    });
+    waveformSaveTimerRef.current = window.setTimeout(() => {
+      waveformSaveTimerRef.current = undefined;
+      const previous = waveformBeforeEditRef.current;
+      invoke("set_waveform_config", { config: next }).catch((err) => {
+        notifyError("set_waveform_config", err);
+        if (seq === waveformSeqRef.current && previous) {
+          setWaveformState(previous);
+        }
+      });
+    }, 150);
   }
 
   const appearance = (

@@ -21,6 +21,7 @@ place with a one-line note.
 
 ## Important
 
+- [ ] Studio redesign: waveform studio, widget polish, mic check (mic must turn off) - see `studio-redesign.md`
 - [ ] Several agents at once: address by name, agent menu, Orca/iTerm/Terminal delivery - see `agent-fleet-addressing.md`
 - [ ] The mouthpiece command and MCP server (ask_user) - see `agent-cli-mcp.md`
 - [ ] Per-repo .mouthpiece.json (replacements only after you allow the file) - see `repo-config.md`

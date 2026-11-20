@@ -796,9 +796,8 @@ pub fn run() {
                     let tauri::WindowEvent::Moved(physical_pos) = event else {
                         return;
                     };
-                    if config::load(&position_app).widget_mode == widget::WidgetMode::Notch {
-                        return;
-                    }
+                    // Notch mode is checked once, by the debounced save below,
+                    // rather than reading the config on every Moved event.
                     let Some(window) = position_app.get_webview_window("widget") else {
                         return;
                     };
