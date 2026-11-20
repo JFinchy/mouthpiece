@@ -31,6 +31,22 @@ export function formatSeconds(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+const TYPING_BASELINE_WPM = 55;
+const FALLBACK_SPEAKING_WPM = 135;
+
+export function formatTimeSaved(totalWords: number, avgWpm: number | null): string | null {
+  if (totalWords <= 0) return null;
+  const speakingWpm = avgWpm && avgWpm > 0 ? avgWpm : FALLBACK_SPEAKING_WPM;
+  const savedMinutes = totalWords / TYPING_BASELINE_WPM - totalWords / speakingWpm;
+  if (savedMinutes <= 0) return "0m";
+  if (savedMinutes < 1) return "< 1m";
+  const rounded = Math.round(savedMinutes);
+  if (rounded < 60) return `${rounded}m`;
+  const hours = Math.floor(rounded / 60);
+  const mins = rounded % 60;
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
 export function StatCard({
   value,
   label,
@@ -42,7 +58,7 @@ export function StatCard({
 }) {
   return (
     <div className="flex flex-col rounded-lg border border-base-content/10 bg-base-100 p-3">
-      <div className="text-[26px] font-semibold leading-none">{value}</div>
+      <div className="dw-display text-[26px] font-semibold leading-none tabular-nums">{value}</div>
       <div className="mt-1.5 text-[10px] font-semibold uppercase tracking-wide opacity-50">{label}</div>
       {children && <div className="mt-2.5 border-t border-base-content/10 pt-2.5">{children}</div>}
     </div>
@@ -69,14 +85,16 @@ export function WpmGauge({ ratio }: { ratio: number }) {
         strokeWidth="8"
         strokeLinecap="round"
       />
-      <path
-        d="M8,50 A42,42 0 0 1 92,50"
-        fill="none"
-        stroke="#2f9e6e"
-        strokeWidth="8"
-        strokeLinecap="round"
-        strokeDasharray={`${circumference * clamped} ${circumference}`}
-      />
+      {clamped > 0 && (
+        <path
+          d="M8,50 A42,42 0 0 1 92,50"
+          fill="none"
+          stroke="var(--dw-accent, #f59e0b)"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={`${circumference * clamped} ${circumference}`}
+        />
+      )}
     </svg>
   );
 }
@@ -140,10 +158,10 @@ export function heatmapLevel(count: number): number {
 }
 
 export const HEATMAP_LEVEL_BG = [
-  "var(--dw-border, #2a2d32)",
-  "#1c4f3a",
-  "#237050",
-  "#2f9e6e",
+  "color-mix(in srgb, var(--dw-fg, #f4f2ed) 9%, var(--dw-card, #1c1f23))",
+  "color-mix(in srgb, var(--dw-accent, #f59e0b) 28%, var(--dw-card, #1c1f23))",
+  "color-mix(in srgb, var(--dw-accent, #f59e0b) 60%, var(--dw-card, #1c1f23))",
+  "var(--dw-accent, #f59e0b)",
 ];
 
 export function InsightsSection() {
@@ -180,11 +198,22 @@ export function InsightsSection() {
   const weeks = buildHeatmapWeeks(data.streak.daily_counts);
   const wpmRatio =
     data.avg_words_per_minute && data.personal_best_wpm ? data.avg_words_per_minute / data.personal_best_wpm : 0;
+  const timeSaved = formatTimeSaved(data.total_words, data.avg_words_per_minute);
 
   return (
     <div className="mb-4 flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard value={data.total_words.toLocaleString()} label="Total words dictated" />
+        <StatCard value={data.total_words.toLocaleString()} label="Total words dictated">
+          <p className="text-xs opacity-70">
+            {timeSaved ? (
+              <>
+                <span className="dw-mono font-semibold opacity-100">~{timeSaved}</span> saved vs. typing (55 WPM)
+              </>
+            ) : (
+              "Time saved vs. typing (55 WPM) fills in as you dictate."
+            )}
+          </p>
+        </StatCard>
         <StatCard value={String(data.smart_formatting_count)} label="Smart formatting applied">
           <p className="text-xs opacity-70">
             Punctuation commands, lists, casing, snippets, and Backtrack corrections.
@@ -197,7 +226,7 @@ export function InsightsSection() {
               <p className="text-right text-xs opacity-70">
                 Personal best
                 <br />
-                <span className="font-semibold opacity-100">
+                <span className="dw-mono font-semibold opacity-100">
                   {data.personal_best_wpm ? Math.round(data.personal_best_wpm) : "—"} WPM
                 </span>
               </p>
@@ -237,7 +266,7 @@ export function InsightsSection() {
                     style={{ width: `${Math.max(app.percent, 2)}%` }}
                   />
                 </div>
-                <span className="w-16 shrink-0 text-right text-xs tabular-nums opacity-70">
+                <span className="dw-mono w-16 shrink-0 text-right text-[11px] opacity-70">
                   {app.dictations} · {Math.round(app.percent)}%
                 </span>
               </div>

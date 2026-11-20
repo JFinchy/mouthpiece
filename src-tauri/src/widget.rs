@@ -114,9 +114,12 @@ fn dock_top_center(window: &tauri::WebviewWindow, width: f64) {
     };
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    let x = area.position.x as f64 + (area.size.width as f64 - width * scale) / 2.0;
-    let y = area.position.y as f64;
-    let _ = window.set_position(tauri::PhysicalPosition::new(x.round() as i32, y as i32));
+    let logical_x = area.position.x as f64 / scale + (area.size.width as f64 / scale - width) / 2.0;
+    let logical_y = area.position.y as f64 / scale;
+    let _ = window.set_position(tauri::LogicalPosition::new(
+        logical_x.round(),
+        logical_y.round(),
+    ));
 }
 
 #[tauri::command]
@@ -151,11 +154,109 @@ pub fn set_widget_size(app: AppHandle, width: f64, height: f64) {
     apply_size(&app, width, height);
 }
 
+/// Logical-pixel work-area rectangle for a connected monitor.
+#[derive(Clone, Copy, Debug)]
+struct LogicalRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Returns true when at least `MIN_VISIBLE` logical pixels of the widget overlap
+/// some connected monitor's work area.
+fn position_is_on_any_monitor(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    monitors: &[LogicalRect],
+) -> bool {
+    const MIN_VISIBLE: f64 = 24.0;
+    let req_w = width.min(MIN_VISIBLE);
+    let req_h = height.min(MIN_VISIBLE);
+    monitors.iter().any(|m| {
+        let overlap_w = (x + width).min(m.x + m.width) - x.max(m.x);
+        let overlap_h = (y + height).min(m.y + m.height) - y.max(m.y);
+        overlap_w >= req_w && overlap_h >= req_h
+    })
+}
+
+fn available_work_areas(window: &tauri::WebviewWindow) -> Vec<LogicalRect> {
+    window
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let scale = m.scale_factor();
+            let area = m.work_area();
+            LogicalRect {
+                x: area.position.x as f64 / scale,
+                y: area.position.y as f64 / scale,
+                width: area.size.width as f64 / scale,
+                height: area.size.height as f64 / scale,
+            }
+        })
+        .collect()
+}
+
+/// Applies `saved_pos` if it still lies on a connected monitor, otherwise
+/// centers the widget on the primary display so unplugging an external monitor
+/// never strands the HUD off-screen.
+pub fn apply_position_on_screen(
+    window: &tauri::WebviewWindow,
+    saved_pos: Option<(f64, f64)>,
+    width: f64,
+    height: f64,
+) {
+    let monitors = available_work_areas(window);
+    if let Some((x, y)) = saved_pos {
+        if monitors.is_empty() || position_is_on_any_monitor(x, y, width, height, &monitors) {
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+            return;
+        }
+        crate::applog!(
+            "widget: saved position ({x:.0}, {y:.0}) is off-screen across {} monitor(s); recentering",
+            monitors.len()
+        );
+    }
+    let _ = window.center();
+}
+
 /// Shows the widget for a dictation or meeting starting. `show()` only,
 /// never `set_focus()`: stealing keyboard focus made the paste land in the
 /// widget instead of the app being dictated into.
 pub fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("widget") {
+        let mode = crate::config::load(app).widget_mode;
+        if mode == WidgetMode::Notch {
+            let current_width = match (window.outer_size(), window.scale_factor()) {
+                (Ok(size), Ok(scale)) if scale > 0.0 => {
+                    let w = size.to_logical::<f64>(scale).width;
+                    if w >= 1.0 {
+                        w
+                    } else {
+                        mode.base_size().0
+                    }
+                }
+                _ => mode.base_size().0,
+            };
+            dock_top_center(&window, current_width);
+        } else if let (Ok(pos), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
+            let logical = pos.to_logical::<f64>(scale);
+            let (width, height) = mode.base_size();
+            let monitors = available_work_areas(&window);
+            if !monitors.is_empty()
+                && !position_is_on_any_monitor(logical.x, logical.y, width, height, &monitors)
+            {
+                crate::applog!(
+                    "widget: current position ({:.0}, {:.0}) is off-screen; recentering",
+                    logical.x,
+                    logical.y
+                );
+                let _ = window.center();
+            }
+        }
         let _ = window.show();
     }
 }
@@ -237,5 +338,24 @@ mod tests {
         assert_ne!(sizes[0], sizes[1]);
         assert_ne!(sizes[1], sizes[2]);
         assert_ne!(sizes[0], sizes[2]);
+    }
+
+    #[test]
+    fn off_screen_saved_position_is_detected() {
+        let laptop = [LogicalRect {
+            x: 0.0,
+            y: 38.0,
+            width: 1512.0,
+            height: 944.0,
+        }];
+        assert!(!position_is_on_any_monitor(
+            86.0, -204.0, 380.0, 116.0, &laptop
+        ));
+        assert!(position_is_on_any_monitor(
+            86.0, 120.0, 380.0, 116.0, &laptop
+        ));
+        assert!(!position_is_on_any_monitor(
+            2200.0, 200.0, 280.0, 60.0, &laptop
+        ));
     }
 }

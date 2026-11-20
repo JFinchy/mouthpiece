@@ -201,6 +201,10 @@ pub struct AppConfig {
     /// Settings (`privacy.rs`). Off by default.
     #[serde(default)]
     pub history_lock_enabled: bool,
+    /// Visual settings for the widget's live recording waveform — see
+    /// `theme::WaveformConfig`.
+    #[serde(default)]
+    pub waveform: crate::theme::WaveformConfig,
 }
 
 fn default_true() -> bool {
@@ -250,6 +254,7 @@ impl Default for AppConfig {
             trusted_repo_configs: Vec::new(),
             log_transcripts: false,
             history_lock_enabled: false,
+            waveform: crate::theme::WaveformConfig::default(),
         }
     }
 }
@@ -434,6 +439,7 @@ mod tests {
         assert_eq!(restored.snippets, crate::snippets::default_snippets());
         assert!(!restored.double_tap_fn_enabled);
         assert_eq!(restored.layout, crate::theme::Layout::default());
+        assert_eq!(restored.waveform, crate::theme::WaveformConfig::default());
         assert!(restored.agent_reply_shortcut.is_none());
         assert!(restored.agent_sound_enabled);
         assert_eq!(restored.modes, crate::modes::seed_default_modes());

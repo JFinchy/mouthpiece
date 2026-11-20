@@ -1,6 +1,27 @@
 @import "tailwindcss";
 @plugin "daisyui";
 
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/fonts/bricolage-grotesque-latin-wght-normal.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Martian Mono";
+  src: url("/fonts/martian-mono-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
+
 html,
 body,
 #root {
@@ -10,17 +31,28 @@ body,
 }
 
 /* Theme tokens — set at runtime by theme.ts's applyTheme(), defaulting
-   here to Terminal so there's no flash-of-unstyled-content before the
+   here to Terminal (v4) so there's no flash-of-unstyled-content before the
    first get_theme() invoke() resolves. */
 :root {
-  --dw-bg: #16181b;
-  --dw-fg: #e9e7e1;
-  --dw-muted: #8a8f98;
-  --dw-border: #2a2d32;
+  --dw-font-display: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif;
+  --dw-font-body: "IBM Plex Sans", -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  --dw-font-mono: "Martian Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  --dw-bg: #0c0e13;
+  --dw-bg-sunk: #07090d;
+  --dw-bg-well: #040508;
+  --dw-fg: #f4f2ed;
+  --dw-muted: #8c93a4;
+  --dw-border: #222733;
+  --dw-border-strong: #313849;
   --dw-card: #1c1f23;
-  --dw-accent: #e8a33d;
-  --dw-accent-fg: #16181b;
-  --dw-nav-active-bg: #262115;
+  --dw-card-raised: #232832;
+  --dw-accent: #f59e0b;
+  --dw-accent-bright: #fbbf24;
+  --dw-accent-fg: #140b04;
+  --dw-nav-active-bg: #241d11;
+  --dw-cyan: #06b6d4;
+  --dw-specular: rgba(255, 255, 255, 0.1);
 
   /* Route daisyui's own accent color through the app's theme tokens so
      checkboxes/buttons/selects match the active theme (see theme.ts)
@@ -39,6 +71,7 @@ body,
   /* LLM refinement's color in the widget, distinct from every theme's
      accent so the two processing stages never look alike. */
   --dw-refine: #a78bfa;
+  --dw-refine-bright: #ddd6fe;
 
   /* The widget is a dark floating HUD in every theme and appearance. */
   --color-neutral: #1b1d21;
@@ -46,16 +79,23 @@ body,
   color-scheme: dark;
 }
 
+body {
+  font-family: var(--dw-font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+kbd,
+.font-mono {
+  font-family: var(--dw-font-mono);
+}
+
 /* ---------- Settings: Signal sidebar shell ---------- */
 .dw-shell {
   min-height: 100vh;
   background: var(--dw-bg);
   color: var(--dw-fg);
-  font-family:
-    -apple-system,
-    "SF Pro Text",
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--dw-font-body);
 }
 
 .dw-app-shell {
@@ -85,9 +125,10 @@ body,
   align-items: center;
   gap: 9px;
   padding: 2px 10px 18px;
+  font-family: var(--dw-font-display);
   font-weight: 800;
-  font-size: 14px;
-  letter-spacing: -0.01em;
+  font-size: 14.5px;
+  letter-spacing: -0.02em;
   color: var(--dw-fg);
 }
 
@@ -150,9 +191,10 @@ body,
   padding: 22px 32px 16px;
   background: var(--dw-bg);
   border-bottom: 1px solid var(--dw-border);
-  font-size: 19px;
+  font-family: var(--dw-font-display);
+  font-size: 19.5px;
   font-weight: 800;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .dw-page-body {
@@ -173,9 +215,10 @@ body,
 
 .dw-titlebar h1 {
   margin: 0;
-  font-size: 15px;
+  font-family: var(--dw-font-display);
+  font-size: 15.5px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .dw-chain-row {
@@ -191,26 +234,43 @@ body,
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: 108px;
+  width: 138px;
   flex-shrink: 0;
-  padding: 13px 8px;
-  border-radius: 11px;
+  padding: 13px 10px 11px;
+  border-radius: 12px;
   border: 1px solid var(--dw-border);
   background: var(--dw-card);
   color: var(--dw-muted);
+  box-shadow:
+    inset 0 1px 0 var(--dw-specular),
+    0 1px 2px rgba(0, 0, 0, 0.16);
   cursor: pointer;
   font: inherit;
-  transition: border-color 0.12s ease;
+  transition:
+    border-color 140ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 140ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 140ms ease,
+    transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .dw-chain-node:hover {
   color: var(--dw-fg);
+  border-color: var(--dw-border-strong);
+  transform: translateY(-1px);
+}
+
+.dw-chain-node:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
 }
 
 .dw-chain-node.active {
   border-color: var(--dw-accent);
   color: var(--dw-fg);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dw-accent) 20%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--dw-specular),
+    0 0 0 3px color-mix(in srgb, var(--dw-accent) 20%, transparent),
+    0 8px 18px -10px rgba(0, 0, 0, 0.4);
 }
 
 .dw-chain-node .dw-icon {
@@ -222,6 +282,7 @@ body,
   justify-content: center;
   background: var(--dw-bg);
   border: 1px solid var(--dw-border);
+  box-shadow: inset 0 1px 0 var(--dw-specular);
   color: var(--dw-accent);
 }
 
@@ -232,11 +293,81 @@ body,
   letter-spacing: 0.04em;
 }
 
+.dw-chain-telemetry {
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--dw-bg-sunk);
+  border: 1px solid var(--dw-border);
+  font-family: var(--dw-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: var(--dw-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dw-chain-node.active .dw-chain-telemetry {
+  color: var(--dw-accent);
+  border-color: color-mix(in srgb, var(--dw-accent) 35%, var(--dw-border));
+  background: color-mix(in srgb, var(--dw-accent) 10%, var(--dw-bg-sunk));
+}
+
 .dw-chain-link {
+  position: relative;
   flex: 1;
-  min-width: 12px;
+  min-width: 16px;
   height: 2px;
   background: var(--dw-border);
+  overflow: hidden;
+}
+
+.dw-chain-pulse {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 44%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--dw-accent) 60%,
+    var(--dw-accent-bright) 100%
+  );
+  opacity: 0.85;
+  pointer-events: none;
+  animation: dw-cable-pulse 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes dw-cable-pulse {
+  0% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.9;
+  }
+  85% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(260%);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dw-chain-pulse {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+    transform: none;
+  }
+  .dw-chain-node:hover {
+    transform: none;
+  }
 }
 
 .dw-chain-app-gap {
@@ -370,12 +501,119 @@ body:has(.dw-widget) {
   overflow: hidden;
 }
 
+/* The floating HUD stays a dark glass/obsidian instrument even when Settings
+   uses a light theme (Signal, Quiet). Pin dark-surface tokens inside the HUD
+   so daisyUI buttons, ghost icons, accent highlights, and refine labels keep
+   crisp contrast in all four themes. */
+.dw-widget,
+.dw-notch-wrap {
+  color-scheme: dark;
+  --dw-fg: #f4f2ed;
+  --dw-muted: #9aa3b4;
+  --dw-border: rgba(255, 255, 255, 0.12);
+  --dw-border-strong: rgba(255, 255, 255, 0.22);
+  --dw-accent: var(--dw-accent-bright, #fbbf24);
+  --dw-refine: #a78bfa;
+  --dw-refine-bright: #ddd6fe;
+  --color-base-100: #161922;
+  --color-base-200: #0e1117;
+  --color-base-300: #252b38;
+  --color-base-content: #ecebe7;
+  --color-primary: var(--dw-accent-bright, #fbbf24);
+  --color-primary-content: #140b04;
+}
+
+/* Studio glassmorphic HUD surface with phase-reactive top accent glow.
+   Notch mode (.dw-notch) stays true obsidian #000 to merge into the bezel. */
+.dw-widget:not(.dw-notch) {
+  background-color: rgba(14, 17, 23, 0.94);
+  background-image: radial-gradient(
+    ellipse 80% 55% at 50% 0%,
+    rgba(255, 255, 255, 0.04),
+    transparent 70%
+  );
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition:
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dw-widget:not(.dw-notch)[data-phase="recording"] {
+  background-image: radial-gradient(
+    ellipse 85% 65% at 50% -10%,
+    rgba(244, 63, 94, 0.16),
+    transparent 72%
+  );
+  border-color: rgba(244, 63, 94, 0.34);
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 rgba(253, 164, 175, 0.24);
+}
+
+.dw-widget:not(.dw-notch)[data-phase="transcribing"] {
+  background-image: radial-gradient(
+    ellipse 85% 65% at 50% -10%,
+    color-mix(in srgb, var(--dw-accent) 18%, transparent),
+    transparent 72%
+  );
+  border-color: color-mix(in srgb, var(--dw-accent) 36%, rgba(255, 255, 255, 0.13));
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 color-mix(in srgb, var(--dw-accent) 32%, rgba(255, 255, 255, 0.14));
+}
+
+.dw-widget:not(.dw-notch)[data-phase="refining"] {
+  background-image: radial-gradient(
+    ellipse 85% 65% at 50% -10%,
+    color-mix(in srgb, var(--dw-refine) 20%, transparent),
+    transparent 72%
+  );
+  border-color: color-mix(in srgb, var(--dw-refine) 40%, rgba(255, 255, 255, 0.13));
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 color-mix(in srgb, var(--dw-refine) 36%, rgba(255, 255, 255, 0.14));
+}
+
+.dw-widget:not(.dw-notch)[data-phase="pasted"] {
+  background-image: radial-gradient(
+    ellipse 85% 65% at 50% -10%,
+    rgba(16, 185, 129, 0.18),
+    transparent 72%
+  );
+  border-color: rgba(16, 185, 129, 0.38);
+  box-shadow:
+    0 24px 60px -12px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 rgba(110, 231, 183, 0.26);
+}
+
+/* Gentle pulse for the transcribing / refining glowing phase orbs */
+.dw-orb-pulse {
+  animation: dw-orb-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes dw-orb-pulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
 /* Thin, quiet scroll bar for scrolling areas inside the widget. */
 .dw-scroll {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: color-mix(in srgb, var(--dw-fg, #e6edf3) 22%, transparent) transparent;
 }
 .dw-scroll::-webkit-scrollbar {
   width: 6px;
@@ -384,13 +622,13 @@ body:has(.dw-widget) {
   background: transparent;
 }
 .dw-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: color-mix(in srgb, var(--dw-fg, #e6edf3) 20%, transparent);
   border-radius: 999px;
   border: 1px solid transparent;
   background-clip: padding-box;
 }
 .dw-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.32);
+  background: color-mix(in srgb, var(--dw-fg, #e6edf3) 34%, transparent);
   background-clip: padding-box;
 }
 
@@ -645,6 +883,70 @@ body:has(.dw-widget) {
   border-color: color-mix(in srgb, var(--dw-accent) 70%, transparent);
 }
 
+/* Compact colorway orb switcher inside the hover flyout's Waveform section */
+.dw-fly-orb {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  padding: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition:
+    transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 120ms ease,
+    border-color 120ms ease;
+}
+.dw-fly-orb:hover {
+  transform: scale(1.18);
+  border-color: rgba(255, 255, 255, 0.65);
+}
+.dw-fly-orb.sel {
+  border-color: #fff;
+  box-shadow:
+    0 0 0 1.5px rgba(14, 17, 23, 0.9),
+    0 0 0 3px var(--cw-ring, var(--dw-accent)),
+    0 0 8px var(--cw-ring, var(--dw-accent));
+  transform: scale(1.08);
+}
+.dw-fly-orb:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+
+.dw-fly-orb-sep {
+  width: 1px;
+  height: 11px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 0 1px;
+  flex-shrink: 0;
+}
+
+.dw-fly-tune {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.65);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition:
+    background 120ms,
+    border-color 120ms,
+    color 120ms;
+}
+.dw-fly-tune:hover {
+  background: color-mix(in srgb, var(--dw-accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--dw-accent) 45%, transparent);
+  color: var(--dw-accent);
+}
+.dw-fly-tune:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 1px;
+}
+
 /* Setup checklist (settings/ReadinessPanel.tsx). Built from the theme
    tokens plus daisyUI's semantic warning/error colors, so it reads right
    on every theme, light or dark. */
@@ -835,5 +1137,394 @@ body:has(.dw-widget) {
 @media (prefers-reduced-motion: reduce) {
   .dw-shimmer {
     animation: none;
+  }
+}
+
+/* ---------- Studio Design System utilities (v4) ---------- */
+.dw-display {
+  font-family: var(--dw-font-display);
+  letter-spacing: -0.02em;
+}
+
+.dw-mono {
+  font-family: var(--dw-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tactile recessed hardware keycap */
+.dw-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-family: var(--dw-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--dw-fg);
+  background: var(--dw-card-raised);
+  border: 1px solid var(--dw-border-strong);
+  border-radius: 5px;
+  box-shadow:
+    inset 0 1px 0 var(--dw-specular),
+    0 2px 0 var(--dw-border-strong),
+    0 2px 4px rgba(0, 0, 0, 0.22);
+}
+
+/* Sleek custom range slider for waveform needle tuning */
+.dw-studio-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--dw-border-strong);
+  outline: none;
+  cursor: pointer;
+}
+
+.dw-studio-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--dw-accent-bright);
+  border: 2px solid var(--dw-bg-well);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--dw-accent) 40%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.dw-studio-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.dw-studio-range::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--dw-accent-bright);
+  border: 2px solid var(--dw-bg-well);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--dw-accent) 40%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.dw-studio-range:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--dw-accent) 65%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+/* Spectrum colorway pill selector */
+.dw-colorway-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--dw-border-strong);
+  background: var(--dw-card);
+  color: var(--dw-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.dw-colorway-pill:hover {
+  color: var(--dw-fg);
+  border-color: var(--dw-muted);
+  transform: translateY(-1px);
+}
+
+.dw-colorway-pill.active {
+  color: var(--dw-fg);
+  background: var(--dw-card-raised);
+  border-color: var(--cw-ring, var(--dw-accent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cw-ring, var(--dw-accent)) 28%, transparent);
+}
+
+.dw-colorway-pill:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+
+.dw-colorway-orb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--dw-fg) 26%, transparent);
+  box-shadow: 0 0 8px var(--cw-ring, transparent);
+  flex-shrink: 0;
+}
+
+/* Waveform engine & studio picker cards */
+.dw-engine-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--dw-bg-sunk);
+  border: 1.5px solid var(--dw-border);
+  color: var(--dw-fg);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition:
+    border-color 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    background 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 150ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dw-engine-card:hover {
+  border-color: var(--dw-border-strong);
+  transform: translateY(-1px);
+}
+
+.dw-engine-card.active {
+  background: color-mix(in srgb, var(--dw-accent) 13%, var(--dw-bg-sunk));
+  border-color: var(--dw-accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--dw-accent) 18%, transparent),
+    0 10px 24px -10px rgba(0, 0, 0, 0.45);
+}
+
+.dw-engine-card:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+
+.dw-engine-card-title {
+  font-family: var(--dw-font-display);
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--dw-fg);
+}
+
+.dw-engine-card-meta {
+  font-family: var(--dw-font-mono);
+  font-size: 9.5px;
+  color: var(--dw-muted);
+}
+
+.dw-engine-card.active .dw-engine-card-meta {
+  color: var(--dw-accent);
+}
+
+/* Concave MacBook bezel fillets for Notch widget mode */
+.dw-notch-wrap {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.55));
+}
+
+.dw-notch-ear {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: block;
+  pointer-events: none;
+  color: #000;
+  fill: currentColor;
+}
+
+.dw-notch-ear--left {
+  background: radial-gradient(circle at 0 100%, transparent 13.5px, #000 14px);
+}
+
+.dw-notch-ear--right {
+  background: radial-gradient(circle at 100% 100%, transparent 13.5px, #000 14px);
+}
+
+/* Inline word-level diff tokens for History refinement views */
+.dw-diff-del {
+  background: color-mix(in srgb, #f43f5e 16%, transparent);
+  color: color-mix(in srgb, #e11d48 72%, var(--dw-fg));
+  text-decoration: line-through;
+  text-decoration-thickness: 1.25px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.dw-diff-ins {
+  background: color-mix(in srgb, var(--dw-refine) 20%, transparent);
+  color: var(--dw-refine-bright);
+  border: 1px solid color-mix(in srgb, var(--dw-refine) 42%, transparent);
+  padding: 0 5px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* One-click Teach Vocabulary affordance on diff tokens */
+.dw-diff-clickable {
+  display: inline-block;
+  vertical-align: baseline;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dw-diff-del.dw-diff-clickable {
+  border: 1px solid transparent;
+}
+
+.dw-diff-del.dw-diff-clickable:hover {
+  background: color-mix(in srgb, #f43f5e 26%, transparent);
+  border-color: color-mix(in srgb, #f43f5e 52%, transparent);
+  text-decoration: line-through underline;
+  text-underline-offset: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+.dw-diff-ins.dw-diff-clickable:hover {
+  background: color-mix(in srgb, var(--dw-refine) 30%, transparent);
+  border-color: var(--dw-refine);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--dw-refine) 28%, transparent);
+  transform: translateY(-1px);
+}
+
+.dw-diff-clickable:focus-visible {
+  outline: 2px solid var(--dw-accent);
+  outline-offset: 2px;
+}
+
+/* Smooth waveform-to-progress handoff in WidgetView */
+.dw-stage-enter {
+  transform-origin: left center;
+  animation: dw-stage-enter 140ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes dw-stage-enter {
+  from {
+    opacity: 0;
+    transform: scaleX(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+/* 5px tall 60/40 segmented two-stage pipeline track (STT -> LLM Refine) */
+.dw-pipeline-track {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  height: 5px;
+  width: 100%;
+}
+
+.dw-pipeline-seg {
+  position: relative;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.11);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* Smooth sweeping amber shimmer for short dictations before percent ticks arrive */
+.dw-amber-sweep {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 48%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--dw-accent) 45%,
+    color-mix(in srgb, var(--dw-accent) 60%, #fff) 80%,
+    transparent 100%
+  );
+  animation: dw-amber-sweep 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes dw-amber-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(225%);
+  }
+}
+
+/* Inline symbol & file pills for Live Caption / Detailed transcript views */
+.dw-sym-pill {
+  display: inline;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--dw-font-mono);
+  font-size: 0.86em;
+  line-height: 1.35;
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
+}
+
+.dw-file-pill {
+  display: inline;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--dw-font-mono);
+  font-size: 0.86em;
+  line-height: 1.35;
+  background: rgba(34, 211, 238, 0.16);
+  color: #67e8f9;
+  border: 1px solid rgba(34, 211, 238, 0.38);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dw-engine-card:hover,
+  .dw-colorway-pill:hover,
+  .dw-diff-clickable:hover,
+  .dw-studio-range::-webkit-slider-thumb:hover,
+  .dw-fly-orb:hover,
+  .dw-fly-orb.sel {
+    transform: none;
+  }
+  .dw-stage-enter,
+  .dw-orb-pulse {
+    animation: none;
+  }
+  .dw-amber-sweep {
+    animation: none;
+    width: 100%;
+    opacity: 0.65;
+    transform: none;
   }
 }

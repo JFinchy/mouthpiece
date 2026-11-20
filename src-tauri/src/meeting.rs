@@ -582,6 +582,12 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     announce(app);
 
     // The widget's level meter, and the safety stop.
+    #[derive(Clone, Copy, serde::Serialize)]
+    struct DualAudioLevel {
+        mic: f32,
+        system: f32,
+    }
+
     let level_app = app.clone();
     std::thread::spawn(move || {
         let state = level_app.state::<RecordingState>();
@@ -600,6 +606,17 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
                 let _ = level_app.emit(
                     "audio-level",
                     crate::audio::meter_level(mic_level.max(sys_level)),
+                );
+                let _ = level_app.emit(
+                    "audio-dual-level",
+                    DualAudioLevel {
+                        mic: crate::audio::meter_level(mic_level),
+                        system: crate::audio::meter_level(sys_level),
+                    },
+                );
+                let _ = level_app.emit(
+                    "audio-bands",
+                    crate::recording::AudioBands::from_array(state.audio.current_bands()),
                 );
             }
             if !warned && started.elapsed() >= MAX_DURATION - LIMIT_WARNING {

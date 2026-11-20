@@ -108,6 +108,7 @@ fn stop_dictation(app: &AppHandle, state: &RecordingState) {
             });
         }
         Err(err) => {
+            crate::applog!("recording: stop failed: {err}");
             let _ = app.emit("recording-error", err);
         }
     }
@@ -149,6 +150,27 @@ struct MicSwitched {
     to: String,
 }
 
+/// 3-band spectral energy (`[low, mid, high]` in `0.0..=1.0`), emitted on
+/// `"audio-bands"` alongside `"audio-level"` for spectral waveform renderers.
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct AudioBands {
+    pub low: f32,
+    pub mid: f32,
+    pub high: f32,
+}
+
+impl AudioBands {
+    pub const ZERO: Self = Self {
+        low: 0.0,
+        mid: 0.0,
+        high: 0.0,
+    };
+
+    pub fn from_array([low, mid, high]: [f32; 3]) -> Self {
+        Self { low, mid, high }
+    }
+}
+
 pub(crate) fn current_mic_name(state: &RecordingState) -> String {
     use crate::audio::DeviceStatus::*;
     match state.audio.device_status() {
@@ -187,12 +209,17 @@ fn start_dictation(app: &AppHandle, state: &RecordingState, session: u64) {
             if state.audio.is_paused() {
                 // Paused on purpose: silence here isn't a mic problem.
                 let _ = level_app.emit("audio-level", 0.0f32);
+                let _ = level_app.emit("audio-bands", AudioBands::ZERO);
                 silence = crate::audio::SilenceWatch::default();
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
             let level = state.audio.current_level();
             let _ = level_app.emit("audio-level", crate::audio::meter_level(level));
+            let _ = level_app.emit(
+                "audio-bands",
+                AudioBands::from_array(state.audio.current_bands()),
+            );
             match silence.observe(level, std::time::Instant::now()) {
                 Some(true) => {
                     let mic = current_mic_name(&state);
@@ -1252,4 +1279,80 @@ pub fn get_last_frontmost_app(state: tauri::State<RecordingState>) -> Option<Fro
             name: info.name.clone(),
             icon_data_uri: info.icon_data_uri.clone(),
         })
+}
+
+static MIC_CHECK_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MIC_CHECK_EMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Starts live Mic Check level + 3-band streaming for Settings without
+/// recording anything. Emits `"audio-level"` and `"audio-bands"` at 20Hz to
+/// the Settings window only while capture is idle so it never animates the
+/// idle floating widget or fights an active dictation/meeting.
+#[tauri::command]
+pub fn start_mic_check(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+    let gen = {
+        let _guard = MIC_CHECK_EMIT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if app.get_webview_window("settings").is_none() {
+            return;
+        }
+        let g = MIC_CHECK_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        let state = app.state::<RecordingState>();
+        state.audio.set_mic_check(true);
+        g
+    };
+    let meter_app = app.clone();
+    std::thread::spawn(move || {
+        let state = meter_app.state::<RecordingState>();
+        loop {
+            {
+                let _guard = MIC_CHECK_EMIT_LOCK
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if MIC_CHECK_GEN.load(Ordering::SeqCst) != gen {
+                    break;
+                }
+                if meter_app.get_webview_window("settings").is_none() {
+                    state.audio.set_mic_check(false);
+                    break;
+                }
+                if matches!(state.capture.state(), crate::capture::CaptureState::Idle) {
+                    let level = state.audio.current_level();
+                    let bands = state.audio.current_bands();
+                    let _ = meter_app.emit_to(
+                        "settings",
+                        "audio-level",
+                        crate::audio::meter_level(level),
+                    );
+                    let _ =
+                        meter_app.emit_to("settings", "audio-bands", AudioBands::from_array(bands));
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
+}
+
+/// Stops live Mic Check metering and zeroes the Settings audio meters.
+/// Safe to call from both the Tauri command and the Settings window close hook.
+pub fn stop_mic_check_internal(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    let _guard = MIC_CHECK_EMIT_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    MIC_CHECK_GEN.fetch_add(1, Ordering::SeqCst);
+    let state = app.state::<RecordingState>();
+    state.audio.set_mic_check(false);
+    if matches!(state.capture.state(), crate::capture::CaptureState::Idle) {
+        let _ = app.emit_to("settings", "audio-level", 0.0f32);
+        let _ = app.emit_to("settings", "audio-bands", AudioBands::ZERO);
+    }
+}
+
+/// Stops live Mic Check metering and zeroes the audio meters.
+#[tauri::command]
+pub fn stop_mic_check(app: AppHandle) {
+    stop_mic_check_internal(&app);
 }

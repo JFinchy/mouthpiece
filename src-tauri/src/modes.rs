@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::config;
 
@@ -507,6 +507,7 @@ pub fn set_modes(app: AppHandle, modes: Vec<ModeDefinition>) {
     let mut cfg = config::load(&app);
     cfg.modes = modes;
     let _ = config::save(&app, &cfg);
+    let _ = app.emit("modes-changed", &cfg.modes);
 }
 
 #[derive(Serialize)]
@@ -552,4 +553,136 @@ pub fn list_running_apps(app: AppHandle) -> Vec<RunningAppPayload> {
             is_running: false,
         }))
         .collect()
+}
+
+#[derive(Serialize)]
+pub struct ModePreviewResult {
+    pub output: String,
+    pub elapsed_ms: u64,
+    pub used_llm: bool,
+    pub model: Option<String>,
+    pub structured: bool,
+}
+
+static PREVIEW_CANCEL: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+    std::sync::Mutex::new(None);
+
+struct PreviewCancelGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for PreviewCancelGuard {
+    fn drop(&mut self) {
+        let mut slot = PREVIEW_CANCEL.lock().unwrap_or_else(|e| e.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|cur| std::sync::Arc::ptr_eq(cur, &self.0))
+        {
+            *slot = None;
+        }
+    }
+}
+
+/// Runs a dry/wet preview of a mode's formatting, optional LLM refinement, and
+/// optional long-prompt structuring without touching clipboard, history, or
+/// saved mode config.
+#[tauri::command(async)]
+pub fn preview_mode_transform(
+    app: AppHandle,
+    text: String,
+    behavior: Behavior,
+    llm_refinement: LlmRefinement,
+    custom_instructions: Option<String>,
+    structure_long_prompts: Option<bool>,
+) -> Result<ModePreviewResult, String> {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let started = std::time::Instant::now();
+    if text.trim().is_empty() {
+        return Ok(ModePreviewResult {
+            output: String::new(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            used_llm: false,
+            model: None,
+            structured: false,
+        });
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = PREVIEW_CANCEL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prev) = slot.replace(cancel.clone()) {
+            prev.store(true, Ordering::SeqCst);
+        }
+    }
+    let _cancel_guard = PreviewCancelGuard(cancel.clone());
+
+    let cfg = config::load(&app);
+    let mut output = apply_mode(behavior, &text);
+    let mut used_llm = false;
+    let mut model: Option<String> = None;
+    let mut structured = false;
+
+    let literal_cli = behavior == Behavior::Cli && is_literal_cli_directive(&text);
+    let refine_model = if literal_cli {
+        None
+    } else {
+        match &llm_refinement {
+            LlmRefinement::Off => None,
+            LlmRefinement::Global => Some(cfg.llm_model.clone()),
+            LlmRefinement::Model(id) => Some(id.clone()),
+        }
+    };
+
+    if let Some(model_id) = refine_model {
+        let refined = crate::llm::refine_streaming(
+            crate::llm::RefineRequest {
+                mode: behavior,
+                text: &output,
+                model: &model_id,
+                custom_instructions: custom_instructions.as_deref(),
+                vocabulary: &cfg.vocabulary,
+            },
+            &|_| {},
+            &cancel,
+        )?;
+        if let Some(reason) = crate::llm::degenerate_output(&output, &refined) {
+            return Err(format!("Model output rejected ({reason})"));
+        }
+        output = if behavior == Behavior::Cli {
+            crate::file_tagging::tag_file_references(&refined)
+        } else {
+            refined
+        };
+        used_llm = true;
+        model = Some(model_id);
+    }
+
+    if structure_long_prompts == Some(true)
+        && !literal_cli
+        && crate::structure::long_enough(&output)
+    {
+        let struct_model = match &llm_refinement {
+            LlmRefinement::Model(id) => id.clone(),
+            _ => cfg.llm_model.clone(),
+        };
+        let candidate = crate::llm::structure_prompt(&output, &struct_model, &cancel)?;
+        if crate::structure::check(&output, &candidate).is_ok() {
+            output = candidate;
+            structured = true;
+            used_llm = true;
+            if model.is_none() {
+                model = Some(struct_model);
+            }
+        }
+    }
+
+    Ok(ModePreviewResult {
+        output,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        used_llm,
+        model,
+        structured,
+    })
 }

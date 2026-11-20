@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -7,6 +7,17 @@ import { getReadiness, type ReadinessCheck } from "./settings/readiness";
 import { shortcutLabel, skipVariant, type ShortcutConfig } from "./shortcut";
 import { spokenFolder, type WaitingAgent } from "./settings/sections/agents";
 import { useMeetingStatus, type DetectedCall, type MeetingSummary } from "./settings/sections/meetings";
+import {
+  DEFAULT_WAVEFORM_CONFIG,
+  getWaveformColorway,
+  SOLID_COLORWAY_ORDER,
+  SPECTRUM_COLORWAY_ORDER,
+  WAVEFORM_COLORWAYS,
+  WAVEFORM_ENGINE_META,
+  type WaveformConfig,
+  type WaveformEngineId,
+} from "./waveformConfig";
+import { WaveformMeter, type AudioBands } from "./components/WaveformMeter";
 
 type Phase = "idle" | "recording" | "transcribing" | "refining";
 type WidgetMode = "minimal" | "compact" | "detailed" | "pill" | "notch" | "caption" | "stacked";
@@ -98,70 +109,89 @@ const FLYOUT_MIC_SECTION_BASE = 18;
 // The Style section: its label plus one row per two styles.
 const FLYOUT_STYLE_SECTION = 18 + Math.ceil(WIDGET_STYLES.length / 2) * (26 + 4);
 
-function compactFlyoutSize(modeCount: number, micRowCount: number) {
+// The Waveform section: header row, 4-pill engine strip, and compact colorway orb row.
+const FLYOUT_WAVEFORM_SECTION = 56;
+const CAPTION_BASE_SIZE = { width: 380, height: 116 };
+const DETAILED_BASE_SIZE = { width: 320, height: 170 };
+const EXPANDED_FLYOUT_MAX_HEIGHT = 380;
+
+const FLYOUT_SPECTRUM_COLORWAYS = SPECTRUM_COLORWAY_ORDER.map((id) => WAVEFORM_COLORWAYS[id]);
+const FLYOUT_SOLID_COLORWAYS = SOLID_COLORWAY_ORDER.map((id) => WAVEFORM_COLORWAYS[id]);
+
+const FLYOUT_ENGINE_LABEL: Record<WaveformEngineId, string> = {
+  precision: "Studio",
+  silk: "Silk",
+  matrix: "Matrix",
+  hyperdom: "Needles",
+};
+
+function flyoutExtraHeight(modeCount: number, micRowCount: number, showWaveform: boolean) {
   const extraRows = Math.ceil(Math.max(modeCount, 1) / 2) - 1;
   const micRows = micRowCount > 0 ? FLYOUT_MIC_SECTION_BASE + micRowCount * (FLYOUT_MODE_ROW_HEIGHT + FLYOUT_MODE_ROW_GAP) : 0;
-  const natural =
-    COMPACT_FLYOUT_BASE_HEIGHT + extraRows * (FLYOUT_MODE_ROW_HEIGHT + FLYOUT_MODE_ROW_GAP) + micRows + FLYOUT_STYLE_SECTION;
+  return (
+    COMPACT_FLYOUT_BASE_HEIGHT -
+    COMPACT_BASE_SIZE.height +
+    extraRows * (FLYOUT_MODE_ROW_HEIGHT + FLYOUT_MODE_ROW_GAP) +
+    micRows +
+    (showWaveform ? FLYOUT_WAVEFORM_SECTION : 0) +
+    FLYOUT_STYLE_SECTION
+  );
+}
+
+function compactFlyoutSize(modeCount: number, micRowCount: number, showWaveform: boolean) {
+  const natural = COMPACT_BASE_SIZE.height + flyoutExtraHeight(modeCount, micRowCount, showWaveform);
   return { width: COMPACT_WIDTH, height: Math.min(natural, COMPACT_FLYOUT_MAX_HEIGHT) };
+}
+
+function expandedFlyoutSize(
+  base: { width: number; height: number },
+  modeCount: number,
+  micRowCount: number,
+  showWaveform: boolean,
+) {
+  const natural = base.height + flyoutExtraHeight(modeCount, micRowCount, showWaveform);
+  return { width: base.width, height: Math.min(natural, EXPANDED_FLYOUT_MAX_HEIGHT) };
 }
 
 function usingMic(status: DeviceStatus | null): string | null {
   return status && status.kind !== "unavailable" ? status.using : null;
 }
 
-// How many recent level samples the meter shows at once — enough to read
-// as a little waveform rather than a single flickering bar, short enough
-// that the whole strip reacts quickly to a pause or a loud word.
-// Recent input levels kept for the meter (20 per second, so about 3 s);
-// each meter shows as many of the newest as fit its width.
+// Recent input levels kept for the live 60fps WaveformMeter (20 per second,
+// so about 3 s); WaveformMeter handles ring interpolation, attack/decay
+// ballistics, peak caps, and dual-channel Meeting split automatically.
 const LEVEL_BARS = 64;
 const SILENT_LEVELS = Array<number>(LEVEL_BARS).fill(0);
-const METER_BAR = 3;
-const METER_GAP = 2;
 
-// Live "is audio actually coming through" waveform, in the spirit of the
-// one most dictation apps show while listening. `levels` is the most
-// recent samples from the backend's `audio-level` event (oldest first).
-// It fills whatever width it's given: as many bars as fit, newest on the
-// right, mirrored around the middle, older bars fading out. Levels arrive
-// already on a decibel scale (see `audio::meter_level`), so heights are
-// linear: normal speech fills about half, loud speech most of it.
-function LevelMeter({ levels, className }: { levels: number[]; className?: string }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [count, setCount] = useState(12);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const fit = Math.floor((el.clientWidth + METER_GAP) / (METER_BAR + METER_GAP));
-      setCount(Math.max(4, Math.min(fit, levels.length)));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [levels.length]);
-  const shown = levels.slice(-count);
-  // The bars sit in an absolutely positioned layer, so they never give the
-  // meter a width of its own: its width comes only from the layout, and
-  // measuring it can't feed back into it (a resize loop that froze the
-  // widget otherwise).
+// Wrapper around the 60fps WaveformMeter that preserves outer flex/width
+// sizing classes (e.g. `flex-1`, `w-10`, `group-hover:hidden`) and keeps
+// `data-testid="level-meter"` across every widget layout.
+function LevelMeter({
+  levels,
+  remoteLevels,
+  bands,
+  config,
+  dualChannel = false,
+  className,
+}: {
+  levels: number[];
+  remoteLevels?: number[];
+  bands?: AudioBands;
+  config: WaveformConfig;
+  dualChannel?: boolean;
+  className?: string;
+}) {
   return (
-    <div ref={ref} className={`relative h-full min-w-0 ${className ?? ""}`} data-testid="level-meter">
-      <div className="absolute inset-0 flex items-center justify-end gap-[2px] overflow-hidden">
-        {shown.map((level, i) => (
-          <span
-            key={i}
-            className="shrink-0 rounded-full bg-error transition-[height] duration-100 ease-out"
-            style={{
-              width: METER_BAR,
-              height: `${Math.max(level * 100, 10)}%`,
-              opacity: 0.35 + 0.65 * ((i + 1) / shown.length),
-            }}
-          />
-        ))}
-      </div>
+    <div className={`relative h-full min-w-0 ${className ?? ""}`}>
+      <WaveformMeter
+        levels={levels}
+        remoteLevels={remoteLevels}
+        bands={bands}
+        config={config}
+        compact
+        dualChannel={dualChannel}
+        testId="level-meter"
+      />
     </div>
   );
 }
@@ -171,6 +201,52 @@ function LevelMeter({ levels, className }: { levels: number[]; className?: strin
 const LIVE_TAIL_CHARS = 160;
 function liveTail(text: string) {
   return text.length <= LIVE_TAIL_CHARS ? text : `…${text.slice(-LIVE_TAIL_CHARS).replace(/^\S*\s/, "")}`;
+}
+
+const AT_FILE_RE = /^@[A-Za-z0-9_./-]+$/;
+const FILE_EXT_RE =
+  /^[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(?:rs|ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|swift|c|h|cc|cpp|hpp|cs|php|css|scss|html|htm|svg|json|toml|yaml|yml|xml|md|txt|sql|sh|zsh|bash|env|lock|log|csv|wav|mp3|png|jpg|webp|pdf)$/i;
+const PATH_RE =
+  /^(?:(?:\.{1,2}|~)\/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)$/;
+const BACKTICK_RE = /^`[^`\s]+`$/;
+const SNAKE_SYM_RE = /^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+(?:\(\))?$/;
+const CAMEL_OR_PASCAL_RE = /^(?=.*[a-z][A-Z])[A-Za-z][A-Za-z0-9_]*(?:\(\))?$/;
+
+function classifyCaptionToken(core: string): "file" | "sym" | null {
+  if (!core) return null;
+  if (AT_FILE_RE.test(core) || FILE_EXT_RE.test(core) || PATH_RE.test(core)) {
+    return "file";
+  }
+  if (BACKTICK_RE.test(core) || SNAKE_SYM_RE.test(core) || CAMEL_OR_PASCAL_RE.test(core)) {
+    return "sym";
+  }
+  return null;
+}
+
+// Highlights file references (@recording.rs, src/App.tsx) and code symbols
+// (paste_text, AudioHandle, useState, `foo`) as monospace pills while
+// preserving every character and whitespace run verbatim.
+function renderRichCaption(text: string): ReactNode {
+  const parts = text.split(/(\s+)/);
+  return parts.map((part, idx) => {
+    if (!part || /^\s+$/.test(part)) return part;
+    const match = part.match(/^([("'\[]*)(.*?)([.,;:!?"'\])]*)$/);
+    if (!match) return part;
+    let [, lead, core, trail] = match;
+    if (trail.startsWith(")") && core.endsWith("(")) {
+      core = `${core})`;
+      trail = trail.slice(1);
+    }
+    const kind = classifyCaptionToken(core);
+    if (!kind) return part;
+    return (
+      <Fragment key={idx}>
+        {lead}
+        <span className={kind === "file" ? "dw-file-pill" : "dw-sym-pill"}>{core}</span>
+        {trail}
+      </Fragment>
+    );
+  });
 }
 
 // Matches `LIMIT_WARNING` in meeting.rs.
@@ -198,12 +274,11 @@ function ChevronIcon() {
   );
 }
 
-// One processing stage: a label, its percentage, and a slim bar whose width
-// animates between backend updates (a short dictation only gets a
-// handful), so it reads as continuous. Each stage has its own color so
-// "Whisper is listening back" and "the LLM is rewriting" read as different
-// steps: amber for transcribing, violet with a sparkle and a shimmer for
-// LLM refinement.
+// One processing stage: a label, its percentage, and a slim segmented track
+// whose width animates between backend updates (a short dictation only gets a
+// handful), so it reads as a continuous two-stage pipeline: amber for
+// transcribing handing off seamlessly into violet with a sparkle and shimmer
+// for LLM refinement.
 type Stage = "transcribe" | "refine";
 
 const STAGE_COLOR: Record<Stage, string> = {
@@ -219,6 +294,28 @@ function SparkleIcon() {
     </svg>
   );
 }
+
+function PastedBadge({ className = "text-sm" }: { className?: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 font-medium text-emerald-400 ${className}`}>
+      <svg
+        viewBox="0 0 12 12"
+        className="h-3 w-3 shrink-0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2.2 6.3 4.8 8.9 9.8 3.3" />
+      </svg>
+      <span>Pasted</span>
+    </span>
+  );
+}
+
+const STT_FILL_GRADIENT = "linear-gradient(90deg, var(--dw-accent), color-mix(in srgb, var(--dw-accent) 60%, #fff))";
 
 function StageProgress({
   stage,
@@ -236,10 +333,12 @@ function StageProgress({
   /// Refining only: clicking pastes the unrefined text now.
   onSkip?: () => void;
 }) {
-  const label = labelOverride ?? (stage === "transcribe" ? "Transcribing" : "Refining");
+  const isRefine = stage === "refine";
+  const label = labelOverride ?? (isRefine ? "Refining" : "Transcribing");
+  const heading = percent === null ? `${label}…` : label;
   return (
     <div
-      className={`flex min-w-0 flex-1 flex-col gap-1 ${
+      className={`dw-stage-enter flex min-w-0 flex-1 flex-col gap-1.5 ${
         onSkip ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
       }`}
       onMouseDown={onSkip ? undefined : onMouseDown}
@@ -253,50 +352,109 @@ function StageProgress({
       data-testid={`${stage}-progress`}
     >
       <span
-        className="flex items-baseline justify-between gap-2 text-sm"
-        style={stage === "refine" ? { color: STAGE_COLOR.refine } : { opacity: 0.75 }}
+        className="flex items-baseline justify-between gap-2 text-xs leading-none"
+        style={isRefine ? { color: STAGE_COLOR.refine } : { opacity: 0.9 }}
       >
-        <span className="flex min-w-0 items-center gap-1">
-          {stage === "refine" && <SparkleIcon />}
-          <span className="truncate">{label}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="inline-flex shrink-0 items-center gap-0.5" aria-hidden="true">
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{
+                backgroundColor: STAGE_COLOR.transcribe,
+                boxShadow: "0 0 6px var(--dw-accent)",
+                opacity: isRefine ? 0.9 : 1,
+              }}
+            />
+            <span className={`h-px w-1.5 ${isRefine ? "bg-white/30" : "bg-white/15"}`} />
+            {isRefine ? (
+              <SparkleIcon />
+            ) : (
+              <span className="h-1.5 w-1.5 rounded-full bg-white/20" />
+            )}
+          </span>
+          <span className="truncate font-semibold">{heading}</span>
         </span>
-        {percent !== null && <span className="shrink-0 tabular-nums">{percent}%</span>}
+        {percent !== null && <span className="shrink-0 font-mono text-[10.5px] tabular-nums">{percent}%</span>}
       </span>
-      <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
-        <div
-          className={`h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none ${
-            stage === "refine" ? "dw-shimmer" : ""
-          }`}
-          style={{
-            width: `${percent ?? 100}%`,
-            background: STAGE_COLOR[stage],
-            opacity: percent === null ? 0.5 : 1,
-          }}
-        />
+      <div className="dw-pipeline-track">
+        <div className="dw-pipeline-seg flex-[3]" aria-hidden="true">
+          {isRefine ? (
+            <div
+              className="h-full w-full rounded-full"
+              style={{
+                background: STT_FILL_GRADIENT,
+                boxShadow: "0 0 8px color-mix(in srgb, var(--dw-accent) 45%, transparent)",
+              }}
+            />
+          ) : percent === null ? (
+            <div className="dw-amber-sweep" />
+          ) : (
+            <div
+              className="h-full rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none"
+              style={{
+                width: `${percent}%`,
+                background: STT_FILL_GRADIENT,
+              }}
+            />
+          )}
+        </div>
+        <div className="dw-pipeline-seg flex-[2]" aria-hidden="true">
+          {isRefine && (
+            <div
+              className="dw-shimmer h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none"
+              style={{
+                width: `${percent ?? 100}%`,
+                backgroundColor: STAGE_COLOR.refine,
+                opacity: percent === null ? 0.72 : 1,
+              }}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// Minimal mode's version: a ring that fills around the record button, in
-// the stage's color.
-// A hairline progress bar for the small styles (Pill, Notch), in the
-// stage's color; indeterminate (a shimmer) without a percentage.
+// A hairline 60/40 segmented two-stage progress bar for the small styles
+// (Pill, Notch), showing amber Transcribing handing off into violet Refining.
 function ThinProgress({ stage, percent }: { stage: Stage; percent: number | null }) {
+  const isRefine = stage === "refine";
   return (
     <div
-      className="dw-thin-progress"
+      className="dw-stage-enter flex min-w-0 flex-1 items-center gap-1"
       role="progressbar"
-      aria-label={stage === "transcribe" ? "Transcribing" : "Refining"}
+      aria-label={isRefine ? "Refining" : "Transcribing"}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={percent ?? undefined}
       data-testid={`${stage}-progress`}
     >
-      <span
-        className={percent === null ? "dw-thin-indeterminate" : undefined}
-        style={{ background: STAGE_COLOR[stage], width: percent === null ? undefined : `${percent}%` }}
-      />
+      <div className="dw-pipeline-track !h-[4px]">
+        <div className="dw-pipeline-seg flex-[3]" aria-hidden="true">
+          {isRefine ? (
+            <div className="h-full w-full rounded-full" style={{ background: STT_FILL_GRADIENT }} />
+          ) : percent === null ? (
+            <div className="dw-amber-sweep" />
+          ) : (
+            <div
+              className="h-full rounded-full transition-[width] duration-200 ease-out motion-reduce:transition-none"
+              style={{ width: `${percent}%`, background: STT_FILL_GRADIENT }}
+            />
+          )}
+        </div>
+        <div className="dw-pipeline-seg flex-[2]" aria-hidden="true">
+          {isRefine && (
+            <div
+              className="dw-shimmer h-full rounded-full transition-[width] duration-300 ease-out motion-reduce:transition-none"
+              style={{
+                width: `${percent ?? 100}%`,
+                backgroundColor: STAGE_COLOR.refine,
+                opacity: percent === null ? 0.72 : 1,
+              }}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -330,7 +488,9 @@ function ProgressRing({ stage, percent }: { stage: Stage; percent: number }) {
 
 function WidgetView() {
   const [mode, setMode] = useState<WidgetMode>("compact");
+  const [modeLoaded, setModeLoaded] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
+  const [waveformConfig, setWaveformConfig] = useState<WaveformConfig>(DEFAULT_WAVEFORM_CONFIG);
   // A meeting recording shows as "recording" with its own label, and its
   // transcription as an idle-time status (dictation still works then).
   const meeting = useMeetingStatus();
@@ -425,11 +585,57 @@ function WidgetView() {
   const [flashVisible, setFlashVisible] = useState(false);
   const flashTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Quick-actions hover flyout state (compact mode only, for now) — see
+  // Quick-actions hover flyout state (compact / stacked mode) — see
   // the `.dw-fly-*` styles in App.css. `micMode`/`overrideMode` mirror
   // real backend state (isolated_voice_enabled / the one-shot mode
-  // override), not local-only UI state.
+  // override), not local-only UI state. Uses a 160ms hover-intent delay on
+  // enter and a 120ms grace delay on leave so grazing the widget doesn't
+  // cause jarring 340px window jumps.
   const [flyoutHovered, setFlyoutHovered] = useState(false);
+  const flyoutOpenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flyoutCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function clearFlyoutTimers() {
+    if (flyoutOpenTimer.current !== null) {
+      clearTimeout(flyoutOpenTimer.current);
+      flyoutOpenTimer.current = null;
+    }
+    if (flyoutCloseTimer.current !== null) {
+      clearTimeout(flyoutCloseTimer.current);
+      flyoutCloseTimer.current = null;
+    }
+  }
+
+  useEffect(() => clearFlyoutTimers, []);
+
+  function handleFlyoutMouseEnter() {
+    if (flyoutCloseTimer.current !== null) {
+      clearTimeout(flyoutCloseTimer.current);
+      flyoutCloseTimer.current = null;
+    }
+    if (flyoutOpenTimer.current !== null) {
+      clearTimeout(flyoutOpenTimer.current);
+    }
+    flyoutOpenTimer.current = setTimeout(() => {
+      flyoutOpenTimer.current = null;
+      setFlyoutHovered(true);
+    }, 160);
+  }
+
+  function handleFlyoutMouseLeave() {
+    if (flyoutOpenTimer.current !== null) {
+      clearTimeout(flyoutOpenTimer.current);
+      flyoutOpenTimer.current = null;
+    }
+    if (flyoutCloseTimer.current !== null) {
+      clearTimeout(flyoutCloseTimer.current);
+    }
+    flyoutCloseTimer.current = setTimeout(() => {
+      flyoutCloseTimer.current = null;
+      setFlyoutHovered(false);
+    }, 120);
+  }
+
   // "Show the widget only while dictating" (Settings > General): once a
   // dictation is over, the widget hides itself. `hideWhenDone` is set by a
   // dictation (or by turning the setting on), so a widget opened from the
@@ -458,11 +664,14 @@ function WidgetView() {
   // apart here.
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
 
-  // Rolling window of recent input levels for the live level meter — see
+  // Rolling windows of recent input levels for the live level meter — see
   // LevelMeter above. Reset to silence whenever recording isn't active, so
   // a stale "last thing you said was loud" reading doesn't linger once
   // idle/transcribing.
   const [levels, setLevels] = useState<number[]>(SILENT_LEVELS);
+  const [remoteLevels, setRemoteLevels] = useState<number[]>(SILENT_LEVELS);
+  const [dualMicLevels, setDualMicLevels] = useState<number[] | null>(null);
+  const [audioBands, setAudioBands] = useState<AudioBands | undefined>(undefined);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
   const [ambientPhase, setAmbientPhase] = useState<"off" | "listening" | "asleep" | "paused">("off");
   const warning = deviceWarning(deviceStatus);
@@ -632,31 +841,60 @@ function WidgetView() {
     };
   }, []);
 
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+
   useEffect(() => {
     if (!flyoutHovered) return;
     invoke<string[]>("list_input_devices")
       .then(setDevices)
       .catch((err) => console.error("list_input_devices failed:", err));
+    invoke<ModeSummary[]>("get_modes")
+      .then(setModes)
+      .catch((err) => console.error("get_modes failed:", err));
   }, [flyoutHovered]);
 
   useEffect(() => {
-    if (phase !== "recording") setLevels(SILENT_LEVELS);
+    if (phase !== "recording") {
+      setLevels(SILENT_LEVELS);
+      setRemoteLevels(SILENT_LEVELS);
+      setDualMicLevels(null);
+      setAudioBands(undefined);
+    }
     if (phase !== "transcribing") setProgress(null);
     if (phase !== "refining") setRefineProgress(null);
   }, [phase]);
 
   useEffect(() => {
+    if (!meetingRecording) {
+      setRemoteLevels(SILENT_LEVELS);
+      setDualMicLevels(null);
+    }
+  }, [meetingRecording]);
+
+  const inFlightTranscriptionsRef = useRef(0);
+
+  useEffect(() => {
     invoke<WidgetMode>("get_widget_mode")
-      .then(setMode)
-      .catch((err) => console.error("get_widget_mode failed:", err));
+      .then((m) => {
+        setMode(m);
+        setModeLoaded(true);
+      })
+      .catch((err) => {
+        console.error("get_widget_mode failed:", err);
+        setModeLoaded(true);
+      });
 
     invoke<boolean>("get_isolated_voice_enabled")
       .then(setMicMode)
       .catch((err) => console.error("get_isolated_voice_enabled failed:", err));
 
-    invoke<ModeSummary[]>("get_modes")
-      .then(setModes)
-      .catch((err) => console.error("get_modes failed:", err));
+    const loadModes = () =>
+      invoke<ModeSummary[]>("get_modes")
+        .then(setModes)
+        .catch((err) => console.error("get_modes failed:", err));
+    loadModes();
+    const unlistenModes = listen("modes-changed", loadModes);
 
     invoke<DeviceStatus | null>("get_audio_device_status")
       .then(setDeviceStatus)
@@ -673,11 +911,32 @@ function WidgetView() {
       .catch((err) => console.error("get_theme failed:", err));
     const unlistenTheme = listen<ThemeId>("theme-changed", (e) => applyTheme(e.payload));
 
-    const unlistenModeChanged = listen<WidgetMode>("widget-mode-changed", (e) => setMode(e.payload));
+    invoke<WaveformConfig>("get_waveform_config")
+      .then(setWaveformConfig)
+      .catch(() => {});
+    const unlistenWaveformConfig = listen<WaveformConfig>("waveform-config-changed", (e) =>
+      setWaveformConfig(e.payload),
+    );
+
+    const unlistenModeChanged = listen<WidgetMode>("widget-mode-changed", (e) => {
+      clearFlyoutTimers();
+      setFlyoutHovered(false);
+      setMode(e.payload);
+      setModeLoaded(true);
+    });
     const unlistenLive = listen<string>("live-transcript", (e) => setLiveText(e.payload));
     // The meeting's own start sends "meeting"; anything else is a dictation.
     const unlistenStart = listen<string | null>("recording-started", (e) => {
-      setDictating(e.payload !== "meeting");
+      if (flashTimeout.current) {
+        clearTimeout(flashTimeout.current);
+        flashTimeout.current = null;
+      }
+      setFlashVisible(false);
+      setMessage(null);
+      setIsError(false);
+      const isDictation = e.payload !== "meeting";
+      dictatingRef.current = isDictation;
+      setDictating(isDictation);
       setPaused(false);
       setLiveText("");
       setMicSilent(null);
@@ -685,6 +944,8 @@ function WidgetView() {
       setPhase("recording");
     });
     const unlistenStop = listen("recording-stopped", () => {
+      dictatingRef.current = false;
+      inFlightTranscriptionsRef.current += 1;
       setDictating(false);
       setPaused(false);
       setLiveText("");
@@ -702,6 +963,7 @@ function WidgetView() {
     const unlistenMicMode = listen<boolean>("mic-mode-changed", (e) => setMicMode(e.payload));
     const unlistenNextMode = listen<string | null>("next-mode-changed", (e) => setOverrideMode(e.payload));
     const unlistenRefining = listen<string | null>("refining-started", (e) => {
+      if (dictatingRef.current && inFlightTranscriptionsRef.current > 0) return;
       setRefineModel(e.payload ?? null);
       // Stays null (an indeterminate bar) for boilerplate generation, which
       // reports no progress.
@@ -711,15 +973,38 @@ function WidgetView() {
     const unlistenRefineProgress = listen<number>("refine-progress", (e) => setRefineProgress(e.payload));
     const unlistenProgress = listen<number>("transcribe-progress", (e) => setProgress(e.payload));
     const unlistenLevel = listen<number>("audio-level", (e) => {
+      // Settings' Mic Check emits global audio-level events; ignore them while
+      // the floating widget isn't actively recording so idle Pill/Notch stay still.
+      if (phaseRef.current !== "recording") return;
       setLevels((prev) => [...prev.slice(1), e.payload]);
     });
+    const unlistenBands = listen<AudioBands>("audio-bands", (e) => {
+      if (phaseRef.current !== "recording") return;
+      setAudioBands(e.payload);
+    });
+    const unlistenDualLevel = listen<{ mic: number; system: number }>("audio-dual-level", (e) => {
+      if (phaseRef.current !== "recording") return;
+      setRemoteLevels((prev) => [...prev.slice(1), e.payload.system]);
+      setDualMicLevels((prev) => [...(prev ?? SILENT_LEVELS).slice(1), e.payload.mic]);
+    });
     const unlistenRecordingError = listen<string>("recording-error", (event) => {
+      dictatingRef.current = false;
       setDictating(false);
+      if (meetingRecordingRef.current) {
+        setDualMicLevels(null);
+        setRemoteLevels(SILENT_LEVELS);
+      }
       setPhase(meetingRecordingRef.current ? "recording" : "idle");
       announce(event.payload, true);
     });
     const unlistenNeedsAccess = listen("paste-needs-access", () => {
-      setPhase(meetingRecordingRef.current ? "recording" : "idle");
+      const wasInFlight = inFlightTranscriptionsRef.current > 0;
+      if (wasInFlight) inFlightTranscriptionsRef.current -= 1;
+      if (!(dictatingRef.current && wasInFlight)) {
+        dictatingRef.current = false;
+        setDictating(false);
+        setPhase(meetingRecordingRef.current ? "recording" : "idle");
+      }
       setOverrideMode(null);
       setFlashVisible(false);
       setNeedsAccess(true);
@@ -729,27 +1014,53 @@ function WidgetView() {
       setNeedsAccess(false);
     });
     const unlistenTranscriptReady = listen<string>("transcript-ready", (event) => {
+      const wasInFlight = inFlightTranscriptionsRef.current > 0;
+      if (wasInFlight) inFlightTranscriptionsRef.current -= 1;
       setNeedsAccess(false);
       setLastPasted(event.payload || null);
-      setPhase(meetingRecordingRef.current ? "recording" : "idle");
-      announce("Pasted", false);
+      if (!(dictatingRef.current && wasInFlight)) {
+        dictatingRef.current = false;
+        setDictating(false);
+        setPhase(meetingRecordingRef.current ? "recording" : "idle");
+        announce("Pasted", false);
+      }
       // The backend consumes the override the moment it's used (see
       // recording.rs's `mode_override.take()`) — clear the pill so it
       // doesn't look like it's still armed for the next dictation.
       setOverrideMode(null);
     });
     const unlistenTranscriptError = listen<string>("transcript-error", (event) => {
-      setPhase(meetingRecordingRef.current ? "recording" : "idle");
+      const wasInFlight = inFlightTranscriptionsRef.current > 0;
+      if (wasInFlight) inFlightTranscriptionsRef.current -= 1;
+      if (!(dictatingRef.current && wasInFlight)) {
+        dictatingRef.current = false;
+        setDictating(false);
+        setPhase(meetingRecordingRef.current ? "recording" : "idle");
+      }
       setOverrideMode(null);
       announce(event.payload, true);
     });
     const unlistenCopied = listen<string>("transcript-copied", (event) => {
-      setPhase(meetingRecordingRef.current ? "recording" : "idle");
+      const wasInFlight = inFlightTranscriptionsRef.current > 0;
+      if (wasInFlight) inFlightTranscriptionsRef.current -= 1;
+      if (!(dictatingRef.current && wasInFlight)) {
+        dictatingRef.current = false;
+        setDictating(false);
+        setPhase(meetingRecordingRef.current ? "recording" : "idle");
+        announce(event.payload, false);
+      }
       setOverrideMode(null);
-      announce(event.payload, false);
     });
     const unlistenDiscarded = listen<string>("dictation-discarded", (event) => {
+      if (event.payload === "cancelled" && inFlightTranscriptionsRef.current > 0) {
+        inFlightTranscriptionsRef.current -= 1;
+      }
+      dictatingRef.current = false;
       setDictating(false);
+      if (meetingRecordingRef.current) {
+        setDualMicLevels(null);
+        setRemoteLevels(SILENT_LEVELS);
+      }
       setPhase(meetingRecordingRef.current ? "recording" : "idle");
       setLiveText("");
       setMicSilent(null);
@@ -787,7 +1098,9 @@ function WidgetView() {
     });
 
     return () => {
+      unlistenModes.then((f) => f());
       unlistenTheme.then((f) => f());
+      unlistenWaveformConfig.then((f) => f());
       unlistenModeChanged.then((f) => f());
       unlistenStart.then((f) => f());
       unlistenLive.then((f) => f());
@@ -802,6 +1115,8 @@ function WidgetView() {
       unlistenProgress.then((f) => f());
       unlistenRefineProgress.then((f) => f());
       unlistenLevel.then((f) => f());
+      unlistenBands.then((f) => f());
+      unlistenDualLevel.then((f) => f());
       unlistenRecordingError.then((f) => f());
       unlistenTranscriptReady.then((f) => f());
       unlistenNeedsAccess.then((f) => f());
@@ -833,18 +1148,27 @@ function WidgetView() {
     endedCall !== null ||
     savedMeeting !== null;
   useEffect(() => {
-    if (mode !== "notch") return;
+    if (!modeLoaded || mode !== "notch") return;
     invoke("set_widget_size", notchActive ? NOTCH_ACTIVE : NOTCH_IDLE).catch((err) =>
       console.error("set_widget_size failed:", err),
     );
-  }, [mode, notchActive]);
+  }, [modeLoaded, mode, notchActive]);
 
-  // Suppress the 4-section hover flyout while a meeting start/stop/saved prompt
-  // pill is on screen so hovering Compact/Stacked to click the pill doesn't jump
-  // the window height to 340px.
-  const flyoutOpen = flyoutHovered && !detectedCall && !endedCall && !savedMeeting;
+  // Suppress the hover flyout while a meeting prompt pill or pause action bar
+  // is on screen so hovering to click Resume/Transcribe/Delete doesn't jump
+  // the window height mid-click.
+  const flyoutOpen = flyoutHovered && !paused && !detectedCall && !endedCall && !savedMeeting;
 
   useEffect(() => {
+    if (!modeLoaded) return;
+    if (mode === "caption" || mode === "detailed") {
+      const base = mode === "caption" ? CAPTION_BASE_SIZE : DETAILED_BASE_SIZE;
+      const size = flyoutOpen
+        ? expandedFlyoutSize(base, modes.length, micRows.length, waveformConfig.show_in_flyout)
+        : base;
+      invoke("set_widget_size", size).catch((err) => console.error("set_widget_size failed:", err));
+      return;
+    }
     if (mode !== "compact" && mode !== "stacked") return;
     const extra = mode === "stacked" ? STACKED_EXTRA : 0;
     // The flyout takes priority over the error-expansion size — hovering
@@ -852,14 +1176,14 @@ function WidgetView() {
     // the flyout (rather than fighting over which one "wins" the window
     // height) is the simpler, still-correct choice.
     const size = flyoutOpen
-      ? compactFlyoutSize(modes.length, micRows.length)
+      ? compactFlyoutSize(modes.length, micRows.length, waveformConfig.show_in_flyout)
       : flashVisible && isError
         ? errorHeight
           ? { width: COMPACT_WIDTH, height: errorHeight + extra }
           : COMPACT_EXPANDED_SIZE
         : { width: COMPACT_WIDTH, height: COMPACT_BASE_SIZE.height + extra };
     invoke("set_widget_size", size).catch((err) => console.error("set_widget_size failed:", err));
-  }, [mode, flashVisible, isError, flyoutOpen, modes.length, micRows.length, errorHeight]);
+  }, [modeLoaded, mode, flashVisible, isError, flyoutOpen, modes.length, micRows.length, errorHeight, waveformConfig.show_in_flyout]);
 
   // How tall the compact window needs to be to show the whole error.
   // Measured from the message itself (its full height, ignoring the line
@@ -876,6 +1200,7 @@ function WidgetView() {
 
   function pickStyle(next: WidgetMode) {
     if (next === mode) return;
+    clearFlyoutTimers();
     setFlyoutHovered(false);
     invoke("set_widget_mode", { mode: next }).catch(actionFailed("switch the widget style"));
   }
@@ -923,7 +1248,15 @@ function WidgetView() {
   }
 
   function openSettings() {
+    clearFlyoutTimers();
+    setFlyoutHovered(false);
     invoke("open_settings").catch(actionFailed("open Settings"));
+  }
+
+  function updateWaveformConfig(patch: Partial<WaveformConfig>) {
+    const next: WaveformConfig = { ...waveformConfig, ...patch };
+    setWaveformConfig(next);
+    invoke("set_waveform_config", { config: next }).catch(() => {});
   }
 
   function toggleMicMode(next: boolean) {
@@ -949,6 +1282,8 @@ function WidgetView() {
 
   function startDrag(e: React.MouseEvent) {
     if (e.buttons === 1) {
+      clearFlyoutTimers();
+      setFlyoutHovered(false);
       getCurrentWindow()
         .startDragging()
         .catch((err) => console.error("startDragging failed:", err));
@@ -956,9 +1291,11 @@ function WidgetView() {
   }
 
   const busy = phase === "transcribing" || phase === "refining";
-  // Which processing stage to draw, if any.
+  // Which processing stage to draw, if any. Always activate during
+  // transcribing so short dictations (<3s, where transcribe-progress never
+  // emits a number) still render the animated two-stage pipeline bar.
   const activeStage: { stage: Stage; percent: number | null; label?: string } | null =
-    phase === "transcribing" && progress !== null
+    phase === "transcribing"
       ? { stage: "transcribe", percent: progress }
       : phase === "refining"
         ? { stage: "refine", percent: refineProgress }
@@ -1113,6 +1450,8 @@ function WidgetView() {
   // right-click, and those with room (not Minimal's dot) on a ⌄ button.
   function openMenu(e?: React.MouseEvent) {
     e?.preventDefault();
+    clearFlyoutTimers();
+    setFlyoutHovered(false);
     invoke("show_widget_menu").catch(actionFailed("open the menu"));
   }
   const menuButton = (className = "") => (
@@ -1397,7 +1736,7 @@ function WidgetView() {
 
   const recordButton = (
     <button
-      className={`btn btn-circle border-none ${mode === "minimal" ? "btn-md" : "btn-sm"} ${
+      className={`btn btn-circle border-none disabled:opacity-100 disabled:bg-white/10 ${mode === "minimal" ? "btn-md" : "btn-sm"} ${
         phase === "recording" ? "bg-white/15" : "bg-white/8 hover:bg-white/15"
       } ${
         (flashing && isError) || ((showSetup || endedCall) && mode === "minimal")
@@ -1450,26 +1789,60 @@ function WidgetView() {
         (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel)
       }
     >
-      {busy ? (
-        <span className="loading loading-spinner loading-xs" />
+      {justPasted ? (
+        <span
+          className={`inline-flex items-center justify-center rounded-full ${
+            mode === "minimal" ? "h-4 w-4" : "h-3.5 w-3.5"
+          }`}
+          style={{
+            backgroundColor: "#10b981",
+            boxShadow: "0 0 12px rgba(16, 185, 129, 0.85)",
+            color: "#042016",
+          }}
+          aria-hidden="true"
+        >
+          <svg
+            viewBox="0 0 12 12"
+            className="h-2.5 w-2.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M2.4 6.2 4.9 8.7 9.6 3.5" />
+          </svg>
+        </span>
       ) : (
         <span
           className={`rounded-full transition-transform duration-100 ${
             mode === "minimal" ? "h-3.5 w-3.5" : "h-2.5 w-2.5"
           } ${
-            isPaused
-              ? "bg-warning"
-              : phase === "recording"
-                ? "bg-error shadow-[0_0_8px] shadow-error"
-                : "bg-neutral-content/40"
+            phase === "transcribing" || phase === "refining"
+              ? "dw-orb-pulse"
+              : isPaused
+                ? "bg-warning shadow-[0_0_8px] shadow-warning/60"
+                : phase === "recording"
+                  ? "bg-error shadow-[0_0_12px] shadow-error"
+                  : "bg-neutral-content/45"
           }`}
           // Minimal mode has no room for a multi-bar meter, so instead the
           // dot itself pulses with the latest input level — same "is audio
           // actually coming through" signal, scaled to fit a 46x46 icon.
           style={
-            mode === "minimal" && phase === "recording"
-              ? { transform: `scale(${1 + (levels[levels.length - 1] ?? 0) * 0.6})` }
-              : undefined
+            phase === "transcribing"
+              ? {
+                  backgroundColor: "var(--dw-accent)",
+                  boxShadow: "0 0 12px var(--dw-accent)",
+                }
+              : phase === "refining"
+                ? {
+                    backgroundColor: "var(--dw-refine)",
+                    boxShadow: "0 0 14px var(--dw-refine)",
+                  }
+                : mode === "minimal" && phase === "recording"
+                  ? { transform: `scale(${1 + (levels[levels.length - 1] ?? 0) * 0.6})` }
+                  : undefined
           }
         />
       )}
@@ -1501,11 +1874,166 @@ function WidgetView() {
     (phase === "recording" ? micNote : null) ??
     (showSetup ? (setupTitle ?? null) : null) ??
     (micName ? `${phaseLabel} · Mic: ${micName}` : phaseLabel);
+  const dualActive = meetingRecording !== null && !dictating;
+  const meterLevels = dualActive && dualMicLevels ? dualMicLevels : levels;
+  const meterRemoteLevels = dualActive ? remoteLevels : undefined;
+  const widgetPhase = justPasted ? "pasted" : phase;
+  const activeColorway = getWaveformColorway(waveformConfig.colorway);
+
+  const flyoutPanel = (
+    <div className="dw-fly-body dw-scroll" data-testid="widget-flyout">
+      <div className="dw-fly-label">Microphone</div>
+      <div className="dw-fly-col">
+        {micRows.map((row) => (
+          <button
+            key={row.key}
+            type="button"
+            className={`dw-fly-btn dw-fly-check ${row.active ? "sel" : ""}`}
+            disabled={row.disabled}
+            onClick={() => pickMic(row.name)}
+            title={row.label}
+            aria-pressed={row.active}
+          >
+            <span className="truncate">{row.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="dw-fly-label">Mic mode</div>
+      <div className="dw-fly-row dw-seg" role="group" aria-label="Mic mode">
+        <button
+          type="button"
+          className={`dw-fly-btn ${!micMode ? "sel" : ""}`}
+          onClick={() => toggleMicMode(false)}
+        >
+          Standard
+        </button>
+        <button
+          type="button"
+          className={`dw-fly-btn ${micMode ? "sel" : ""}`}
+          onClick={() => toggleMicMode(true)}
+        >
+          Voice Isolation
+        </button>
+      </div>
+      <div className="dw-fly-label">Next dictation</div>
+      <div className="dw-fly-grid">
+        {modes.map((m) => (
+          <button
+            key={m.name}
+            type="button"
+            className={`dw-fly-btn ${overrideMode === m.name ? "sel" : ""}`}
+            onClick={() => pickOverride(m.name)}
+            title={overrideMode === m.name ? "Click again to use the auto-detected mode" : undefined}
+          >
+            {m.name}
+          </button>
+        ))}
+      </div>
+      {waveformConfig.show_in_flyout && (
+        <>
+          <div className="flex items-center justify-between gap-2">
+            <span className="dw-fly-label">Waveform</span>
+            <span
+              className="inline-flex min-w-0 items-center gap-1.5 text-[10px] text-white/55"
+              title={`Colorway: ${activeColorway.name}`}
+              data-testid="waveform-colorway-indicator"
+            >
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full border border-white/25"
+                style={{ background: activeColorway.swatchBg }}
+                aria-hidden="true"
+              />
+              <span className="truncate">{activeColorway.name}</span>
+            </span>
+          </div>
+          <div className="dw-fly-row dw-seg" role="group" aria-label="Waveform" data-testid="waveform-picker">
+            {WAVEFORM_ENGINE_META.map((engine) => (
+              <button
+                key={engine.id}
+                type="button"
+                className={`dw-fly-btn !px-1 !py-1 !text-[10.5px] ${waveformConfig.engine === engine.id ? "sel" : ""}`}
+                onClick={() => updateWaveformConfig({ engine: engine.id })}
+                title={engine.title}
+                aria-pressed={waveformConfig.engine === engine.id}
+              >
+                {FLYOUT_ENGINE_LABEL[engine.id]}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-1.5" data-testid="flyout-colorway-picker">
+            <div className="flex items-center gap-1" role="group" aria-label="Waveform color">
+              {FLYOUT_SPECTRUM_COLORWAYS.map((cw) => {
+                const active = waveformConfig.colorway === cw.id;
+                return (
+                  <button
+                    key={cw.id}
+                    type="button"
+                    className={`dw-fly-orb ${active ? "sel" : ""}`}
+                    style={{
+                      background: cw.swatchBg,
+                      ["--cw-ring" as string]: cw.bright,
+                    }}
+                    onClick={() => updateWaveformConfig({ colorway: cw.id })}
+                    title={cw.name}
+                    aria-label={cw.name}
+                    aria-pressed={active}
+                  />
+                );
+              })}
+              <span className="dw-fly-orb-sep" aria-hidden="true" />
+              {FLYOUT_SOLID_COLORWAYS.map((cw) => {
+                const active = waveformConfig.colorway === cw.id;
+                return (
+                  <button
+                    key={cw.id}
+                    type="button"
+                    className={`dw-fly-orb ${active ? "sel" : ""}`}
+                    style={{
+                      background: cw.swatchBg,
+                      ["--cw-ring" as string]: cw.bright,
+                    }}
+                    onClick={() => updateWaveformConfig({ colorway: cw.id })}
+                    title={cw.name}
+                    aria-label={cw.name}
+                    aria-pressed={active}
+                  />
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              className="dw-fly-tune shrink-0"
+              onClick={openSettings}
+              title="Tune waveform in Settings"
+            >
+              Tune…
+            </button>
+          </div>
+        </>
+      )}
+      <div className="dw-fly-label">Style</div>
+      <div className="dw-fly-grid" data-testid="style-picker">
+        {WIDGET_STYLES.map((style) => (
+          <button
+            key={style.id}
+            type="button"
+            className={`dw-fly-btn ${mode === style.id ? "sel" : ""}`}
+            onClick={() => pickStyle(style.id)}
+            aria-pressed={mode === style.id}
+          >
+            {style.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   if (mode === "pill") {
     return (
-      <main onContextMenu={openMenu}
-        className="dw-widget group flex h-screen w-screen cursor-grab items-center gap-1.5 overflow-hidden rounded-full border border-white/10 bg-neutral/90 pl-0.5 pr-2 text-neutral-content backdrop-blur-md active:cursor-grabbing"
+      <main
+        onContextMenu={openMenu}
+        data-phase={widgetPhase}
+        className="dw-widget group flex h-screen w-screen cursor-grab items-center gap-2 overflow-hidden rounded-full px-3 text-neutral-content active:cursor-grabbing"
         onMouseDown={startDrag}
         title={fullStatus ?? undefined}
       >
@@ -1528,13 +2056,19 @@ function WidgetView() {
             meetingEndedPill
           ) : showSwitchMic ? (
             switchMicButton
+          ) : justPasted ? (
+            <PastedBadge className="text-xs" />
           ) : flashing ? (
             <span className={`truncate text-xs ${statusTone}`}>{shortStatus}</span>
           ) : (
             <>
               {(phase === "recording" ? agentQuestionLine : null) ?? (
                 <LevelMeter
-                  levels={levels}
+                  levels={meterLevels}
+                  remoteLevels={meterRemoteLevels}
+                  bands={audioBands}
+                  config={waveformConfig}
+                  dualChannel={dualActive}
                   className={`flex-1 group-hover:hidden ${phase === "idle" ? "opacity-40 grayscale" : ""}`}
                 />
               )}
@@ -1554,48 +2088,84 @@ function WidgetView() {
 
   if (mode === "notch") {
     return (
-      <main onContextMenu={openMenu}
-        className={`dw-widget dw-notch group flex h-screen w-screen items-center overflow-hidden text-neutral-content ${
-          notchActive ? "gap-2 px-2" : "justify-center gap-1.5 px-3"
-        }`}
+      <main
+        onContextMenu={openMenu}
+        data-phase={widgetPhase}
+        className="dw-notch-wrap group h-screen w-screen"
         title={fullStatus ?? undefined}
       >
-        {notchActive ? (
-          <>
-            <span className="dw-small-record">{recordButton}</span>
-            {isPaused ? (
-              <span className="shrink-0 text-xs text-warning">Paused</span>
-            ) : showSetup ? (
-              setupButton
-            ) : meetingDetectPill ? (
-              meetingDetectPill
-            ) : meetingSavedPill ? (
-              meetingSavedPill
-            ) : (
-              <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
-            )}
-            {!meetingDetectPill && !meetingSavedPill && (
-              <div className="flex h-6 min-w-0 flex-1 items-center">
-                {isPaused ? (
-                  pausedControls
-                ) : showProgress ? (
-                  <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
-                ) : phase === "recording" ? (
-                  (agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />)
-                ) : null}
-              </div>
-            )}
-            {meetingEndedPill}
-            {showSwitchMic && switchMicButton}
-            {discardButton}
-            {menuButton("opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
-          </>
-        ) : (
-          <button type="button" className="dw-notch-idle" onClick={toggleRecording} aria-label="Start recording">
-            <span className={`h-1.5 w-1.5 rounded-full ${showSetup ? "bg-warning" : "bg-neutral-content/50"}`} />
-            <LevelMeter levels={SILENT_LEVELS} className="w-10 opacity-40 grayscale" />
-          </button>
-        )}
+        <svg
+          className="dw-notch-ear -mr-px"
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+        >
+          <path d="M0 0 H10 V10 A10 10 0 0 0 0 0 Z" fill="currentColor" />
+        </svg>
+        <div
+          data-phase={widgetPhase}
+          className={`dw-widget dw-notch flex h-full min-w-0 flex-1 items-center overflow-hidden text-neutral-content ${
+            notchActive ? "gap-2 px-2" : "justify-center gap-1.5 px-3"
+          }`}
+        >
+          {notchActive ? (
+            <>
+              <span className="dw-small-record">{recordButton}</span>
+              {isPaused ? (
+                <span className="shrink-0 text-xs text-warning">Paused</span>
+              ) : showSetup ? (
+                setupButton
+              ) : meetingDetectPill ? (
+                meetingDetectPill
+              ) : meetingSavedPill ? (
+                meetingSavedPill
+              ) : justPasted ? (
+                <PastedBadge className="shrink-0 text-xs" />
+              ) : (
+                <span className={`min-w-0 shrink truncate text-xs ${statusTone || "opacity-80"}`}>{shortStatus}</span>
+              )}
+              {!meetingDetectPill && !meetingSavedPill && (
+                <div className="flex h-6 min-w-0 flex-1 items-center">
+                  {isPaused ? (
+                    pausedControls
+                  ) : showProgress ? (
+                    <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />
+                  ) : phase === "recording" ? (
+                    (agentQuestionLine ?? (
+                      <LevelMeter
+                        levels={meterLevels}
+                        remoteLevels={meterRemoteLevels}
+                        bands={audioBands}
+                        config={waveformConfig}
+                        dualChannel={dualActive}
+                        className="flex-1"
+                      />
+                    ))
+                  ) : null}
+                </div>
+              )}
+              {meetingEndedPill}
+              {showSwitchMic && switchMicButton}
+              {discardButton}
+              {menuButton("opacity-0 group-hover:opacity-100 focus-visible:opacity-100")}
+            </>
+          ) : (
+            <button type="button" className="dw-notch-idle" onClick={toggleRecording} aria-label="Start recording">
+              <span className={`h-1.5 w-1.5 rounded-full ${showSetup ? "bg-warning" : "bg-neutral-content/50"}`} />
+              <LevelMeter levels={SILENT_LEVELS} config={waveformConfig} className="w-10 opacity-40 grayscale" />
+            </button>
+          )}
+        </div>
+        <svg
+          className="dw-notch-ear -ml-px"
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+        >
+          <path d="M10 0 H0 V10 A10 10 0 0 1 10 0 Z" fill="currentColor" />
+        </svg>
       </main>
     );
   }
@@ -1610,19 +2180,19 @@ function WidgetView() {
         micSilent ? (
           <span className="text-warning">{micSilent}</span>
         ) : liveText ? (
-          <span data-testid="live-transcript">{liveTail(liveText)}</span>
+          <span data-testid="live-transcript">{renderRichCaption(liveTail(liveText))}</span>
         ) : meetingRecording && !dictating ? (
           <span className="opacity-60">Recording a meeting. Stop it here or from the menu bar.</span>
         ) : (
           <span className="opacity-40">Listening…</span>
         )
       ) : busy ? (
-        <span className="opacity-60">{liveText ? liveTail(liveText) : shortStatus}</span>
+        <span className="opacity-60">{shortStatus}</span>
       ) : flashing && isError ? (
         <span className="text-error">{message}</span>
       ) : lastPasted ? (
-        <span className="opacity-60" data-testid="last-pasted">
-          {lastPasted}
+        <span className="opacity-75" data-testid="last-pasted">
+          {renderRichCaption(lastPasted)}
         </span>
       ) : (
         <span className="opacity-40">
@@ -1630,10 +2200,19 @@ function WidgetView() {
         </span>
       );
     return (
-      <main onContextMenu={openMenu} className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
+      <main
+        onContextMenu={openMenu}
+        data-phase={widgetPhase}
+        className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl p-2.5 text-neutral-content"
+        onMouseEnter={handleFlyoutMouseEnter}
+        onMouseLeave={handleFlyoutMouseLeave}
+      >
         <div className="flex items-center gap-2">
           {recordButton}
-          <div className="flex h-6 min-w-0 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
+          <div
+            className={`flex min-w-0 flex-1 items-center gap-2 ${showProgress ? "min-h-6" : "h-6 cursor-grab active:cursor-grabbing"}`}
+            onMouseDown={showProgress ? undefined : startDrag}
+          >
             {isPaused ? (
               <>
                 <span className="shrink-0 text-xs text-warning">Paused</span>
@@ -1641,24 +2220,39 @@ function WidgetView() {
               </>
             ) : phase === "recording" && !micSilent ? (
               <>
-                {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
-                <span className="shrink-0 text-xs tabular-nums opacity-60">{shortStatus}</span>
-              </>
-            ) : (
-              <>
-                {showSetup ? (
-                  setupButton
-                ) : meetingDetectPill ? (
-                  meetingDetectPill
-                ) : meetingSavedPill ? (
-                  meetingSavedPill
-                ) : (
-                  <span className={`shrink-0 truncate text-xs ${statusTone || "opacity-70"}`}>
-                    {phase === "idle" && !flashing && !meetingProcessing && lastPasted ? "Pasted" : shortStatus}
-                  </span>
+                {agentQuestionLine ?? (
+                  <LevelMeter
+                    levels={meterLevels}
+                    remoteLevels={meterRemoteLevels}
+                    bands={audioBands}
+                    config={waveformConfig}
+                    dualChannel={dualActive}
+                    className="flex-1"
+                  />
                 )}
-                {showProgress && <ThinProgress stage={activeStage!.stage} percent={activeStage!.percent} />}
+                <span className="shrink-0 font-mono text-[11px] tabular-nums opacity-60">{shortStatus}</span>
               </>
+            ) : showProgress ? (
+              <StageProgress
+                stage={activeStage!.stage}
+                percent={activeStage!.percent}
+                label={activeStage!.label}
+                title={stageTitle}
+                onMouseDown={startDrag}
+                onSkip={activeStage!.stage === "refine" ? pasteAsIs : undefined}
+              />
+            ) : showSetup ? (
+              setupButton
+            ) : meetingDetectPill ? (
+              meetingDetectPill
+            ) : meetingSavedPill ? (
+              meetingSavedPill
+            ) : justPasted ? (
+              <PastedBadge className="text-xs" />
+            ) : (
+              <span className={`shrink-0 truncate text-xs ${statusTone || "opacity-75"}`}>
+                {phase === "idle" && !flashing && !meetingProcessing && lastPasted ? "Pasted" : shortStatus}
+              </span>
             )}
           </div>
           {meetingEndedPill}
@@ -1674,17 +2268,23 @@ function WidgetView() {
             {updateAvailable && <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-accent" />}
           </button>
         </div>
-        <p className="dw-caption-text line-clamp-3 flex-1 text-sm leading-snug" onMouseDown={startDrag}>
+        <p
+          className={`dw-caption-text text-sm leading-snug ${flyoutOpen ? "line-clamp-2 shrink-0" : "line-clamp-3 flex-1"}`}
+          onMouseDown={startDrag}
+        >
           {body}
         </p>
+        {flyoutOpen && flyoutPanel}
       </main>
     );
   }
 
   if (mode === "minimal") {
     return (
-      <main onContextMenu={openMenu}
-        className="dw-widget relative flex h-screen w-screen cursor-grab items-center justify-center overflow-hidden rounded-full border border-white/10 bg-neutral/90 backdrop-blur-md active:cursor-grabbing"
+      <main
+        onContextMenu={openMenu}
+        data-phase={widgetPhase}
+        className="dw-widget relative flex h-screen w-screen cursor-grab items-center justify-center overflow-hidden rounded-full active:cursor-grabbing"
         onMouseDown={startDrag}
       >
         {recordButton}
@@ -1695,7 +2295,13 @@ function WidgetView() {
 
   if (mode === "detailed") {
     return (
-      <main onContextMenu={openMenu} className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 p-2.5 text-neutral-content backdrop-blur-md">
+      <main
+        onContextMenu={openMenu}
+        data-phase={widgetPhase}
+        className="dw-widget flex h-screen flex-col gap-1.5 overflow-hidden rounded-2xl p-2.5 text-neutral-content"
+        onMouseEnter={handleFlyoutMouseEnter}
+        onMouseLeave={handleFlyoutMouseLeave}
+      >
         <div className="flex items-center gap-2">
           {recordButton}
           {isPaused ? (
@@ -1710,21 +2316,32 @@ function WidgetView() {
             </span>
           ) : phase === "recording" ? (
             <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
-              {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
-              <span className={`shrink-0 text-xs tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
-                data-testid="recording-elapsed">
+              {agentQuestionLine ?? (
+                <LevelMeter
+                  levels={meterLevels}
+                  remoteLevels={meterRemoteLevels}
+                  bands={audioBands}
+                  config={waveformConfig}
+                  dualChannel={dualActive}
+                  className="flex-1"
+                />
+              )}
+              <span
+                className={`shrink-0 font-mono text-[11px] tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
+                data-testid="recording-elapsed"
+              >
                 {elapsedText}
               </span>
             </div>
           ) : showProgress ? (
             <StageProgress
-            stage={activeStage!.stage}
-            percent={activeStage!.percent}
-            label={activeStage!.label}
-            title={stageTitle}
-            onMouseDown={startDrag}
-            onSkip={activeStage!.stage === "refine" ? pasteAsIs : undefined}
-          />
+              stage={activeStage!.stage}
+              percent={activeStage!.percent}
+              label={activeStage!.label}
+              title={stageTitle}
+              onMouseDown={startDrag}
+              onSkip={activeStage!.stage === "refine" ? pasteAsIs : undefined}
+            />
           ) : showSetup ? (
             setupButton
           ) : meetingDetectPill ? (
@@ -1733,6 +2350,10 @@ function WidgetView() {
             meetingSavedPill
           ) : agentPill ? (
             agentPill
+          ) : justPasted ? (
+            <div className="flex-1 cursor-grab active:cursor-grabbing" onMouseDown={startDrag}>
+              <PastedBadge />
+            </div>
           ) : (
             <span
               className="flex-1 cursor-grab truncate text-sm font-medium active:cursor-grabbing"
@@ -1758,42 +2379,48 @@ function WidgetView() {
           </button>
         </div>
         {isPaused ? (
-          <p className="flex-1 text-xs text-warning" data-testid="paused-hint">
+          <p className={`text-xs text-warning ${flyoutOpen ? "shrink-0" : "flex-1"}`} data-testid="paused-hint">
             {pausedHint}
           </p>
         ) : phase === "recording" && liveText && !micSilent ? (
-          <p className="dw-caption-text flex-1 overflow-hidden text-sm leading-snug" data-testid="live-transcript">
-            <span className="line-clamp-5">{liveTail(liveText)}</span>
+          <p
+            className={`dw-caption-text overflow-hidden text-sm leading-snug ${flyoutOpen ? "line-clamp-2 shrink-0" : "flex-1"}`}
+            data-testid="live-transcript"
+          >
+            <span className={flyoutOpen ? "line-clamp-2" : "line-clamp-5"}>{renderRichCaption(liveTail(liveText))}</span>
           </p>
         ) : (
-        <p
-          className={`flex-1 overflow-y-auto whitespace-pre-wrap text-xs ${
-            isError || (!message && setupProblem)
-              ? "text-error"
-              : micSilent || (!message && warning)
-                ? "text-warning"
-                : "opacity-60"
-          }`}
-        >
-          {micSilent ??
-            message ??
-            (setupProblem ? `${setupProblem.title}. ${setupProblem.detail}` : null) ??
-            warning?.full ??
-            `Ready to dictate${micName ? ` with ${micName}` : ""}. Press ${hotkey ?? "the hotkey"} or click the button to start.`}
-        </p>
+          <p
+            className={`whitespace-pre-wrap text-xs ${flyoutOpen ? "line-clamp-2 shrink-0" : "flex-1 overflow-y-auto"} ${
+              isError || (!message && setupProblem)
+                ? "text-error"
+                : micSilent || (!message && warning)
+                  ? "text-warning"
+                  : "opacity-60"
+            }`}
+          >
+            {micSilent ??
+              message ??
+              (setupProblem ? `${setupProblem.title}. ${setupProblem.detail}` : null) ??
+              warning?.full ??
+              `Ready to dictate${micName ? ` with ${micName}` : ""}. Press ${hotkey ?? "the hotkey"} or click the button to start.`}
+          </p>
         )}
+        {flyoutOpen && flyoutPanel}
       </main>
     );
   }
 
-  // Compact
+  // Compact & Stacked
   return (
-    <main onContextMenu={openMenu}
-      className={`dw-widget flex h-screen flex-col gap-1 overflow-hidden rounded-2xl border border-white/10 bg-neutral/90 px-2.5 py-2 text-neutral-content backdrop-blur-md ${
+    <main
+      onContextMenu={openMenu}
+      data-phase={widgetPhase}
+      className={`dw-widget flex h-screen flex-col gap-1 overflow-hidden rounded-2xl px-2.5 py-2 text-neutral-content ${
         flyoutOpen ? "justify-start" : "justify-center"
       }`}
-      onMouseEnter={() => setFlyoutHovered(true)}
-      onMouseLeave={() => setFlyoutHovered(false)}
+      onMouseEnter={handleFlyoutMouseEnter}
+      onMouseLeave={handleFlyoutMouseLeave}
     >
       <div className="flex items-center gap-2">
         {recordButton}
@@ -1809,9 +2436,20 @@ function WidgetView() {
           </span>
         ) : phase === "recording" ? (
           <div className="flex h-6 flex-1 cursor-grab items-center gap-2 active:cursor-grabbing" onMouseDown={startDrag}>
-            {agentQuestionLine ?? <LevelMeter levels={levels} className="flex-1" />}
-            <span className={`shrink-0 text-xs tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
-                data-testid="recording-elapsed">
+            {agentQuestionLine ?? (
+              <LevelMeter
+                levels={meterLevels}
+                remoteLevels={meterRemoteLevels}
+                bands={audioBands}
+                config={waveformConfig}
+                dualChannel={dualActive}
+                className="flex-1"
+              />
+            )}
+            <span
+              className={`shrink-0 font-mono text-[11px] tabular-nums ${meetingEndingSoon ? "font-medium text-warning" : "opacity-60"}`}
+              data-testid="recording-elapsed"
+            >
               {elapsedText}
             </span>
           </div>
@@ -1832,6 +2470,10 @@ function WidgetView() {
           meetingSavedPill
         ) : agentPill ? (
           agentPill
+        ) : justPasted ? (
+          <div className="flex-1 cursor-grab active:cursor-grabbing" onMouseDown={startDrag}>
+            <PastedBadge />
+          </div>
         ) : (
           <span
             ref={compactMessageRef}
@@ -1864,71 +2506,7 @@ function WidgetView() {
           <span className="shrink-0 truncate">{overrideMode ? `Next: ${overrideMode}` : "Mode by app"}</span>
         </div>
       )}
-      {flyoutOpen && (
-        <div className="dw-fly-body dw-scroll" data-testid="widget-flyout">
-          <div className="dw-fly-label">Microphone</div>
-          <div className="dw-fly-col">
-            {micRows.map((row) => (
-              <button
-                key={row.key}
-                type="button"
-                className={`dw-fly-btn dw-fly-check ${row.active ? "sel" : ""}`}
-                disabled={row.disabled}
-                onClick={() => pickMic(row.name)}
-                title={row.label}
-                aria-pressed={row.active}
-              >
-                <span className="truncate">{row.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="dw-fly-label">Mic mode</div>
-          <div className="dw-fly-row dw-seg" role="group" aria-label="Mic mode">
-            <button
-              type="button"
-              className={`dw-fly-btn ${!micMode ? "sel" : ""}`}
-              onClick={() => toggleMicMode(false)}
-            >
-              Standard
-            </button>
-            <button
-              type="button"
-              className={`dw-fly-btn ${micMode ? "sel" : ""}`}
-              onClick={() => toggleMicMode(true)}
-            >
-              Voice Isolation
-            </button>
-          </div>
-          <div className="dw-fly-label">Next dictation</div>
-          <div className="dw-fly-grid">
-            {modes.map((m) => (
-              <button
-                key={m.name}
-                type="button"
-                className={`dw-fly-btn ${overrideMode === m.name ? "sel" : ""}`}
-                onClick={() => pickOverride(m.name)}
-                title={overrideMode === m.name ? "Click again to use the auto-detected mode" : undefined}
-              >
-                {m.name}
-              </button>
-            ))}
-          </div>
-          <div className="dw-fly-label">Style</div>
-          <div className="dw-fly-grid" data-testid="style-picker">
-            {WIDGET_STYLES.map((style) => (
-              <button
-                key={style.id}
-                type="button"
-                className={`dw-fly-btn ${mode === style.id ? "sel" : ""}`}
-                onClick={() => pickStyle(style.id)}
-                aria-pressed={mode === style.id}
-              >
-                {style.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {flyoutOpen && flyoutPanel}
     </main>
   );
 }

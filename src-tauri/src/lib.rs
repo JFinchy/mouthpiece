@@ -302,7 +302,16 @@ fn open_settings(app: tauri::AppHandle) -> tauri::Result<()> {
         builder = builder.center();
     }
 
-    builder.build()?;
+    let window = builder.build()?;
+    let close_app = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+        ) {
+            recording::stop_mic_check_internal(&close_app);
+        }
+    });
     Ok(())
 }
 
@@ -351,9 +360,7 @@ pub fn run() {
         // that fights over the hotkey, the mic and config.json.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             crate::applog!("lifecycle: second launch handed off to the running instance");
-            if let Some(widget) = app.get_webview_window("widget") {
-                let _ = widget.show();
-            }
+            widget::show(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -417,6 +424,8 @@ pub fn run() {
             get_active_input_device,
             get_audio_device_status,
             set_input_device,
+            recording::start_mic_check,
+            recording::stop_mic_check,
             widget_menu::show_mic_menu,
             widget_menu::show_widget_menu,
             widget_menu::show_agents_menu,
@@ -429,6 +438,7 @@ pub fn run() {
             set_active_model,
             get_modes,
             set_modes,
+            modes::preview_mode_transform,
             list_running_apps,
             get_last_frontmost_app,
             get_vocabulary,
@@ -448,6 +458,8 @@ pub fn run() {
             set_theme,
             get_layout,
             set_layout,
+            theme::get_waveform_config,
+            theme::set_waveform_config,
             get_press_enter_enabled,
             set_press_enter_enabled,
             start_voice_enrollment,
@@ -759,14 +771,21 @@ pub fn run() {
             // just the first-ever-launch fallback, before any position has
             // been saved).
             if let Some(widget) = app.get_webview_window("widget") {
-                if let Some((x, y)) = saved_config.widget_position {
-                    let _ = widget.set_position(tauri::LogicalPosition::new(x, y));
-                }
                 // tauri.conf.json's fixed 220x60 is only the Compact-mode
-                // size; apply whatever mode was last saved before the
-                // window is shown.
+                // size; apply whatever mode was last saved before positioning
+                // and showing the window.
                 let (width, height) = saved_config.widget_mode.base_size();
                 let _ = widget.set_size(tauri::LogicalSize::new(width, height));
+                if saved_config.widget_mode == widget::WidgetMode::Notch {
+                    widget::apply_size(app.handle(), width, height);
+                } else {
+                    widget::apply_position_on_screen(
+                        &widget,
+                        saved_config.widget_position,
+                        width,
+                        height,
+                    );
+                }
 
                 // A drag fires dozens of Moved events; saving each one meant
                 // a config read+write per frame. Only the latest position is
@@ -777,6 +796,9 @@ pub fn run() {
                     let tauri::WindowEvent::Moved(physical_pos) = event else {
                         return;
                     };
+                    if config::load(&position_app).widget_mode == widget::WidgetMode::Notch {
+                        return;
+                    }
                     let Some(window) = position_app.get_webview_window("widget") else {
                         return;
                     };
@@ -795,8 +817,10 @@ pub fn run() {
                             std::thread::sleep(std::time::Duration::from_millis(400));
                             if let Some(position) = pending.lock().unwrap().take() {
                                 let mut cfg = config::load(&save_app);
-                                cfg.widget_position = Some(position);
-                                let _ = config::save(&save_app, &cfg);
+                                if cfg.widget_mode != widget::WidgetMode::Notch {
+                                    cfg.widget_position = Some(position);
+                                    let _ = config::save(&save_app, &cfg);
+                                }
                             }
                         });
                     }
@@ -888,7 +912,7 @@ pub fn run() {
                             if visible {
                                 let _ = window.hide();
                             } else {
-                                let _ = window.show();
+                                widget::show(app);
                                 let _ = window.set_focus();
                             }
                         }

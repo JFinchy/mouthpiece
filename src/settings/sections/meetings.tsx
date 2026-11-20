@@ -304,6 +304,33 @@ function renderInlineBold(line: string) {
   );
 }
 
+const SPEAKER_PALETTE = [
+  "#06b6d4", // cyan
+  "#a855f7", // violet
+  "#10b981", // emerald
+  "#f43f5e", // rose
+  "#38bdf8", // sky
+];
+
+function buildSpeakerColors(speakers: string[]): Record<string, string> {
+  const colors: Record<string, string> = {};
+  let paletteIdx = 0;
+  for (const speaker of speakers) {
+    if (speaker === "You") {
+      colors[speaker] = "var(--dw-accent)";
+    } else {
+      colors[speaker] = SPEAKER_PALETTE[paletteIdx % SPEAKER_PALETTE.length];
+      paletteIdx += 1;
+    }
+  }
+  return colors;
+}
+
+function countTurnWords(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, words);
+}
+
 function MeetingNotesBody({
   id,
   markdown,
@@ -326,6 +353,52 @@ function MeetingNotesBody({
   // Renaming onto a name already in the transcript merges the two
   // speakers for good, so the first Save only asks.
   const [confirmMerge, setConfirmMerge] = useState<string | null>(null);
+  const [highlightedTurn, setHighlightedTurn] = useState<number | null>(null);
+  const [hoveredSpeaker, setHoveredSpeaker] = useState<string | null>(null);
+  const turnRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const highlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  const speakerColors = buildSpeakerColors(doc.speakers);
+  const turnWords = doc.turns.map((t) => countTurnWords(t.text));
+  const totalWords = turnWords.reduce((sum, w) => sum + w, 0);
+  const speakerShares = doc.speakers.map((speaker) => {
+    let words = 0;
+    let firstTurnIdx = -1;
+    doc.turns.forEach((turn, idx) => {
+      if (turn.speaker === speaker) {
+        words += turnWords[idx];
+        if (firstTurnIdx === -1) firstTurnIdx = idx;
+      }
+    });
+    const pct = totalWords > 0 ? Math.max(1, Math.round((words / totalWords) * 100)) : 0;
+    return {
+      speaker,
+      color: speakerColors[speaker] ?? "var(--dw-accent)",
+      pct,
+      firstTurnIdx,
+    };
+  });
+
+  function jumpToTurn(idx: number) {
+    if (idx < 0 || idx >= doc.turns.length) return;
+    turnRefs.current[idx]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setHighlightedTurn(idx);
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedTurn((current) => (current === idx ? null : current));
+      highlightTimerRef.current = null;
+    }, 1500);
+  }
 
   function startRenameSpeaker(speaker: string) {
     setRenamingSpeaker(speaker);
@@ -369,28 +442,38 @@ function MeetingNotesBody({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-content/10 pb-2">
         <div className="flex flex-wrap items-center gap-1">
           <span className="mr-0.5 text-[11px] opacity-60">Speakers:</span>
-          {doc.speakers.map((speaker) => (
-            <button
-              key={speaker}
-              type="button"
-              className={`badge badge-sm cursor-pointer gap-1 hover:brightness-95 ${
-                speaker === "You"
-                  ? "badge-primary"
-                  : speaker === "Group"
-                    ? "badge-secondary"
-                    : "badge-outline opacity-85"
-              }`}
-              onClick={() => startRenameSpeaker(speaker)}
-              disabled={savingSpeaker || summarizing}
-              title={`Click to rename "${speaker}" across this transcript`}
-              data-testid="meeting-speaker-chip"
-            >
-              <span>{speaker}</span>
-              <span className="text-[10px] opacity-60" aria-hidden="true">
-                ✎
-              </span>
-            </button>
-          ))}
+          {doc.speakers.map((speaker) => {
+            const color = speakerColors[speaker] ?? "var(--dw-accent)";
+            return (
+              <button
+                key={speaker}
+                type="button"
+                className={`badge badge-sm cursor-pointer gap-1 hover:brightness-95 ${
+                  speaker === "You"
+                    ? "badge-primary"
+                    : speaker === "Group"
+                      ? "badge-secondary"
+                      : "badge-outline opacity-85"
+                }`}
+                onClick={() => startRenameSpeaker(speaker)}
+                disabled={savingSpeaker || summarizing}
+                title={`Click to rename "${speaker}" across this transcript`}
+                data-testid="meeting-speaker-chip"
+              >
+                {speaker !== "You" && (
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: color }}
+                    aria-hidden="true"
+                  />
+                )}
+                <span>{speaker}</span>
+                <span className="text-[10px] opacity-60" aria-hidden="true">
+                  ✎
+                </span>
+              </button>
+            );
+          })}
         </div>
         <button
           type="button"
@@ -480,31 +563,123 @@ function MeetingNotesBody({
         </div>
       )}
 
+      {doc.turns.length > 0 && (
+        <div
+          className="flex flex-col gap-1.5 rounded-md border border-base-content/10 bg-base-100/75 px-2.5 py-2"
+          data-testid="meeting-diarization-ribbon"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {speakerShares.map((item) => (
+                <button
+                  key={item.speaker}
+                  type="button"
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-base-content/10 bg-base-200/70 px-2 py-0.5 text-[10.5px] transition-colors hover:border-base-content/25"
+                  onMouseEnter={() => setHoveredSpeaker(item.speaker)}
+                  onMouseLeave={() => setHoveredSpeaker((prev) => (prev === item.speaker ? null : prev))}
+                  onClick={() => jumpToTurn(item.firstTurnIdx)}
+                  title={`Jump to ${item.speaker}'s first turn (~${item.pct}% talk share)`}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: item.color }}
+                    aria-hidden="true"
+                  />
+                  <span className="font-medium opacity-90">{item.speaker}</span>
+                  <span
+                    className="tabular-nums opacity-60"
+                    style={{ fontFamily: "var(--dw-font-mono, ui-monospace, monospace)" }}
+                  >
+                    {item.pct}%
+                  </span>
+                </button>
+              ))}
+            </div>
+            <span
+              className="text-[10px] uppercase tracking-wider opacity-45"
+              style={{ fontFamily: "var(--dw-font-mono, ui-monospace, monospace)" }}
+            >
+              {doc.turns.length} {doc.turns.length === 1 ? "turn" : "turns"}
+            </span>
+          </div>
+
+          <div
+            className={`flex h-2.5 w-full items-stretch overflow-hidden rounded-full bg-base-300/70 p-[2px] ${
+              doc.turns.length > 60 ? "gap-0" : doc.turns.length > 24 ? "gap-[1px]" : "gap-[2px]"
+            }`}
+            role="group"
+            aria-label="Speaker diarization timeline"
+          >
+            {doc.turns.map((turn, idx) => {
+              const color = speakerColors[turn.speaker] ?? "var(--dw-accent)";
+              const isHighlighted = highlightedTurn === idx;
+              const dimmed = hoveredSpeaker !== null && hoveredSpeaker !== turn.speaker;
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  className={`h-full cursor-pointer border-0 p-0 transition-opacity duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-primary ${
+                    doc.turns.length > 60 ? "rounded-[1px]" : "rounded-full"
+                  }`}
+                  style={{
+                    flexGrow: turnWords[idx],
+                    flexShrink: 1,
+                    flexBasis: 0,
+                    minWidth: doc.turns.length > 40 ? 0 : "3px",
+                    backgroundColor: color,
+                    opacity: isHighlighted ? 1 : dimmed ? 0.22 : 0.86,
+                    boxShadow: isHighlighted ? `0 0 8px ${color}` : undefined,
+                  }}
+                  onClick={() => jumpToTurn(idx)}
+                  onMouseEnter={() => setHoveredSpeaker(turn.speaker)}
+                  onMouseLeave={() => setHoveredSpeaker((prev) => (prev === turn.speaker ? null : prev))}
+                  title={`${turn.speaker} · ${turn.timestamp}`}
+                  aria-label={`Jump to ${turn.speaker} at ${turn.timestamp}`}
+                  data-testid="meeting-timeline-segment"
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="dw-scroll flex max-h-72 flex-col gap-2 overflow-y-auto pr-1" data-testid="meeting-turns">
         {doc.turns.length > 0 ? (
-          doc.turns.map((turn, idx) => (
-            <div key={idx} className="rounded bg-base-100/70 px-2.5 py-1.5 leading-relaxed">
-              <div className="mb-0.5 flex items-baseline gap-1.5">
-                <button
-                  type="button"
-                  className={`font-semibold hover:underline ${
-                    turn.speaker === "You"
-                      ? "text-primary"
-                      : turn.speaker === "Group"
-                        ? "text-secondary"
-                        : "text-base-content"
-                  }`}
-                  onClick={() => startRenameSpeaker(turn.speaker)}
-                  disabled={savingSpeaker || summarizing}
-                  title={`Click to rename "${turn.speaker}"`}
-                >
-                  {turn.speaker}
-                </button>
-                <span className="text-[11px] tabular-nums opacity-50">· {turn.timestamp}</span>
+          doc.turns.map((turn, idx) => {
+            const color = speakerColors[turn.speaker] ?? "var(--dw-accent)";
+            const isHighlighted = highlightedTurn === idx;
+            return (
+              <div
+                key={idx}
+                ref={(el) => {
+                  turnRefs.current[idx] = el;
+                }}
+                className="rounded bg-base-100/70 px-2.5 py-1.5 leading-relaxed transition-all duration-300"
+                style={{
+                  borderLeft: `3px solid ${color}`,
+                  boxShadow: isHighlighted ? `0 0 0 1px ${color}` : undefined,
+                  backgroundColor: isHighlighted
+                    ? `color-mix(in srgb, ${color} 12%, var(--dw-card, transparent))`
+                    : undefined,
+                }}
+              >
+                <div className="mb-0.5 flex items-baseline gap-1.5">
+                  <button
+                    type="button"
+                    className="font-semibold hover:underline"
+                    style={{ color: `color-mix(in srgb, ${color} 72%, var(--dw-fg))` }}
+                    onClick={() => startRenameSpeaker(turn.speaker)}
+                    disabled={savingSpeaker || summarizing}
+                    title={`Click to rename "${turn.speaker}"`}
+                  >
+                    {turn.speaker}
+                  </button>
+                  <span className="text-[11px] tabular-nums opacity-50">· {turn.timestamp}</span>
+                </div>
+                <pre className="whitespace-pre-wrap font-sans text-xs opacity-90">{turn.text}</pre>
               </div>
-              <pre className="whitespace-pre-wrap font-sans text-xs opacity-90">{turn.text}</pre>
-            </div>
-          ))
+            );
+          })
         ) : (
           <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed">{markdown}</pre>
         )}
@@ -534,6 +709,15 @@ function MeetingList({
   // Delete asks once more (the transcript is gone for good).
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLLIElement | null>>({});
+  const scrollTimerRef = useRef<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (scrollTimerRef.current !== null) window.clearTimeout(scrollTimerRef.current);
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!confirmDelete) return;
@@ -546,7 +730,9 @@ function MeetingList({
       .then((text) => {
         setOpen((current) => ({ ...current, [id]: text }));
         if (scrollIntoView) {
-          setTimeout(() => {
+          if (scrollTimerRef.current !== null) window.clearTimeout(scrollTimerRef.current);
+          scrollTimerRef.current = window.setTimeout(() => {
+            scrollTimerRef.current = null;
             rowRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
           }, 50);
         }
@@ -559,17 +745,18 @@ function MeetingList({
       .then(setMeetings)
       .catch((err) => notifyError("Couldn't load meetings", err));
   }
-  // The list changes when a meeting starts, stops, joins or leaves the
-  // queue; not on every progress tick.
-  const listKey = `${status?.recording?.id ?? ""}|${status?.queued.join(",") ?? ""}`;
+  // The list changes when a meeting starts, stops, starts/finishes processing,
+  // or joins/leaves the queue; not on every progress tick.
+  const listKey = `${status?.recording?.id ?? ""}|${status?.processing?.id ?? ""}|${status?.queued.join(",") ?? ""}`;
   useEffect(refresh, [listKey]);
 
   // Also refresh and expand immediately if a meeting finishes transcribing while
   // the user already has the Meetings page open.
   useEffect(() => {
-    const unlisten = listen<MeetingSummary | string>("meeting-saved", (e) => {
+    const unlisten = listen<MeetingSummary | string | null>("meeting-saved", (e) => {
       refresh();
-      const savedId = typeof e.payload === "string" ? null : e.payload.id;
+      const savedId =
+        e.payload && typeof e.payload === "object" && "id" in e.payload ? e.payload.id : null;
       if (savedId) {
         openAndLoad(savedId, true);
       }
@@ -648,7 +835,11 @@ function MeetingList({
       .then((text) => navigator.clipboard.writeText(text))
       .then(() => {
         setCopied(id);
-        setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
+        if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = window.setTimeout(() => {
+          copyTimerRef.current = null;
+          setCopied((c) => (c === id ? null : c));
+        }, 1500);
       })
       .catch((err) => notifyError("Couldn't copy the transcript", err));
   }

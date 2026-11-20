@@ -68,6 +68,17 @@ function initialState(scenario: Scenario) {
     dictationSounds: false,
     layout: scenario.layout ?? "sidebar",
     theme: "terminal",
+    waveformConfig: {
+      engine: "precision" as "precision" | "silk" | "matrix" | "hyperdom",
+      colorway: "ember" as string,
+      needle_bars: 56,
+      sensitivity: 1.35,
+      snap_ms: 36,
+      needle_width: 2.0,
+      hyper_mode: "center" as "center" | "scroll",
+      phosphor_glow: true,
+      show_in_flyout: true,
+    },
     shortcut: { meta: true, ctrl: false, alt: false, shift: true, code: "Space" },
     doubleTap: false,
     agents: (scenario.agents ?? []) as { session_id: string }[],
@@ -188,6 +199,8 @@ export function installMockBackend() {
     get_audio_device_status: () => state.deviceStatus,
     list_input_devices: () => state.devices,
     get_active_input_device: () => state.selectedDevice ?? state.devices[0],
+    start_mic_check: () => null,
+    stop_mic_check: () => null,
     set_input_device: (args) => {
       state.selectedDevice = (args.name as string | null) ?? null;
       state.deviceStatus = state.selectedDevice
@@ -196,6 +209,7 @@ export function installMockBackend() {
       void emit("audio-device-status", state.deviceStatus);
       return null;
     },
+    get_next_mode_override: () => state.nextModeOverride,
     set_next_mode_override: setter("nextModeOverride", "modeName"),
     get_last_frontmost_app: () => ({ bundle_id: "com.apple.Terminal", name: "Terminal", icon_data_uri: null }),
     // widget + window
@@ -223,13 +237,54 @@ export function installMockBackend() {
     },
     take_settings_navigation: () => null,
     get_theme: () => state.theme,
-    set_theme: setter("theme", "theme"),
+    set_theme: (args) => {
+      state.theme = args.theme as typeof state.theme;
+      void emit("theme-changed", state.theme);
+      return null;
+    },
     get_layout: () => state.layout,
-    set_layout: setter("layout", "layout"),
+    set_layout: (args) => {
+      state.layout = args.layout as typeof state.layout;
+      void emit("layout-changed", state.layout);
+      return null;
+    },
+    get_waveform_config: () => ({ ...state.waveformConfig }),
+    set_waveform_config: (args) => {
+      const VALID_COLORWAYS = new Set([
+        "ember",
+        "aurora",
+        "mint",
+        "arctic",
+        "titanium",
+        "solid-red",
+        "solid-white",
+        "solid-amber",
+        "solid-emerald",
+        "solid-cyan",
+      ]);
+      const clamp = (value: unknown, min: number, max: number, fallback: number, round = false) => {
+        const n = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+        const clamped = Math.min(max, Math.max(min, n));
+        return round ? Math.round(clamped) : clamped;
+      };
+      const incoming = (args.config ?? {}) as Partial<typeof state.waveformConfig>;
+      const merged = { ...state.waveformConfig, ...incoming };
+      state.waveformConfig = {
+        ...merged,
+        colorway: VALID_COLORWAYS.has(String(merged.colorway)) ? merged.colorway : "ember",
+        needle_bars: clamp(merged.needle_bars, 16, 140, 56, true),
+        sensitivity: clamp(merged.sensitivity, 0.5, 2.5, 1.35),
+        snap_ms: clamp(merged.snap_ms, 12, 110, 36, true),
+        needle_width: clamp(merged.needle_width, 1.0, 4.0, 2.0),
+      };
+      void emit("waveform-config-changed", { ...state.waveformConfig });
+      return null;
+    },
     // simple settings
     get_shortcut: () => state.shortcut,
     set_shortcut: (args) => {
       state.shortcut = args.newCfg as typeof state.shortcut;
+      void emit("shortcut-changed", state.shortcut);
       return state.shortcut;
     },
     get_double_tap_enabled: () => state.doubleTap,
@@ -262,7 +317,94 @@ export function installMockBackend() {
     get_snippets: () => state.snippets,
     set_snippets: setter("snippets", "snippets"),
     get_modes: () => state.modes,
-    set_modes: setter("modes", "modes"),
+    set_modes: (args) => {
+      state.modes = args.modes as typeof state.modes;
+      void emit("modes-changed", null);
+      return null;
+    },
+    preview_mode_transform: (args) => {
+      const rawText = String(args.text ?? "");
+      const behavior = String(args.behavior ?? "plain");
+      const llmRefinement = (args.llmRefinement ?? args.llm_refinement ?? "off") as
+        | "off"
+        | "global"
+        | { model: string };
+      const customInstructions = args.customInstructions ?? args.custom_instructions;
+      const structureLongPrompts = Boolean(args.structureLongPrompts ?? args.structure_long_prompts);
+      const trimmed = rawText.trim();
+      const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
+      const structured = structureLongPrompts && wordCount >= 80;
+      const usedLlm = llmRefinement !== "off" || structured;
+      const model =
+        llmRefinement === "off"
+          ? structured
+            ? state.llmModel
+            : null
+          : llmRefinement === "global"
+            ? state.llmModel
+            : typeof llmRefinement === "object" && llmRefinement !== null && "model" in llmRefinement
+              ? String(llmRefinement.model)
+              : null;
+
+      let cleaned = trimmed.replace(/\s+/g, " ");
+      if (usedLlm) {
+        cleaned = cleaned
+          .replace(/\b(?:um+|uh+)\b[,\s]*/gi, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+      let output = "";
+      if (cleaned) {
+        if (structured) {
+          const sentences = cleaned
+            .split(/(?<=[.!?])\s+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const goal = capitalize(sentences[0] ?? cleaned);
+          const context =
+            sentences.length > 1
+              ? capitalize(sentences.slice(1, Math.max(2, sentences.length - 1)).join(" "))
+              : capitalize(cleaned);
+          const constraints =
+            typeof customInstructions === "string" && customInstructions.trim()
+              ? customInstructions.trim()
+              : "Keep changes focused and preserve existing behavior.";
+          const doneWhen =
+            sentences.length > 2
+              ? capitalize(sentences[sentences.length - 1])
+              : "Output is verified and ready to use.";
+          output = `Goal:\n${goal}\n\nContext:\n${context}\n\nConstraints:\n${constraints}\n\nDone when:\n${doneWhen}`;
+        } else if (behavior === "cli") {
+          let cli = cleaned
+            .replace(/\bdash dash\s+/gi, "--")
+            .replace(/\bpipe\b/gi, "|")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (/^(git|npm|bun|cargo|docker|kubectl|rg|ls|cd|pnpm|yarn|python|pytest|make|ssh)\b/i.test(cli)) {
+            cli = cli.replace(/^([a-z]+)/i, (m) => m.toLowerCase()).replace(/\.$/, "");
+          } else {
+            cli = capitalize(cli);
+          }
+          output = cli;
+        } else {
+          output = capitalize(cleaned);
+          if (usedLlm && !/[.!?]$/.test(output)) {
+            output = `${output}.`;
+          }
+        }
+      }
+
+      return {
+        output,
+        elapsed_ms: usedLlm ? 280 : 2,
+        used_llm: usedLlm,
+        model,
+        structured,
+      };
+    },
     list_running_apps: () => [
       { bundle_id: "com.apple.Terminal", name: "Terminal", icon_data_uri: null, is_running: true },
       { bundle_id: "com.tinyspeck.slackmacgap", name: "Slack", icon_data_uri: null, is_running: true },

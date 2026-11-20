@@ -15,6 +15,9 @@ enum AudioCommand {
     /// Attach or detach the meeting recorder, which (like the ambient tap)
     /// keeps the stream running while attached.
     SetMeetingTap(Option<Sender<AudioChunk>>),
+    /// Enable or disable live Mic Check metering in Settings: keeps the warm
+    /// stream playing without setting `buffering`, so nothing is recorded.
+    SetMicCheck(bool),
     /// The selected device changed: open it now (paused, unless something
     /// is listening) so its status is known immediately, not at the next
     /// recording.
@@ -42,6 +45,9 @@ pub struct AudioHandle {
     /// rather than emitting an event per callback, which would be far more
     /// often than any redraw needs.
     level: Arc<AtomicU32>,
+    /// Most recent 3-band spectral energy (`[low, mid, high]` mapped via
+    /// `meter_level` and packed as three `u16` values into a `u64`).
+    bands: Arc<AtomicU64>,
     status: Arc<Mutex<Option<DeviceStatus>>>,
     /// The push-to-talk buffer and its format, shared so the live
     /// transcriber can read what's been recorded so far (`recorded_since`).
@@ -81,6 +87,8 @@ impl AudioHandle {
         let selected_device_thread = selected_device.clone();
         let level: Arc<AtomicU32> = Arc::new(AtomicU32::new(0.0f32.to_bits()));
         let level_thread = level.clone();
+        let bands: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let bands_thread = bands.clone();
         let status: Arc<Mutex<Option<DeviceStatus>>> = Arc::new(Mutex::new(None));
         let status_thread = status.clone();
         let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
@@ -95,9 +103,11 @@ impl AudioHandle {
                 format: format_thread,
                 buffering: Arc::new(AtomicBool::new(false)),
                 paused: paused_thread,
+                mic_check: Arc::new(AtomicBool::new(false)),
                 tap: Arc::new(Mutex::new(None)),
                 meeting: Arc::new(Mutex::new(None)),
                 level: level_thread.clone(),
+                bands: bands_thread.clone(),
                 conform: Arc::new(Mutex::new(None)),
             };
             let publish = |stream: &Option<WarmStream>, wanted: &Option<String>| {
@@ -154,7 +164,10 @@ impl AudioHandle {
             };
 
             let pause_if_unused = |current: &Option<WarmStream>| {
-                if sinks.buffering.load(Ordering::SeqCst) || sinks.tapped() {
+                if sinks.buffering.load(Ordering::SeqCst)
+                    || sinks.tapped()
+                    || sinks.mic_check.load(Ordering::SeqCst)
+                {
                     return;
                 }
                 if let Some(cs) = current {
@@ -165,6 +178,7 @@ impl AudioHandle {
                 // Otherwise the widget's level meter would hold whatever
                 // the last in-flight callback reported.
                 level_thread.store(0.0f32.to_bits(), Ordering::Relaxed);
+                bands_thread.store(0, Ordering::Relaxed);
             };
 
             // cpal starts a stream as soon as it's built, so pause right away:
@@ -212,7 +226,7 @@ impl AudioHandle {
                         if sinks.buffering.load(Ordering::SeqCst) {
                             continue;
                         }
-                        if sinks.tapped() {
+                        if sinks.tapped() || sinks.mic_check.load(Ordering::SeqCst) {
                             ensure_playing(&mut current);
                         } else {
                             let device_name = selected_device_thread.lock().unwrap().clone();
@@ -261,6 +275,16 @@ impl AudioHandle {
                             crate::applog!("audio: meeting recorder detached");
                         }
                     }
+                    AudioCommand::SetMicCheck(active) => {
+                        sinks.mic_check.store(active, Ordering::SeqCst);
+                        if active {
+                            ensure_playing(&mut current);
+                            crate::applog!("audio: mic check started");
+                        } else {
+                            pause_if_unused(&current);
+                            crate::applog!("audio: mic check stopped");
+                        }
+                    }
                 }
             }
         });
@@ -269,6 +293,7 @@ impl AudioHandle {
             tx,
             selected_device,
             level,
+            bands,
             status,
             samples,
             format,
@@ -383,6 +408,18 @@ impl AudioHandle {
     pub fn current_level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
+
+    /// Most recent 3-band spectral levels (`[low, mid, high]` in `0.0..=1.0`,
+    /// already mapped via `meter_level`). Zeroed when idle or paused.
+    pub fn current_bands(&self) -> [f32; 3] {
+        unpack_bands(self.bands.load(Ordering::Relaxed))
+    }
+
+    /// Enable or disable live Mic Check metering in Settings. Keeps the warm
+    /// stream playing while active without buffering any recorded audio.
+    pub fn set_mic_check(&self, active: bool) {
+        let _ = self.tx.send(AudioCommand::SetMicCheck(active));
+    }
 }
 
 fn pack_format(sample_rate: u32, channels: u16) -> u64 {
@@ -391,6 +428,20 @@ fn pack_format(sample_rate: u32, channels: u16) -> u64 {
 
 fn unpack_format(packed: u64) -> (u32, u16) {
     ((packed >> 16) as u32, (packed & 0xffff) as u16)
+}
+
+fn pack_bands(bands: [f32; 3]) -> u64 {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * u16::MAX as f32).round() as u64;
+    q(bands[0]) | (q(bands[1]) << 16) | (q(bands[2]) << 32)
+}
+
+fn unpack_bands(packed: u64) -> [f32; 3] {
+    let inv = 1.0 / u16::MAX as f32;
+    [
+        (packed & 0xffff) as f32 * inv,
+        ((packed >> 16) & 0xffff) as f32 * inv,
+        ((packed >> 32) & 0xffff) as f32 * inv,
+    ]
 }
 
 /// One callback's worth of captured audio, for the ambient listener and
@@ -413,6 +464,9 @@ struct Sinks {
     buffering: Arc<AtomicBool>,
     /// While true, push-to-talk audio is dropped (dictation paused).
     paused: Arc<AtomicBool>,
+    /// While true, live Mic Check keeps the warm stream playing without
+    /// buffering recorded audio.
+    mic_check: Arc<AtomicBool>,
     /// Sample rate and channel count of the latest callback, packed by
     /// `pack_format`.
     format: Arc<AtomicU64>,
@@ -421,6 +475,7 @@ struct Sinks {
     /// The meeting recorder, while a meeting is being recorded.
     meeting: Arc<Mutex<Option<Sender<AudioChunk>>>>,
     level: Arc<AtomicU32>,
+    bands: Arc<AtomicU64>,
     /// Set when the mic changed mid-recording: converts the new mic's audio
     /// to the format the recording started in.
     conform: Arc<Mutex<Option<Conformer>>>,
@@ -432,8 +487,13 @@ impl Sinks {
         // Paused dictation: record nothing and read as silence. The meeting
         // (if any) hears the user again, since nothing is being dictated.
         let paused = is_buffering && self.paused.load(Ordering::Relaxed);
-        let level = if paused { 0.0 } else { rms(data) };
+        let (level, bands) = if paused {
+            (0.0, [0.0; 3])
+        } else {
+            (rms(data), analyze_bands(data, channels, sample_rate))
+        };
         self.level.store(level.to_bits(), Ordering::Relaxed);
+        self.bands.store(pack_bands(bands), Ordering::Relaxed);
         let dictating = is_buffering && !paused;
         if dictating {
             let mut conform = self.conform.lock().unwrap();
@@ -872,8 +932,16 @@ fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    (sum_sq / samples.len() as f32).sqrt()
+    let sum_sq: f32 = samples
+        .iter()
+        .map(|&s| if s.is_finite() { s * s } else { 0.0 })
+        .sum();
+    let res = (sum_sq / samples.len() as f32).sqrt();
+    if res.is_finite() {
+        res
+    } else {
+        0.0
+    }
 }
 
 /// The meter shows -60 dBFS (below a quiet room) as empty and -3 dBFS
@@ -887,11 +955,63 @@ const METER_CEILING_DB: f32 = -3.0;
 /// old linear-gain-then-square-root curve hit the top at -24 dBFS, so
 /// ordinary speech pinned every bar.
 pub fn meter_level(rms: f32) -> f32 {
-    if rms <= 0.0 {
+    if !rms.is_finite() || rms <= 0.0 {
         return 0.0;
     }
     let db = 20.0 * rms.log10();
+    if !db.is_finite() {
+        return 0.0;
+    }
     ((db - METER_FLOOR_DB) / (METER_CEILING_DB - METER_FLOOR_DB)).clamp(0.0, 1.0)
+}
+
+/// Lightweight, allocation-free 3-band energy estimator splitting interleaved
+/// `data` (`channels` per frame at `sample_rate`) into `[low (<300Hz),
+/// mid (300-2400Hz), high (>2400Hz)]` via first-order IIR low-pass filters
+/// (`alpha = dt / (rc + dt)`), returning per-band RMS mapped through `meter_level`.
+pub fn analyze_bands(data: &[f32], channels: u16, sample_rate: u32) -> [f32; 3] {
+    let ch = channels.max(1) as usize;
+    let frames = data.len() / ch;
+    if frames == 0 || sample_rate == 0 {
+        return [0.0; 3];
+    }
+    let dt = 1.0 / sample_rate as f32;
+    let rc_low = 1.0 / (2.0 * std::f32::consts::PI * 300.0);
+    let rc_high = 1.0 / (2.0 * std::f32::consts::PI * 2400.0);
+    let alpha_low = dt / (rc_low + dt);
+    let alpha_high = dt / (rc_high + dt);
+    let inv_ch = 1.0 / ch as f32;
+
+    let mut lp_low = 0.0f32;
+    let mut lp_high = 0.0f32;
+    let mut sum_low = 0.0f32;
+    let mut sum_mid = 0.0f32;
+    let mut sum_high = 0.0f32;
+
+    for frame in data.chunks_exact(ch) {
+        let mut x = 0.0f32;
+        for &s in frame {
+            if s.is_finite() {
+                x += s;
+            }
+        }
+        x *= inv_ch;
+        lp_low += alpha_low * (x - lp_low);
+        lp_high += alpha_high * (x - lp_high);
+        let low = lp_low;
+        let mid = lp_high - lp_low;
+        let high = x - lp_high;
+        sum_low += low * low;
+        sum_mid += mid * mid;
+        sum_high += high * high;
+    }
+
+    let n = frames as f32;
+    [
+        meter_level((sum_low / n).sqrt()),
+        meter_level((sum_mid / n).sqrt()),
+        meter_level((sum_high / n).sqrt()),
+    ]
 }
 
 fn build_input_stream(sinks: &Sinks, device_name: Option<&str>) -> Result<OpenedStream, String> {
@@ -981,12 +1101,24 @@ fn build_input_stream(sinks: &Sinks, device_name: Option<&str>) -> Result<Opened
     })
 }
 
+static WAV_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn write_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Result<PathBuf, String> {
+    write_wav_in(&std::env::temp_dir(), samples, sample_rate, channels)
+}
+
+fn write_wav_in(
+    preferred_dir: &std::path::Path,
+    samples: &[f32],
+    sample_rate: u32,
+    channels: u16,
+) -> Result<PathBuf, String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis();
-    let path = std::env::temp_dir().join(format!("mouthpiece-{timestamp}.wav"));
+    let seq = WAV_FILE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let filename = format!("mouthpiece-{timestamp}-{}-{seq}.wav", std::process::id());
 
     let spec = hound::WavSpec {
         channels,
@@ -995,12 +1127,75 @@ fn write_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Result<PathBuf
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-    for &sample in samples {
-        let clamped = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(clamped).map_err(|e| e.to_string())?;
+    // Long-lived menu-bar sessions (or dev runs launched from ephemeral shells)
+    // can outlive their inherited `TMPDIR`. Recreate it if possible, otherwise
+    // fall back to `/tmp` rather than failing every dictation with ENOENT.
+    let mut candidate_dirs = Vec::with_capacity(2);
+    if preferred_dir.is_dir() || std::fs::create_dir_all(preferred_dir).is_ok() {
+        candidate_dirs.push(preferred_dir.to_path_buf());
     }
-    writer.finalize().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        let fallback = PathBuf::from("/tmp");
+        if !candidate_dirs.iter().any(|d| d == &fallback) && fallback.is_dir() {
+            candidate_dirs.push(fallback);
+        }
+    }
+    if candidate_dirs.is_empty() {
+        candidate_dirs.push(preferred_dir.to_path_buf());
+    }
+
+    let mut last_err = None;
+    let mut opened = None;
+    for dir in candidate_dirs {
+        let path = dir.join(&filename);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&path) {
+            Ok(file) => match hound::WavWriter::new(std::io::BufWriter::new(file), spec) {
+                Ok(writer) => {
+                    opened = Some((path, writer));
+                    break;
+                }
+                Err(err) => {
+                    let err_msg = err.to_string();
+                    crate::applog!(
+                        "audio: could not initialize wav {}: {err_msg}",
+                        path.display()
+                    );
+                    let _ = std::fs::remove_file(&path);
+                    last_err = Some(err_msg);
+                }
+            },
+            Err(err) => {
+                let err_msg = err.to_string();
+                crate::applog!("audio: could not create {}: {err_msg}", path.display());
+                last_err = Some(err_msg);
+            }
+        }
+    }
+    let (path, mut writer) = opened.ok_or_else(|| {
+        last_err.unwrap_or_else(|| "could not create temporary wav file".to_string())
+    })?;
+
+    let write_res = (|| -> Result<(), String> {
+        for &sample in samples {
+            let safe = if sample.is_finite() { sample } else { 0.0 };
+            let clamped = (safe.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            writer.write_sample(clamped).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())
+    })();
+
+    if let Err(err) = write_res {
+        let _ = std::fs::remove_file(&path);
+        return Err(err);
+    }
 
     Ok(path)
 }
@@ -1289,10 +1484,12 @@ mod tests {
             samples: Arc::new(Mutex::new(Vec::new())),
             buffering: Arc::new(AtomicBool::new(true)),
             paused: Arc::new(AtomicBool::new(false)),
+            mic_check: Arc::new(AtomicBool::new(false)),
             format: Arc::new(AtomicU64::new(0)),
             tap: Arc::new(Mutex::new(None)),
             meeting: Arc::new(Mutex::new(Some(meeting_tx))),
             level: Arc::new(AtomicU32::new(0)),
+            bands: Arc::new(AtomicU64::new(0)),
             conform: Arc::new(Mutex::new(None)),
         };
         sinks.deliver(&[0.5, -0.5], 1, 16_000);
@@ -1301,6 +1498,7 @@ mod tests {
         sinks.deliver(&[0.9, -0.9], 1, 16_000);
         assert_eq!(*sinks.samples.lock().unwrap(), vec![0.5, -0.5]);
         assert_eq!(f32::from_bits(sinks.level.load(Ordering::Relaxed)), 0.0);
+        assert_eq!(unpack_bands(sinks.bands.load(Ordering::Relaxed)), [0.0; 3]);
         // Paused, so the meeting gets the real audio again.
         assert_eq!(meeting_rx.recv().unwrap().samples, vec![0.9, -0.9]);
         sinks.paused.store(false, Ordering::SeqCst);
@@ -1316,10 +1514,12 @@ mod tests {
             samples: Arc::new(Mutex::new(Vec::new())),
             buffering: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
+            mic_check: Arc::new(AtomicBool::new(false)),
             format: Arc::new(AtomicU64::new(0)),
             tap: Arc::new(Mutex::new(None)),
             meeting: Arc::new(Mutex::new(Some(meeting_tx))),
             level: Arc::new(AtomicU32::new(0)),
+            bands: Arc::new(AtomicU64::new(0)),
             conform: Arc::new(Mutex::new(None)),
         };
 
@@ -1342,5 +1542,113 @@ mod tests {
         sinks.deliver(&[0.25, -0.25], 1, 16_000);
         let after_ptt = meeting_rx.recv().unwrap();
         assert_eq!(after_ptt.samples, vec![0.25, -0.25]);
+    }
+
+    #[test]
+    fn pack_and_unpack_bands_round_trips_and_clamps() {
+        let samples = [0.0, 0.5, 1.0];
+        let restored = unpack_bands(pack_bands(samples));
+        for (expected, actual) in samples.iter().zip(restored.iter()) {
+            assert!(
+                (expected - actual).abs() < 1e-4,
+                "expected {expected}, got {actual}"
+            );
+        }
+
+        let varied = [0.123, 0.456, 0.789];
+        let restored = unpack_bands(pack_bands(varied));
+        for (expected, actual) in varied.iter().zip(restored.iter()) {
+            assert!(
+                (expected - actual).abs() < 1e-4,
+                "expected {expected}, got {actual}"
+            );
+        }
+
+        let clamped = unpack_bands(pack_bands([-0.5, 0.25, 1.8]));
+        assert_eq!(clamped[0], 0.0);
+        assert!((clamped[1] - 0.25).abs() < 1e-4);
+        assert_eq!(clamped[2], 1.0);
+    }
+
+    #[test]
+    fn analyze_bands_distinguishes_low_and_high_frequency_sines() {
+        let sample_rate = 48_000u32;
+        let len = 4_800usize; // 100ms
+        let sine = |freq: f32| -> Vec<f32> {
+            (0..len)
+                .map(|i| {
+                    let t = i as f32 / sample_rate as f32;
+                    0.5 * (2.0 * std::f32::consts::PI * freq * t).sin()
+                })
+                .collect()
+        };
+
+        assert_eq!(analyze_bands(&[], 1, sample_rate), [0.0; 3]);
+        assert_eq!(analyze_bands(&[0.0; 512], 1, sample_rate), [0.0; 3]);
+        assert_eq!(analyze_bands(&[0.5; 512], 1, 0), [0.0; 3]);
+
+        let low_bands = analyze_bands(&sine(120.0), 1, sample_rate);
+        assert!(
+            low_bands[0] > low_bands[1] && low_bands[0] > low_bands[2],
+            "120Hz sine should dominate low band: {low_bands:?}"
+        );
+
+        let high_bands = analyze_bands(&sine(5_000.0), 1, sample_rate);
+        assert!(
+            high_bands[2] > high_bands[1] && high_bands[2] > high_bands[0],
+            "5000Hz sine should dominate high band: {high_bands:?}"
+        );
+
+        // Interleaved 2-ch USB interface with XLR mic on Ch1 and silence on Ch2:
+        // must downmix frames to mono so a 120Hz bass tone doesn't leak into high band.
+        let mono_low = sine(120.0);
+        let mut stereo_ch1_only = Vec::with_capacity(mono_low.len() * 2);
+        for s in mono_low {
+            stereo_ch1_only.push(s);
+            stereo_ch1_only.push(0.0);
+        }
+        let stereo_bands = analyze_bands(&stereo_ch1_only, 2, sample_rate);
+        assert!(
+            stereo_bands[0] > stereo_bands[1] && stereo_bands[0] > stereo_bands[2],
+            "stereo Ch1-only 120Hz sine should still dominate low band: {stereo_bands:?}"
+        );
+
+        // Non-finite samples must not poison RMS, meter_level, or band filters.
+        assert_eq!(rms(&[f32::NAN, f32::INFINITY, 0.0]), 0.0);
+        assert_eq!(meter_level(f32::NAN), 0.0);
+        assert_eq!(meter_level(f32::INFINITY), 0.0);
+        let nan_bands = analyze_bands(&[f32::NAN; 128], 1, sample_rate);
+        assert_eq!(nan_bands, [0.0; 3]);
+    }
+
+    #[test]
+    fn write_wav_recovers_from_missing_or_invalid_dir() {
+        // Point preferred_dir at a path nested under a regular file so
+        // `create_dir_all` fails — on unix `write_wav_in` must fall back to `/tmp`.
+        let blocker = std::env::temp_dir().join(format!(
+            "mouthpiece-wav-test-blocker-{}",
+            std::process::id()
+        ));
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let invalid_dir = blocker.join("missing-subdir");
+
+        let wav1 = write_wav_in(&invalid_dir, &[0.0, 0.25, -0.25], 16_000, 1)
+            .expect("should fall back to /tmp when preferred_dir cannot be created");
+        let wav2 = write_wav_in(&invalid_dir, &[0.0, 0.25, -0.25], 16_000, 1)
+            .expect("concurrent / same-ms wav writes must get unique filenames");
+        assert!(wav1.exists(), "wav1 should exist at {}", wav1.display());
+        assert!(wav2.exists(), "wav2 should exist at {}", wav2.display());
+        assert_ne!(wav1, wav2, "back-to-back WAV files must not collide");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&wav1).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "temp WAV should be owner-only (0600)");
+        }
+
+        let _ = std::fs::remove_file(&wav1);
+        let _ = std::fs::remove_file(&wav2);
+        let _ = std::fs::remove_file(&blocker);
     }
 }

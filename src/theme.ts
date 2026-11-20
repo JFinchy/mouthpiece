@@ -2,81 +2,134 @@ export type ThemeId = "terminal" | "signal" | "quiet" | "palette";
 
 export type ThemeTokens = {
   bg: string;
+  bgSunk: string;
+  bgWell: string;
   fg: string;
   muted: string;
   border: string;
+  borderStrong: string;
   card: string;
+  cardRaised: string;
   accent: string;
+  accentBright: string;
   accentFg: string;
   navActiveBg: string;
+  refine: string;
+  refineBright: string;
+  cyan: string;
+  specular: string;
 };
 
-// Color-only skins for the signal-chain settings layout — see
-// manual-testing-inbox/ and the design-review artifact this was built
-// from. Terminal is the default: this is a local developer tool first,
-// not a consumer dictation app, and its dark/amber identity says that on
-// sight.
+// Elevated v4 studio palettes for the settings & widget design system.
+// Terminal is the default: deep obsidian + molten amber, establishing a
+// precision local developer instrument on sight. Terminal's `card`
+// (#1C1F23) and `refine` (#A78BFA) also anchor existing e2e assertions.
 export const THEMES: Record<ThemeId, ThemeTokens> = {
   terminal: {
-    bg: "#16181B",
-    fg: "#E9E7E1",
-    muted: "#8A8F98",
-    border: "#2A2D32",
+    bg: "#0C0E13",
+    bgSunk: "#07090D",
+    bgWell: "#040508",
+    fg: "#F4F2ED",
+    muted: "#8C93A4",
+    border: "#222733",
+    borderStrong: "#313849",
     card: "#1C1F23",
-    accent: "#E8A33D",
-    accentFg: "#16181B",
-    navActiveBg: "#262115",
+    cardRaised: "#232832",
+    accent: "#F59E0B",
+    accentBright: "#FBBF24",
+    accentFg: "#140B04",
+    navActiveBg: "#241D11",
+    refine: "#A78BFA",
+    refineBright: "#DDD6FE",
+    cyan: "#06B6D4",
+    specular: "rgba(255, 255, 255, 0.10)",
   },
   signal: {
-    bg: "#F5F1E9",
-    fg: "#22201B",
-    muted: "#83786A",
-    border: "#E4DBC9",
+    bg: "#F4EFE6",
+    bgSunk: "#E8E0D2",
+    bgWell: "#0C1116",
+    fg: "#1A1713",
+    muted: "#766B5D",
+    border: "#DDD3C2",
+    borderStrong: "#C4B7A1",
     card: "#FBF8F2",
-    accent: "#1F6F63",
-    accentFg: "#F5F1E9",
-    navActiveBg: "#E1EFEA",
+    cardRaised: "#FFFFFF",
+    accent: "#0F766E",
+    accentBright: "#14B8A6",
+    accentFg: "#FFFFFF",
+    navActiveBg: "#DDEEE9",
+    refine: "#7C3AED",
+    refineBright: "#6D28D9",
+    cyan: "#0284C7",
+    specular: "rgba(255, 255, 255, 0.85)",
   },
   quiet: {
-    bg: "#FFFFFF",
-    fg: "#1C1C1E",
-    muted: "#75767A",
-    border: "#E6E6E3",
-    card: "#FBFBFA",
-    accent: "#3B6FD9",
+    bg: "#F6F7FA",
+    bgSunk: "#EAEFF6",
+    bgWell: "#0B0E15",
+    fg: "#0F131A",
+    muted: "#6B7486",
+    border: "#DDE2EC",
+    borderStrong: "#C4CCD9",
+    card: "#FFFFFF",
+    cardRaised: "#FFFFFF",
+    accent: "#2563EB",
+    accentBright: "#60A5FA",
     accentFg: "#FFFFFF",
-    navActiveBg: "#EAF0FD",
+    navActiveBg: "#E6EEFE",
+    refine: "#7C3AED",
+    refineBright: "#6D28D9",
+    cyan: "#0891B2",
+    specular: "rgba(255, 255, 255, 0.95)",
   },
   palette: {
-    bg: "#0E0F12",
-    fg: "#F2F2F0",
-    muted: "#83858C",
-    border: "#232429",
-    card: "#191A1E",
-    accent: "#FF6B4A",
-    accentFg: "#0E0F12",
-    navActiveBg: "#241A16",
+    bg: "#07080B",
+    bgSunk: "#030406",
+    bgWell: "#020203",
+    fg: "#F7F7F5",
+    muted: "#7E8391",
+    border: "#1C1F28",
+    borderStrong: "#2B303D",
+    card: "#111319",
+    cardRaised: "#181C24",
+    accent: "#FF4D2E",
+    accentBright: "#FF856D",
+    accentFg: "#0D0504",
+    navActiveBg: "#261512",
+    refine: "#C084FC",
+    refineBright: "#E9D5FF",
+    cyan: "#38BDF8",
+    specular: "rgba(255, 255, 255, 0.09)",
   },
 };
 
 export const THEME_ORDER: ThemeId[] = ["terminal", "signal", "quiet", "palette"];
 
 export const THEME_LABEL: Record<ThemeId, string> = {
-  terminal: "Terminal — dark, monospace-forward",
-  signal: "Signal — warm paper, teal accent",
-  quiet: "Quiet — light, minimal",
-  palette: "Palette — near-black, coral accent",
+  terminal: "Terminal — deep obsidian, molten amber",
+  signal: "Signal — warm studio linen, jade-teal",
+  quiet: "Quiet — clean ceramic, cobalt",
+  palette: "Palette — carbon black, vermilion",
 };
 
 const VAR_MAP: Record<keyof ThemeTokens, string> = {
   bg: "--dw-bg",
+  bgSunk: "--dw-bg-sunk",
+  bgWell: "--dw-bg-well",
   fg: "--dw-fg",
   muted: "--dw-muted",
   border: "--dw-border",
+  borderStrong: "--dw-border-strong",
   card: "--dw-card",
+  cardRaised: "--dw-card-raised",
   accent: "--dw-accent",
+  accentBright: "--dw-accent-bright",
   accentFg: "--dw-accent-fg",
   navActiveBg: "--dw-nav-active-bg",
+  refine: "--dw-refine",
+  refineBright: "--dw-refine-bright",
+  cyan: "--dw-cyan",
+  specular: "--dw-specular",
 };
 
 // Applies a theme's tokens as CSS custom properties on the document root
